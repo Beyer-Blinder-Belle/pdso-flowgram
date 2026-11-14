@@ -122,8 +122,10 @@ def get_area_mapped_parameter_names(doc):
     config = storage_service.get_document_config()
     if config is None:
         return []
+    # Key: name of the parameter that gets the Area value. Value: name of the
+    # Area Scheme. (See PDSOSyncService: ExtendedAreaScheme(doc, value, key).)
     mappings = _net_dict_to_python(config.area_scheme_mappings)
-    return [v for v in mappings.values() if v]
+    return [k for k in mappings.keys() if k]
 
 
 # =============================================================================
@@ -175,8 +177,9 @@ def load_registry(doc):
         return TrackedParameterRegistry([], False)
 
     tethered = _net_dict_to_python(config.tethered_parameters)
+    # Mapping key: parameter name. Mapping value: Area Scheme name.
     area_mapped = set(
-        v for v in _net_dict_to_python(config.area_scheme_mappings).values() if v
+        k for k in _net_dict_to_python(config.area_scheme_mappings).keys() if k
     )
 
     parameters = []

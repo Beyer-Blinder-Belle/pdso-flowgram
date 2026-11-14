@@ -124,7 +124,7 @@ class PDSOFamilyManagerService(object):
 
         if ext_area_for_program_volume_family_geometry is None:
             self.logger.warning(
-                ".  Skipping Data Silo '{}' because it has no related GSF area element.".format(
+                ".  Skipping Data Silo '{}' because no Area contains it.".format(
                     ext_data_silo.Id
                 )
             )
@@ -152,7 +152,7 @@ class PDSOFamilyManagerService(object):
             # Create new family
             fdoc = self.create_new_program_volume_family(
                 desired_family_name,
-                ext_data_silo.related_area_elements.get("PDSO - GSF", None).rpw_area,
+                ext_area_for_program_volume_family_geometry.rpw_area,
                 ext_data_silo.Location.Point,
             )
 
@@ -178,7 +178,7 @@ class PDSOFamilyManagerService(object):
             # Try to update the family geometry
             fdoc = self.update_program_volume_family_geometry(
                 ext_program_volume_family.rpw_element,
-                ext_data_silo.related_area_elements.get("PDSO - GSF", None).rpw_area,
+                ext_area_for_program_volume_family_geometry.rpw_area,
                 ext_data_silo.Location.Point,
             )
 
@@ -281,15 +281,14 @@ class PDSOFamilyManagerService(object):
         app = revit.app
         host_app_version = HOST_APP.version
 
-        # Validate Revit version is supported
-        if host_app_version not in REVIT_VERSION_TEMPLATES:
-            error_msg = "Unsupported Revit version: {}. Supported versions: {}".format(
-                host_app_version, ", ".join(sorted(REVIT_VERSION_TEMPLATES.keys()))
+        # Use the known template path. For a Revit version that is not in the
+        # table, use the family template folder that Revit reports.
+        if host_app_version in REVIT_VERSION_TEMPLATES:
+            template_path = REVIT_VERSION_TEMPLATES[host_app_version]
+        else:
+            template_path = os.path.join(
+                app.FamilyTemplatePath, "English-Imperial", "Generic Model.rft"
             )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        template_path = REVIT_VERSION_TEMPLATES[host_app_version]
 
         # Validate template file exists
         if not os.path.exists(template_path):
