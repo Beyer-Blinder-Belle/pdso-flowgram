@@ -154,8 +154,9 @@ Verify these before relying on them. They're good candidates for issues or hacka
 1. **The "Recompute All Geometry" option is not honored.** It's in `SYNC_OPTIONS`, but phase 2 only checks for `"No"`; both "Yes" options use the hash cache.
 2. **The geometry hash ignores the DSO position and the extrusion height (suspected).** Geometry is stored relative to the DSO location, but the hash covers only the Area boundary. Moving a DSO inside its Area, or changing the configured height, may leave a stale family. `area_basepoint` was probably meant for this. Today the workaround is to delete the PV family and sync again.
 3. **Changing a Program UID orphans its Program Volumes (suspected).** PV families and instances are found by the name `{prefix}{UID}`. After a UID edit the sync builds a new family and leaves the old one in the model. Changing the prefix in Project Config orphans every PV the same way. The audit counts orphaned PV instances but doesn't remove them.
-4. ~~**Stale schema docstring.**~~ Fixed: the docstring, the Project Config screen (which saved scheme → parameter) and the correlation key now all use parameter → scheme.
-5. **Two setup paths.** Quick Setup (ribbon, JSON standards) and `bootstrap_service` (API) both prepare a model, with different rules. Changes to one may need the other.
-6. **Leftover global `revit.doc`.** `audit_service.py` and `data/extended_program_volume_instance.py` still use `revit.doc` instead of an injected `doc`. That's fine with one open document, but risky with several.
-7. **Unused fields.** `hashed_parameters` (PV instance) and `area_basepoint` (PV family) are defined but not used.
-8. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.
+4. **The UID pattern is only enforced by the API.** `config.uid_pattern` is checked in `program_service.py` when programs are created or updated through the API. Preflight, Sync Data and the Data Silo schedule never check it, so a UID typed in Revit that breaks the pattern (seen: `01-01`) syncs anyway. The Audit Report only displays the pattern.
+5. ~~**Stale schema docstring.**~~ Fixed: the docstring, the Project Config screen (which saved scheme → parameter) and the correlation key now all use parameter → scheme.
+6. **Two setup paths.** Quick Setup (ribbon, JSON standards) and `bootstrap_service` (API) both prepare a model, with different rules. Changes to one may need the other.
+7. **Leftover global `revit.doc`.** `audit_service.py` and `data/extended_program_volume_instance.py` still use `revit.doc` instead of an injected `doc`. That's fine with one open document, but risky with several.
+8. **Unused fields.** `hashed_parameters` (PV instance) and `area_basepoint` (PV family) are defined but not used.
+9. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.
