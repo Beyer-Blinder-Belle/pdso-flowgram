@@ -150,7 +150,7 @@
                         FontSize="10"
                         Foreground="#666666"
                         Margin="0,8,0,10"
-                        Text="Each Parameter Name should correspond to a Shared Parameter of type 'area' that has been added to Generic Model category. the Shared Parameter should ideally also be set up as 'read-only' (to reduce the likelihood of users accidentally editing the value manually)." />
+                        Text="Each Parameter Name must be a tracked parameter of type 'Area'. After changing these mappings, open the Parameter Manager and click Apply Parameters: it adds any new Area parameter (as a read-only shared parameter bound to Generic Models) and locks mapped parameters so they can't be untracked." />
 
                     <!-- Data Silo Workset -->
                     <TextBlock

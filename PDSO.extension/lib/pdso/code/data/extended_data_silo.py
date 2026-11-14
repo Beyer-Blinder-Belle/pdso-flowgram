@@ -7,7 +7,9 @@ from rpw import db
 from pyrevit import script
 
 # Custom Modules
-from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+from pdso.code.data.shared_parameter_constants import LAST_SYNCED
+from pdso.code.data.extended_shared_parameter import ROLE_AREA
+from pdso.code.business.parameter_registry_service import get_registry
 
 
 class ExtendedDataSilo(object):
@@ -74,17 +76,18 @@ class ExtendedDataSilo(object):
         """Queue parameter resets for sync operation.
 
         Adds default values for PDSO parameters to the params_to_update queue.
-        Parameters queued: Area IDs, ZFA, NSF, GSF, Last Synced, Integrity Hash.
+        Parameters queued: tracked Area parameters and Last Synced.
         """
 
-        pdso_params_to_clear = [
-            standard_pdso_parameters["PDSO - ZFA"],
-            standard_pdso_parameters["PDSO - NSF"],
-            standard_pdso_parameters["PDSO - GSF"],
-            standard_pdso_parameters["PDSO - Last Synced"],
-        ]
+        registry = get_registry(self.rpw_element.Document)
+        pdso_params_to_clear = registry.by_role(ROLE_AREA)
+        last_synced = registry.get(LAST_SYNCED)
+        if last_synced is not None:
+            pdso_params_to_clear.append(last_synced)
 
         for parameter in pdso_params_to_clear:
+            if not parameter.has_default_value():
+                continue
             default_val = parameter.default_value()
             self.params_to_update[parameter.parameter_name] = default_val
 
@@ -127,7 +130,7 @@ class ExtendedDataSilo(object):
         """
 
         # To do - improve with fallback logic and/or multi-area logic
-        return self.related_area_elements.get("PDSO - GSF", None)
+        return self.related_area_elements.get("PDSO - GSF", None)  # keyed by Area Scheme name
 
     @property
     def Name(self):
