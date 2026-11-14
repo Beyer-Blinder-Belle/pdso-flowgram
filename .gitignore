@@ -9,3 +9,9 @@ Thumbs.db
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Unit Layout Catalogue: harvests from real projects stay off GitHub
+catalogue/local/
+
+# pyRevit error reports saved while testing
+/test*.html
