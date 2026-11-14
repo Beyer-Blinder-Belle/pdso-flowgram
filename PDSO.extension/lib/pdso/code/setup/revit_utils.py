@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Revit API helpers shared by the Model Setup steps."""
+"""Revit API helpers shared by the Quick Setup steps."""
 
 # 3rd Party Modules
 from pyrevit import DB

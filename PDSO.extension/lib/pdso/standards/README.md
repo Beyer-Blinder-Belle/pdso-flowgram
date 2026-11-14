@@ -1,28 +1,29 @@
 # PDSO standards
 
-**Model Setup** (PDSO tab → Program Data Silo Tools → Model Setup) reads the JSON files in this folder to decide what to add to a model. The files here are the shipped defaults. Copy and edit them to change what setup creates for your company or project.
+**Quick Setup** (PDSO tab → Program Data Silo Tools → Quick Setup) reads the JSON files in this folder to decide what to add to a model. Run it after **Project Config** and the **Parameter Manager**: it reads the area scheme mappings and Data Silo family from Project Config, and the schedules need the parameters the Parameter Manager creates. The files here are the shipped defaults. Copy and edit them to change what setup creates for your company or project.
 
 | File | What it defines |
 | --- | --- |
 | `setup.json` | Which steps run, in what order, and which are ticked by default |
-| `parameters.json` | PDSO shared parameters and the categories they're bound to |
+| `area_schemes.json` | Area schemes to create (by default, the ones named in Project Config) |
 | `families.json` | Families to load (the Program Data Silo family) |
 | `view_templates.json` | View templates and their visibility and graphics settings |
 | `views.json` | Working views to create and the template each one uses |
 | `schedules.json` | Schedules, their fields, filters and sorting |
+| `parameters.json` | Not a setup step. Only used by **Shift+Click → Export PDSO shared parameter file** (see below) |
 
 ## Customizing
 
 Setup looks for each file in these folders, highest priority first. The first folder that has the file wins, and the whole file is used. Files aren't merged.
 
 1. **Project**: a `PDSO Standards` folder next to the model (for a workshared model, next to the central model).
-2. **User**: a folder picked with **Shift+Click → Use a standards folder** on the Model Setup button.
+2. **User**: a folder picked with **Shift+Click → Use a standards folder** on the Quick Setup button.
 3. **Company**: the folder in the `PDSO_STANDARDS_DIR` environment variable. Use this to roll out shared standards on every workstation.
 4. **Default**: this folder.
 
 So a company folder only needs the files it changes. For example, a company that only wants different view templates ships just `view_templates.json`, and everything else comes from the defaults.
 
-To start, use **Shift+Click → Export default standards to a folder** on the Model Setup button. It copies these files to a folder you pick (usually a shared network folder).
+To start, use **Shift+Click → Export default standards to a folder** on the Quick Setup button. It copies these files to a folder you pick (usually a shared network folder).
 
 The setup report lists which file and folder each step used.
 
@@ -31,7 +32,7 @@ The setup report lists which file and folder each step used.
 - Every file accepts `"_comment"` keys anywhere. Setup ignores them.
 - Every item accepts `"enabled": false` to skip it without deleting it.
 - `on_existing` (per file) says what to do with an item that's already in the model. See each file below.
-- Setup is safe to run again. It runs as one undo step, **PDSO Model Setup**.
+- Setup is safe to run again. It runs as one undo step, **PDSO Quick Setup**.
 
 ### Tokens
 
@@ -54,17 +55,25 @@ Strings can contain these tokens:
 { "steps": [ { "id": "views", "title": "Create PDSO working views", "enabled": true } ] }
 ```
 
-`id` is one of `parameters`, `families`, `view_templates`, `views`, `schedules`, and setup reads `<id>.json` for it. Steps run in the listed order: parameters before schedules (schedule fields need the parameters), and view templates before views.
+`id` is one of `area_schemes`, `families`, `view_templates`, `views`, `schedules`, and setup reads `<id>.json` for it. Steps run in the listed order: area schemes before views (area plans need their scheme), and view templates before views.
 
-## parameters.json
+There's no `parameters` step any more: the **Parameter Manager** creates and binds parameters, before Quick Setup runs. A company `setup.json` that still lists `parameters` gets an "Unknown setup step" row in the report; remove that entry.
 
-This is a proposed format. The step that adds parameters is still being built. For now it only reports which parameters are already in the model. Don't change the GUIDs: the PDSO tools find parameters by GUID.
-
-The report can show a parameter as **Only in loaded families**. That happens when a family that uses the parameter (like the Data Silo family) is loaded. The parameter exists in the model then, but it isn't a project parameter, so it isn't listed in Project Parameters.
+## area_schemes.json
 
 | Key | Meaning |
 | --- | --- |
-| `categories` | Categories to bind the parameters to |
+| `from_project_config` | `true` (default) creates every Revit area scheme named in Project Config's area scheme mappings. With no mappings saved yet, it uses `PDSO - GSF`, `PDSO - NSF` and `PDSO - ZFA` and warns. |
+| `schemes` | Extra area scheme names to create |
+
+Schemes already in the model are left alone. The Revit API can't create an area scheme from nothing, so a new scheme is a copy of one already in the model (one that isn't Gross Building, if there is one), renamed. Its Areas aren't copied.
+
+## parameters.json
+
+Not a setup step. The **Parameter Manager** decides which parameters a model tracks and creates them. This file lists the 20 built-in PDSO parameters, and is only used to write a shared parameter file (below). Don't change the GUIDs: the PDSO tools find parameters by GUID.
+
+| Key | Meaning |
+| --- | --- |
 | `shared_parameter_group` | Group name in the shared parameter file (default `PDSO`) |
 | `parameters[].type` | `string`, `multilineText`, `number` or `area` |
 | `parameters[].description` | Optional tooltip text |
@@ -77,7 +86,7 @@ Revit can only add a shared parameter to a project from a shared parameter file.
 2. Browse to this file, choose the **PDSO** group, and pick a parameter.
 3. Select **Instance**, tick **Generic Models**, and click **OK**. Repeat for each parameter.
 
-If your company changed `parameters.json`, use **Shift+Click → Export PDSO shared parameter file** on the Model Setup button instead. It writes the file from whichever `parameters.json` Model Setup would use.
+If your company changed `parameters.json`, use **Shift+Click → Export PDSO shared parameter file** on the Quick Setup button instead. It writes the file from whichever `parameters.json` Quick Setup would use.
 
 After changing the default `parameters.json`, regenerate the shipped file:
 
@@ -93,7 +102,7 @@ python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
 | `files` | Paths to try in order. The first that exists is loaded. Relative paths resolve against this file's folder. |
 | `on_existing` | `skip` (default) leaves a loaded family alone. `reload` loads it again over the existing one. |
 | `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`) |
-| `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config |
+| `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config, unless Project Config already names a different family that is loaded |
 
 ## view_templates.json
 
@@ -164,4 +173,4 @@ Setup doesn't create area schemes. If a scheme is missing, create it in **Area a
 
 Operators: `equals`, `not_equals`, `greater`, `greater_or_equal`, `less`, `less_or_equal`, `contains`, `not_contains`, `begins_with`, `not_begins_with`, `ends_with`, `not_ends_with`, `has_value`, `has_no_value`.
 
-A field whose parameter isn't in the model yet is skipped with a warning. Run the parameters step first, then use `on_existing: "replace"` to rebuild the schedule.
+A field whose parameter isn't in the model yet is skipped with a warning. Track it in the Parameter Manager, then run the schedules step again with `on_existing: "replace"` to rebuild the schedule.

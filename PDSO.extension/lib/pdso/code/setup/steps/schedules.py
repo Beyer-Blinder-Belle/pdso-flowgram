@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Model Setup step: create schedules listed in schedules.json."""
+"""Quick Setup step: create schedules listed in schedules.json."""
 
 # 3rd Party Modules
 from pyrevit import DB
@@ -86,9 +86,9 @@ def _build_definition(ctx, schedule, spec, warnings):
             return added[parameter_name]
         if parameter_name not in schedulable:
             warnings.append(
-                "'{}' is not a schedulable field (is the parameter in the model?)".format(
-                    parameter_name
-                )
+                "'{}' is not a schedulable field. If it's a PDSO parameter, track "
+                "it in the Parameter Manager, then run this step again with "
+                "on_existing 'replace'".format(parameter_name)
             )
             return None
         field = definition.AddField(schedulable[parameter_name])

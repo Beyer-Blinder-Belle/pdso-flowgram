@@ -55,76 +55,39 @@ Install the extension with the pyRevit CLI, then reload pyRevit. The extensible 
 pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
 ```
 
-A **PDSO** tab appears in the Revit ribbon with a **Program Data Silo Tools** panel. The buttons only work in a project (not in the family editor).
+A **PDSO** tab appears in the Revit ribbon with a **Program Data Silo Tools** panel. The buttons only work in a project (not in the family editor). The first three set up a model, in ribbon order.
 
 | Button | What it does |
 | --- | --- |
-| **Model Setup** | Adds PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. Shift+Click for standards-folder options. |
 | **Project Config** | Saves the project's PDSO settings in the model: area scheme mapping, level mapping, family names, worksets. |
 | **Parameter Manager** | Chooses which parameters this project tracks, creates them as shared parameters on Generic Models and the Data Silo family, and saves or applies presets. Must be run once before syncing. |
+| **Quick Setup** | Creates everything else in the model: the area schemes from Project Config, the Data Silo family, view templates, working views and schedules. Shift+Click for standards-folder options. |
 | **Sync Data** | Runs preflight checks, then harvests Area SF into Data Silos and builds or updates Program Volumes. |
 | **Audit Report** | Prints a detailed report of configuration, correlation, level mapping and Area boundary problems, with clickable element IDs. |
 
+The **Unit Layout Catalogue** panel next to it is a separate tool for reusing room furniture layouts. See the [catalogue README](../catalogue/README.md).
+
 ## Setting up a project
 
-Do these once per project, in order.
+Do these once per project, in order: **Project Config → Parameter Manager → Quick Setup**.
 
-### 1. Create the area schemes
-
-In **Area and Volume Computations → Area Schemes**, create:
-
-- `PDSO - GSF`
-- `PDSO - NSF`
-- `PDSO - ZFA`
-
-Don't reuse Revit's built-in **Gross Building** scheme. Model Setup doesn't create area schemes. If your model already has its own schemes (for example **Gross Building** and **Rentable**), you can map them instead in Project Config (step 3).
-
-Type the names with a plain hyphen (`-`), not an en dash (`–`).
-
-### 2. Run Model Setup
-
-Click **Model Setup**, keep all steps ticked, and click **Run Setup**. It:
-
-- reports which PDSO shared parameters are in the model (it doesn't add them; the Parameter Manager does that in step 4),
-- loads `PDSO - Program Data Silo Object - Rvt26` and records it as the Data Silo family,
-- creates PDSO view templates, area plan working views for each scheme and level, and Data Silo and Program Volume schedules.
-
-It's safe to run again. Everything it does is one undo step, **PDSO Model Setup**.
-
-Your office or project can change what Model Setup creates with JSON standards files. See the [standards README](../PDSO.extension/lib/pdso/standards/README.md).
-
-### 3. Check Project Config
+### 1. Set up Project Config
 
 Click **Project Config**. The settings are saved in the model, so set them once at the start of the project. Changing them mid-project can orphan existing Program Volumes.
 
 | Setting | What it means |
 | --- | --- |
-| **Data Silo Family Name** | The family PDSO treats as Data Silos. Model Setup fills this in. |
+| **Data Silo Family Name** | The family PDSO treats as Data Silos. The default is the family PDSO ships with (`PDSO - Program Data Silo Object - Rvt26` in Revit 2026), which Quick Setup loads in step 3. Change it only if you use your own Data Silo family; load that family first. |
 | **Program UID Regex Pattern** | Optional rule that every Program UID must match. The default, `^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$`, means `BLDG-FLR-UNIT`, for example `00-07-01` or `NB-02-UD`. Leave it blank to allow any UID. |
-| **Area Scheme to Parameter Mappings** | Which area scheme fills which Data Silo parameter (`PDSO - GSF` → `PDSO - GSF`, and so on). Program Volume shapes come from the Area in the `PDSO - GSF` scheme. If there's no scheme with that name, they come from the smallest Area that contains the Data Silo. |
+| **Area Scheme to Parameter Mappings** | Which Revit area scheme fills which Data Silo parameter. The defaults are `PDSO - GSF`, `PDSO - NSF` and `PDSO - ZFA`, filling the parameters of the same names. Quick Setup creates any of these schemes that the model doesn't have. If the model already has its own schemes (for example **Gross Building** and **Rentable**), map those instead. |
 | **Program Volume Family Name Prefix** | PDSO names each Program Volume family `<prefix><Program UID>`, and uses the prefix to find them. Default `PDSO_ProgramVolume-`. |
 | **Program Volume Extrusion Height** | Height of Program Volumes, in feet. Default 8. |
 | **Data Silo / Program Volume / Area Workset** | Optional. If set, Sync Data can move elements to these worksets or warn when they're on the wrong one. |
 | **Level Mapping** | Short identifiers for levels, used by stacking (see below). |
 
-Click **Save Configuration**.
+Program Volume shapes come from the Area in the `PDSO - GSF` scheme. If there's no scheme with that name, they come from the smallest Area that contains the Data Silo.
 
-### 4. Choose your parameters
-
-Click **Parameter Manager**. It lists the PDSO parameters the tools ship with, plus any custom ones you add. Only the parameters you tick (*track*) are created in the model and copied to Program Volumes.
-
-- On a model's first run, every built-in parameter is ticked. Pick a **preset** to start from: *Default* is everything, *Blank* is only the required ones, or use one your team saved.
-- **Locked** parameters can't be unticked: Program UID, Program Stacking, Last Synced, and any parameter an area scheme mapping writes into.
-- **Add** custom parameters if your project needs them (Text, Multiline Text, Number, Integer, Area, Length or Yes/No). Their name and type can't change once created.
-- Click **Apply Parameters**. Nothing changes in the model until you do. It uses Revit's shared parameter file (or asks you for one), binds the parameters to Generic Models, and can add them to the Data Silo family.
-
-**Save as Preset** stores the current ticks for other projects. Point the presets folder at a shared network folder so the whole team uses the same presets.
-
-Sync Data won't run until the Parameter Manager has been applied, or whenever a tracked parameter goes missing from Generic Models.
-
-### 5. Map your levels
-
-Stacking refers to floors by short identifiers, not Revit level names. In **Project Config → Level Mapping**, add a row for each level a unit can repeat on, for example:
+**Map your levels.** Stacking refers to floors by short identifiers, not Revit level names. Under **Level Mapping**, add a row for each level a unit can repeat on, for example:
 
 | Identifier | Revit level |
 | --- | --- |
@@ -132,9 +95,38 @@ Stacking refers to floors by short identifiers, not Revit level names. In **Proj
 | `03` | Level 3 |
 | `10` | Level 10 |
 
-Identifiers should sort correctly (`01`, `02`, ... `10`). For several buildings, prefix them, for example `A07` or `B03`. Click **Sort by Identifier**, then **Save Configuration**.
+Identifiers should sort correctly (`01`, `02`, ... `10`). For several buildings, prefix them, for example `A07` or `B03`. Click **Sort by Identifier**. You can add levels later too.
 
-### 6. Draw Areas and place Data Silos
+Click **Save Configuration**.
+
+### 2. Choose your parameters
+
+Click **Parameter Manager**. It lists the PDSO parameters the tools ship with, plus any custom ones you add. Only the parameters you tick (*track*) are created in the model and copied to Program Volumes.
+
+- On a model's first run, every built-in parameter is ticked. Pick a **preset** to start from: *Default* is everything, *Blank* is only the required ones, or use one your team saved.
+- **Locked** parameters can't be unticked: Program UID, Program Stacking, Last Synced, and any parameter an area scheme mapping writes into.
+- **Add** custom parameters if your project needs them (Text, Multiline Text, Number, Integer, Area, Length or Yes/No). Their name and type can't change once created.
+- Click **Apply Parameters**. Nothing changes in the model until you do. It uses Revit's shared parameter file (or asks you for one) and binds the parameters to Generic Models.
+
+The Data Silo family isn't loaded yet at this point. If the option to add parameters to the Data Silo family is ticked, the manager warns that the family "isn't loaded, so it wasn't updated". That's expected: the Generic Models binding still puts every tracked parameter on every Data Silo.
+
+**Save as Preset** stores the current ticks for other projects. Point the presets folder at a shared network folder so the whole team uses the same presets.
+
+Sync Data won't run until the Parameter Manager has been applied, or whenever a tracked parameter goes missing from Generic Models.
+
+### 3. Run Quick Setup
+
+Click **Quick Setup**, keep all steps ticked, and click **Run Setup**. It:
+
+- creates the area schemes named in Project Config that the model doesn't have yet (Revit can only copy an existing scheme, so each new one starts as a copy, renamed),
+- loads `PDSO - Program Data Silo Object - Rvt26`, and records it in Project Config unless you chose a different, loaded family there,
+- creates PDSO view templates, a GSF area plan for each level, a 3D Program Volumes view, and Data Silo and Program Volume schedules. Your office can turn on NSF and ZFA area plans too, in `views.json`.
+
+Run it after the Parameter Manager, so the schedules get their PDSO columns. It's safe to run again. Everything it does is one undo step, **PDSO Quick Setup**.
+
+Your office or project can change what Quick Setup creates with JSON standards files. See the [standards README](../PDSO.extension/lib/pdso/standards/README.md).
+
+### 4. Draw Areas and place Data Silos
 
 In the PDSO area plans:
 
@@ -144,7 +136,7 @@ In the PDSO area plans:
 
 A Data Silo picks up an Area's SF only if it's on the same level and inside the boundary in plan.
 
-### 7. Fill in the Data Silos
+### 5. Fill in the Data Silos
 
 Use the Data Silo schedule (or Properties) to enter each unit's data. At minimum, give every Data Silo a unique **PDSO - Program UID**. Settle UIDs before the first sync. A Data Silo's Program Volume family is named after its UID, so changing a UID later leaves the old family in the model. See the [Parameter Reference](parameter-reference.md) for every field.
 
@@ -159,7 +151,7 @@ Use the Data Silo schedule (or Properties) to enter each unit's data. At minimum
 
 The Data Silo's own level is always included. Every identifier must exist in the Level Mapping.
 
-### 8. Run Sync Data
+### 6. Run Sync Data
 
 Save (and sync with central) first. Then click **Sync Data**.
 
@@ -181,7 +173,7 @@ Save (and sync with central) first. Then click **Sync Data**.
 
 Keep the console open. It logs each step and any element it skipped.
 
-### 9. Check the results
+### 7. Check the results
 
 - **Program Volume schedule**: counts and data for the whole building, including stacked floors.
 - **3D view**: Program Volume shapes and placement.
@@ -212,7 +204,7 @@ Run **Audit Report** first. It lists every problem with a link to the elements.
 | Preflight: config not found | Project Config was never saved | Open Project Config and click Save Configuration. |
 | Preflight: parameters not set up, or tracked parameters missing | The Parameter Manager hasn't been applied, or a parameter was deleted or unbound | Open Parameter Manager and click Apply Parameters. |
 | A parameter isn't on Program Volumes | It isn't tracked | Tick it in the Parameter Manager, apply, then sync. |
-| Preflight: Data Silo family not loaded | Family name in Project Config doesn't match the loaded family | Run Model Setup, or correct the name in Project Config. |
+| Preflight: Data Silo family not loaded | Family name in Project Config doesn't match the loaded family | Run Quick Setup, or correct the name in Project Config. |
 | Preflight: duplicate UIDs | Two Data Silos share a Program UID | Give each a unique UID. Copied Data Silos keep the original's UID. |
 | Data Silo has no GSF/NSF/ZFA value | It isn't inside an Area in that scheme on its level | Move it inside the Area, or place the missing Area. |
 | Area has more than one Data Silo | Two units share one Area | Split the Area, or delete the extra Data Silo. |

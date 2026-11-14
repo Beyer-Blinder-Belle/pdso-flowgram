@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Find and load the JSON standards that drive PDSO Model Setup.
+"""Find and load the JSON standards that drive PDSO Quick Setup.
 
 Standards are looked up in several folders. For each file (views.json,
 schedules.json, ...) the first folder that has it wins, so a company or project
 only needs to copy the files it wants to change. Search order, highest first:
 
 1. Project:  a "PDSO Standards" folder next to the model (or its central model)
-2. User:     the folder picked with Shift+Click on the Model Setup button
+2. User:     the folder picked with Shift+Click on the Quick Setup button
 3. Company:  the folder in the PDSO_STANDARDS_DIR environment variable
 4. Default:  the standards shipped with this extension (lib/pdso/standards)
 """

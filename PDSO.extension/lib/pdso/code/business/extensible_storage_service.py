@@ -148,7 +148,12 @@ class PDSOExtensibleStorageService(object):
                     "VolumeGeometry": "Never",
                     "VolumeData": "Never",
                 }
-                config.data_silo_family_name = "Program Data Silo Object - Rvt25"  # To do: get the logic that figures this out from revit year
+                # The shipped Data Silo family for this Revit version (families.json)
+                config.data_silo_family_name = (
+                    "PDSO - Program Data Silo Object - Rvt{}".format(
+                        str(self.document.Application.VersionNumber)[-2:]
+                    )
+                )
                 config.uid_pattern = r"^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$"
                 # area_scheme_mappings - provide default area schemes
                 config.area_scheme_mappings = {

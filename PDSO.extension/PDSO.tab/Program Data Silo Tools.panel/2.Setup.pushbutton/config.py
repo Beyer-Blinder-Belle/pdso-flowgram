@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""PDSO Model Setup options (Shift+Click).
+"""PDSO Quick Setup options (Shift+Click).
 
-Choose the standards folder Model Setup reads from, or export the shipped
+Choose the standards folder Quick Setup reads from, or export the shipped
 defaults to a folder as a starting point for company standards.
 """
 
@@ -35,7 +35,7 @@ OPTION_RESET = "Stop using my standards folder"
 
 
 def _describe(standards):
-    lines = ["Model Setup looks for each standards file in these folders, in order:", ""]
+    lines = ["Quick Setup looks for each standards file in these folders, in order:", ""]
     for source, folder, exists in standards.describe_search_dirs():
         if not folder:
             state = "not set"
@@ -58,9 +58,9 @@ def _use_folder():
         return
     set_user_standards_dir(folder)
     forms.alert(
-        "Model Setup will now use standards from:\n{}\n\nFiles missing from this "
+        "Quick Setup will now use standards from:\n{}\n\nFiles missing from this "
         "folder fall back to the shipped defaults.".format(folder),
-        title="PDSO Model Setup",
+        title="PDSO Quick Setup",
     )
 
 
@@ -86,8 +86,8 @@ def _export_defaults():
         message += "\nAlready there, not overwritten: {}".format(", ".join(kept))
 
     if forms.alert(
-        message + "\n\nUse this folder for Model Setup now?",
-        title="PDSO Model Setup",
+        message + "\n\nUse this folder for Quick Setup now?",
+        title="PDSO Quick Setup",
         yes=True,
         no=True,
     ):
@@ -95,11 +95,11 @@ def _export_defaults():
 
 
 def _export_shared_parameter_file(standards):
-    """Write a shared parameter file from the parameters.json Model Setup would use."""
+    """Write a shared parameter file from the parameters.json Quick Setup would use."""
     try:
         parameters = standards.load("parameters.json")
     except StandardsError as error:
-        forms.alert(str(error), title="PDSO Model Setup")
+        forms.alert(str(error), title="PDSO Quick Setup")
         return
 
     path = forms.save_file(
@@ -115,7 +115,7 @@ def _export_shared_parameter_file(standards):
     except (ValueError, KeyError, IOError, OSError) as error:
         forms.alert(
             "Could not write the shared parameter file: {}".format(error),
-            title="PDSO Model Setup",
+            title="PDSO Quick Setup",
         )
         return
 
@@ -125,7 +125,7 @@ def _export_shared_parameter_file(standards):
         "this file.".format(
             len(parameters.data.get("parameters", [])), parameters.path, path
         ),
-        title="PDSO Model Setup",
+        title="PDSO Quick Setup",
     )
 
 
@@ -152,6 +152,6 @@ if __name__ == "__main__":
         _open_folders(standards)
     elif choice == OPTION_RESET:
         set_user_standards_dir(None)
-        forms.alert("Model Setup will use the company or default standards.")
+        forms.alert("Quick Setup will use the company or default standards.")
     else:
         script.exit()
