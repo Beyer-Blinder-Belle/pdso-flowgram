@@ -29,6 +29,10 @@ from pdso.code.business.sync_service import SYNC_OPTIONS, PDSOSyncService
 
 ROUTES = []
 
+# Version of the HTTP API. Increase it when a route or a reply changes. The
+# MCP server compares it with the version that it was written for.
+API_VERSION = "1.1"
+
 
 def route(method, pattern):
     """Register a handler in the route table."""
@@ -83,6 +87,7 @@ def get_status(ctx):
     """Get the Revit version, the open document and the PDSO setup state."""
     status = {
         "revit": {"version": HOST_APP.version, "build": HOST_APP.build},
+        "api_version": API_VERSION,
         "document": None,
         "pdso_config_exists": False,
     }
@@ -159,17 +164,22 @@ def list_views(ctx):
 
 @route("GET", "rooms")
 def list_rooms(ctx):
-    """List the placed Rooms with their outlines. Query: level?, name?"""
+    """List the placed Rooms with their outlines. Query: level?, name?, outline?"""
     return model_service.list_rooms(
-        ctx.require_doc(), level=ctx.arg("level"), name=ctx.arg("name")
+        ctx.require_doc(),
+        level=ctx.arg("level"),
+        name=ctx.arg("name"),
+        with_outline=_flag(ctx.arg("outline"), True),
     )
 
 
 @route("POST", "views/activate")
 def activate_view(ctx):
-    """Show a view in the Revit window. Body: view (name or id), zoom_box?"""
+    """Show a view in the Revit window. Body: view (name or id), type?, zoom_box?"""
     doc = ctx.require_doc()
-    view = model_service.find_view(doc, ctx.arg("view", required=True))
+    view = model_service.find_view(
+        doc, ctx.arg("view", required=True), view_type=ctx.arg("type")
+    )
     return model_service.activate_view(ctx.uidoc, view, zoom_box=ctx.arg("zoom_box"))
 
 
@@ -293,6 +303,10 @@ def run_sync(ctx):
     result["ran"] = True
     result["preflight"] = preflight
     result["log"] = capture.records
+    try:
+        result["program_volumes"] = program_service.program_volume_summary(doc)
+    except Exception as error:
+        result["program_volumes"] = {"error": str(error)}
     return result
 
 

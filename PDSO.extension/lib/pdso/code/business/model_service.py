@@ -67,8 +67,12 @@ def list_views(doc, view_type=None):
     return sorted(views, key=lambda item: (item["type"], item["name"]))
 
 
-def find_view(doc, reference):
-    """Find a view by element id (int) or by name."""
+def find_view(doc, reference, view_type=None):
+    """Find a view by element id (int) or by name.
+
+    view_type (str): Revit view type (for example FloorPlan). It selects one
+        view when two views of different types have the same name (optional)
+    """
     if reference is None:
         if doc.ActiveView is None:
             raise PDSOError("Give a view (name or id).")
@@ -81,14 +85,24 @@ def find_view(doc, reference):
         for view in DB.FilteredElementCollector(doc).OfClass(DB.View)
         if not view.IsTemplate and view.Name == text
     ]
+    if view_type:
+        matches = [
+            view
+            for view in matches
+            if str(view.ViewType).lower() == str(view_type).lower()
+        ]
     if not matches:
         raise PDSOError("View '{}' not found.".format(reference), 404)
     if len(matches) > 1:
         raise PDSOError(
-            "{} views have the name '{}'. Use the view id: {}".format(
+            "{} views have the name '{}'. Give the view type, or use the view "
+            "id: {}".format(
                 len(matches),
                 reference,
-                ", ".join(str(id_value(view.Id)) for view in matches),
+                ", ".join(
+                    "{} ({})".format(id_value(view.Id), view.ViewType)
+                    for view in matches
+                ),
             ),
             409,
         )
@@ -140,10 +154,49 @@ def new_project(uiapp, path, template=None, overwrite=False):
     return open_project(uiapp, path)
 
 
+# Dialogs that Revit shows while a project opens, and the answer that lets the
+# open continue. A dialog that waits for a click blocks the API request.
+# 1002 is TaskDialogResult.CommandLink2.
+OPEN_DIALOG_ANSWERS = {
+    # "Ignore and continue opening the project"
+    "TaskDialog_Unresolved_References": 1002,
+}
+
+
 def open_project(uiapp, path):
-    """Open a project file and make it the active document."""
+    """Open a project file and make it the active document.
+
+    The dialogs of OPEN_DIALOG_ANSWERS get their answer automatically. The
+    result lists them in "dialogs_answered", and all other dialogs that showed
+    in "dialogs_seen".
+    """
     if not os.path.exists(path):
         raise PDSOError("File not found: {}".format(path), 404)
+    answered = []
+    seen = []
+
+    def on_dialog(sender, args):
+        dialog_id = getattr(args, "DialogId", None) or ""
+        if dialog_id in OPEN_DIALOG_ANSWERS:
+            try:
+                args.OverrideResult(OPEN_DIALOG_ANSWERS[dialog_id])
+                answered.append(dialog_id)
+                return
+            except Exception:
+                pass
+        seen.append(dialog_id or type(args).__name__)
+
+    uiapp.DialogBoxShowing += on_dialog
+    try:
+        info = _open_project(uiapp, path)
+    finally:
+        uiapp.DialogBoxShowing -= on_dialog
+    info["dialogs_answered"] = answered
+    info["dialogs_seen"] = seen
+    return info
+
+
+def _open_project(uiapp, path):
     workshared = False
     try:
         workshared = DB.BasicFileInfo.Extract(path).IsWorkshared
@@ -164,17 +217,20 @@ def open_project(uiapp, path):
     return info
 
 
-def list_rooms(doc, level=None, name=None):
+def list_rooms(doc, level=None, name=None, with_outline=True):
     """List the placed Rooms with their outlines (read-only).
 
     Args:
         doc: Revit Document
         level: Level name or id (optional)
         name (str): Text that the Room name or number must contain (optional)
+        with_outline (bool): Include the outline points
 
     Returns:
-        list[dict]: id, number, name, level, area (SF), outline ([x, y] points
-            of the largest boundary loop, feet)
+        list[dict]: id, number, name, level, area (SF), bbox ([x_min, y_min,
+            x_max, y_max] of the outline, feet), outline_points (count) and,
+            with with_outline, outline ([x, y] points of the largest boundary
+            loop, feet)
     """
     from .revit_helpers import find_level, polygon_area
 
@@ -208,16 +264,25 @@ def list_rooms(doc, level=None, name=None):
                 best = points
                 best_area = abs(polygon_area(points))
         room_level = doc.GetElement(room.LevelId)
-        rooms.append(
-            {
-                "id": id_value(room.Id),
-                "number": room.Number,
-                "name": room_name,
-                "level": room_level.Name if room_level is not None else None,
-                "area": round(room.Area, 2),
-                "outline": best,
-            }
-        )
+        info = {
+            "id": id_value(room.Id),
+            "number": room.Number,
+            "name": room_name,
+            "level": room_level.Name if room_level is not None else None,
+            "area": round(room.Area, 2),
+            "bbox": [
+                min(point[0] for point in best),
+                min(point[1] for point in best),
+                max(point[0] for point in best),
+                max(point[1] for point in best),
+            ]
+            if best
+            else None,
+            "outline_points": len(best),
+        }
+        if with_outline:
+            info["outline"] = best
+        rooms.append(info)
     return sorted(rooms, key=lambda item: (item["level"] or "", item["number"] or ""))
 
 
@@ -227,7 +292,6 @@ def save_project(doc):
         raise PDSOError("The document has no file path. Use new_project first.", 409)
     doc.Save()
     return document_info(doc)
-
 
 
 def close_project(uiapp, title, save=False):
