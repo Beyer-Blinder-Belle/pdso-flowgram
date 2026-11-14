@@ -14,6 +14,7 @@ A model that has never run the Parameter Manager has an empty registry: it is
 
 # Python standard libraries
 import os
+import threading
 import traceback
 
 # 3rd Party Modules
@@ -307,20 +308,67 @@ def check_parameter_bindings(doc, registry=None):
 # =============================================================================
 
 
-def get_configured_shared_parameter_file(doc):
-    """Return (path, exists) for the shared parameter file Revit is set to use."""
-    path = doc.Application.SharedParametersFilename or ""
-    return path, bool(path) and os.path.isfile(path)
+# A shared parameter file on a disconnected network drive can make a plain
+# os.path.isfile() hang for several seconds (Windows retries the connection).
+# Every existence check goes through path_exists() with a time limit instead.
+DEFAULT_PATH_TIMEOUT_S = 3.0
 
 
-def get_fallback_shared_parameter_file():
-    """Return the fallback file this user picked earlier, if it still exists."""
+def path_exists(path, timeout=DEFAULT_PATH_TIMEOUT_S):
+    """os.path.isfile() with a time limit.
+
+    Args:
+        path (str): File path to check
+        timeout (float): Seconds to wait before giving up
+
+    Returns:
+        bool or None: True/False, or None if the check timed out (e.g. an
+        unreachable network drive)
+    """
+    if not path:
+        return False
+    outcome = {}
+
+    def check():
+        try:
+            outcome["exists"] = os.path.isfile(path)
+        except Exception:
+            outcome["exists"] = False
+
+    worker = threading.Thread(target=check)
+    worker.daemon = True  # never keep Revit waiting on a hung network call
+    worker.start()
+    worker.join(timeout)
+    return outcome.get("exists")
+
+
+def get_configured_shared_parameter_path(doc):
+    """Path of the shared parameter file Revit is set to use (no file access)."""
+    return doc.Application.SharedParametersFilename or ""
+
+
+def get_configured_shared_parameter_file(doc, timeout=DEFAULT_PATH_TIMEOUT_S):
+    """Return (path, exists) for the shared parameter file Revit is set to use.
+
+    exists is None if the check timed out.
+    """
+    path = get_configured_shared_parameter_path(doc)
+    return path, path_exists(path, timeout)
+
+
+def get_remembered_fallback_path():
+    """The fallback file path this user picked earlier (no file access)."""
     try:
         config = script.get_config(_USER_CONFIG_SECTION)
-        path = config.get_option(_USER_CONFIG_OPTION, "")
+        return config.get_option(_USER_CONFIG_OPTION, "") or ""
     except Exception:
-        path = ""
-    return path if path and os.path.isfile(path) else ""
+        return ""
+
+
+def get_fallback_shared_parameter_file(timeout=DEFAULT_PATH_TIMEOUT_S):
+    """Return the fallback file this user picked earlier, if it still exists."""
+    path = get_remembered_fallback_path()
+    return path if path_exists(path, timeout) else ""
 
 
 def remember_fallback_shared_parameter_file(path):
@@ -333,22 +381,44 @@ def remember_fallback_shared_parameter_file(path):
         logger.warning("Could not remember shared parameter file: {}".format(e))
 
 
-def resolve_shared_parameter_file(doc):
-    """Pick the shared parameter file to use, without asking the user.
+def resolve_shared_parameter_file_path(
+    configured_path, fallback_path, timeout=DEFAULT_PATH_TIMEOUT_S
+):
+    """Pick the shared parameter file to use. Pure file access; safe off the Revit thread.
 
     Order: the file Revit is configured to use, then the fallback this user
     picked earlier.
 
+    Args:
+        configured_path (str): Revit's SharedParametersFilename
+        fallback_path (str): The remembered fallback path
+        timeout (float): Seconds to wait on each existence check
+
+    Returns:
+        tuple(str, str, bool or None): (path or "", source, configured_exists)
+            source is "revit", "fallback" or "".
+            configured_exists is None if checking Revit's file timed out.
+    """
+    configured_exists = path_exists(configured_path, timeout)
+    if configured_exists:
+        return configured_path, "revit", True
+    if path_exists(fallback_path, timeout):
+        return fallback_path, "fallback", configured_exists
+    return "", "", configured_exists
+
+
+def resolve_shared_parameter_file(doc, timeout=DEFAULT_PATH_TIMEOUT_S):
+    """Pick the shared parameter file to use, without asking the user.
+
     Returns:
         tuple(str, str): (path or "", source) where source is "revit", "fallback" or ""
     """
-    path, exists = get_configured_shared_parameter_file(doc)
-    if exists:
-        return path, "revit"
-    fallback = get_fallback_shared_parameter_file()
-    if fallback:
-        return fallback, "fallback"
-    return "", ""
+    path, source, _ = resolve_shared_parameter_file_path(
+        get_configured_shared_parameter_path(doc),
+        get_remembered_fallback_path(),
+        timeout,
+    )
+    return path, source
 
 
 # =============================================================================
@@ -503,8 +573,14 @@ class PDSOParameterSetupService(object):
         5. The file has a definition with this name: use it (warn if the GUID differs).
         6. Otherwise create it in the file's "PDSO" group.
         """
-        if not shared_parameter_file or not os.path.isfile(shared_parameter_file):
-            report.error("Shared parameter file not found: '{}'".format(shared_parameter_file))
+        exists = path_exists(shared_parameter_file)
+        if not exists:
+            report.error(
+                "Shared parameter file {}: '{}'".format(
+                    "couldn't be reached" if exists is None else "not found",
+                    shared_parameter_file,
+                )
+            )
             return None
 
         self.app.SharedParametersFilename = shared_parameter_file

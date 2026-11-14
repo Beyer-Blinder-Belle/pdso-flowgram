@@ -12,6 +12,7 @@ document config. Nothing is created until Apply runs at least once.
 
 # Python standard libraries
 import os
+import threading
 import traceback
 
 # 3rd Party Modules
@@ -38,6 +39,7 @@ from System.Windows import (
     VerticalAlignment,
 )
 import System
+from System import Action
 
 # Custom Modules
 from base_view_model import PDSO_Base_View_Model
@@ -48,10 +50,11 @@ from pdso.code.business.parameter_registry_service import (
     PDSOParameterSetupService,
     check_parameter_bindings,
     get_area_mapped_parameter_names,
-    get_configured_shared_parameter_file,
+    get_configured_shared_parameter_path,
     get_registry,
+    get_remembered_fallback_path,
     remember_fallback_shared_parameter_file,
-    resolve_shared_parameter_file,
+    resolve_shared_parameter_file_path,
     validate_parameter_name,
 )
 from pdso.code.data.extended_shared_parameter import (
@@ -137,6 +140,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         self._shared_parameter_file_color = COLOR_MUTED
         self._shared_parameter_file_path = ""
         self._shared_parameter_file_configured = ""
+        self._shared_parameter_file_check_done = False
 
         self.data_silo_family_name = ""
         self.add_to_family = True
@@ -287,34 +291,94 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
             )
             self.setup_status_color = COLOR_OK
 
-        # Shared parameter file
-        configured_path, _ = get_configured_shared_parameter_file(doc)
-        self._shared_parameter_file_configured = configured_path
-        path, source = resolve_shared_parameter_file(doc)
+        # Shared parameter file: read the path now, check it in the background.
+        # The file is often on a network drive; if that drive is unreachable,
+        # checking it can take many seconds, and the window shouldn't wait for it.
+        self._shared_parameter_file_configured = get_configured_shared_parameter_path(doc)
+        self._start_shared_parameter_file_check()
+
+        self.has_unsaved_changes = not registry.is_configured
+
+    # =========================================================================
+    # Shared parameter file check (background)
+    # =========================================================================
+
+    def _start_shared_parameter_file_check(self):
+        """Check the shared parameter file off the UI thread, then update the status."""
+        configured_path = self._shared_parameter_file_configured
+        fallback_path = get_remembered_fallback_path()
+        self._shared_parameter_file_path = ""
+        self._shared_parameter_file_check_done = False
+        # Each check gets an id so a slow, older check can't overwrite a newer result
+        self._shared_parameter_file_check_id = getattr(
+            self, "_shared_parameter_file_check_id", 0
+        ) + 1
+        check_id = self._shared_parameter_file_check_id
+        self.shared_parameter_file_message = "Checking {}...".format(
+            configured_path or "for a shared parameter file"
+        )
+        self.shared_parameter_file_color = COLOR_MUTED
+
+        def check():
+            # File access only: no Revit API calls on this thread
+            try:
+                outcome = resolve_shared_parameter_file_path(
+                    configured_path, fallback_path, timeout=15.0
+                )
+            except Exception:
+                outcome = ("", "", False)
+            try:
+                self.Dispatcher.BeginInvoke(
+                    Action(
+                        lambda: self._on_shared_parameter_file_checked(
+                            check_id, *outcome
+                        )
+                    )
+                )
+            except Exception:
+                pass  # window was closed
+
+        worker = threading.Thread(target=check)
+        worker.daemon = True
+        worker.start()
+
+    def _on_shared_parameter_file_checked(
+        self, check_id, path, source, configured_exists
+    ):
+        """Show the result of the background check (runs on the UI thread)."""
+        if check_id != self._shared_parameter_file_check_id:
+            return  # a newer check has started since
+        configured_path = self._shared_parameter_file_configured
         self._shared_parameter_file_path = path
+        self._shared_parameter_file_check_done = True
+
         if source == "revit":
             self.shared_parameter_file_message = path
             self.shared_parameter_file_color = COLOR_OK
-        elif source == "fallback":
+            return
+
+        if configured_path:
+            problem = (
+                "couldn't be reached (network drive offline?)"
+                if configured_exists is None
+                else "can't be found"
+            )
+            configured_text = "Revit's file '{}' {}".format(configured_path, problem)
+        else:
+            configured_text = "No shared parameter file is set in Revit"
+
+        if source == "fallback":
             self.shared_parameter_file_message = (
-                "{} (Revit's file '{}' wasn't found; using the file you picked "
-                "earlier)".format(path, configured_path or "none set")
+                "{}. Using the file you picked earlier: {}".format(configured_text, path)
             )
             self.shared_parameter_file_color = COLOR_WARNING
-        elif configured_path:
-            self.shared_parameter_file_message = (
-                "Revit's file '{}' can't be found. You'll be asked to pick or create "
-                "one when you apply.".format(configured_path)
-            )
-            self.shared_parameter_file_color = COLOR_ERROR
         else:
             self.shared_parameter_file_message = (
-                "No shared parameter file is set in Revit. You'll be asked to pick or "
-                "create one when you apply."
+                "{}. You'll be asked to pick or create one when you apply.".format(
+                    configured_text
+                )
             )
             self.shared_parameter_file_color = COLOR_ERROR
-
-        self.has_unsaved_changes = not registry.is_configured
 
     # =========================================================================
     # Observable properties
@@ -660,10 +724,18 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
 
     def _choose_shared_parameter_file(self):
         """Return the shared parameter file to use, asking the user if needed."""
-        if self._shared_parameter_file_path and os.path.isfile(
-            self._shared_parameter_file_path
-        ):
-            return self._shared_parameter_file_path
+        if self._shared_parameter_file_check_done:
+            if self._shared_parameter_file_path:
+                return self._shared_parameter_file_path
+        else:
+            # Background check hasn't finished: check now, but don't wait forever
+            path, _, _ = resolve_shared_parameter_file_path(
+                self._shared_parameter_file_configured,
+                get_remembered_fallback_path(),
+                timeout=5.0,
+            )
+            if path:
+                return path
 
         configured = self._shared_parameter_file_configured
         message = (
@@ -695,6 +767,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
 
         remember_fallback_shared_parameter_file(path)
         self._shared_parameter_file_path = path
+        self._shared_parameter_file_check_done = True
         return path
 
     def _on_apply_clicked(self, sender, args):
