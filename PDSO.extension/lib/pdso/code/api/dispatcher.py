@@ -8,6 +8,11 @@ JSON-serializable data.
 
 Response body: ``{"ok": true, "data": ...}`` or
 ``{"ok": false, "error": {"type", "message", "traceback"}}``.
+
+A client can send the query parameter ``_rid`` (a request id). The response
+body then has the same value in ``"rid"``. The client uses it to make sure that
+a reply belongs to its request (pyRevit Routes gave a client the reply of a
+different request in tests with more than one request at the same time).
 """
 
 import os
@@ -19,6 +24,16 @@ import urllib
 from pyrevit import routes
 
 from pdso.code.business.errors import PDSOError as ApiError
+
+
+REQUEST_ID_PARAM = "_rid"
+
+
+def _request_id(request):
+    try:
+        return (getattr(request, "query_params", None) or {}).get(REQUEST_ID_PARAM)
+    except Exception:
+        return None
 
 
 class Context(object):
@@ -33,6 +48,8 @@ class Context(object):
         body = getattr(request, "data", None)
         self.body = body if isinstance(body, dict) else {}
         self.query = dict(getattr(request, "query_params", None) or {})
+        # The request id is not a filter or an argument of a handler
+        self.query.pop(REQUEST_ID_PARAM, None)
 
     def require_doc(self):
         """Return the active project document, or raise ApiError."""
@@ -105,14 +122,14 @@ def _find(method, path):
     raise ApiError("No route: {} /{}. See GET /pdso/routes.".format(method, path), 404)
 
 
-def _error(status, exc_type, message, tb=None):
-    return routes.make_response(
-        data={
-            "ok": False,
-            "error": {"type": exc_type, "message": message, "traceback": tb},
-        },
-        status=status,
-    )
+def _error(status, exc_type, message, tb=None, rid=None):
+    data = {
+        "ok": False,
+        "error": {"type": exc_type, "message": message, "traceback": tb},
+    }
+    if rid is not None:
+        data["rid"] = rid
+    return routes.make_response(data=data, status=status)
 
 
 def reload_modules():
@@ -125,12 +142,18 @@ def reload_modules():
 
 def dispatch(method, path, request, uiapp):
     """Find the handler for the request, call it, and wrap the result."""
+    rid = _request_id(request)
     try:
         func, params = _find(method, path)
         ctx = Context(uiapp, request)
         data = func(ctx, **params)
-        return routes.make_response(data={"ok": True, "data": data})
+        body = {"ok": True, "data": data}
+        if rid is not None:
+            body["rid"] = rid
+        return routes.make_response(data=body)
     except ApiError as api_error:
-        return _error(api_error.status, "ApiError", str(api_error))
+        return _error(api_error.status, "ApiError", str(api_error), rid=rid)
     except Exception as error:
-        return _error(500, type(error).__name__, str(error), traceback.format_exc())
+        return _error(
+            500, type(error).__name__, str(error), traceback.format_exc(), rid=rid
+        )

@@ -340,6 +340,44 @@ def describe_program(doc, reference):
     return data
 
 
+def program_volume_summary(doc):
+    """List the Program Volume family and instances of each program.
+
+    Returns:
+        dict: "families" and "instances" (counts) and "programs": one item for
+            each program that has a Program Volume family, with "uid",
+            "family_name" and "instances" ("id" and "level" of each one)
+    """
+    config = _require_config(doc)
+    prefix = config["program_volume_family_name_prefix"]
+    by_family = {}
+    for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
+        symbol = instance.Symbol
+        family_name = symbol.Family.Name if symbol is not None else ""
+        if not prefix or not family_name.startswith(prefix):
+            continue
+        level = doc.GetElement(instance.LevelId)
+        by_family.setdefault(family_name, []).append(
+            {
+                "id": id_value(instance.Id),
+                "level": level.Name if level is not None else None,
+            }
+        )
+    programs = [
+        {
+            "uid": family_name[len(prefix):],
+            "family_name": family_name,
+            "instances": sorted(instances, key=lambda item: item["level"] or ""),
+        }
+        for family_name, instances in sorted(by_family.items())
+    ]
+    return {
+        "families": len(programs),
+        "instances": sum(len(program["instances"]) for program in programs),
+        "programs": programs,
+    }
+
+
 # =============================================================================
 # Write
 # =============================================================================

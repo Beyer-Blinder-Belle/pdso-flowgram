@@ -152,10 +152,29 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
 | Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
 | Selection | `select_elements`, `select_programs`, `get_selection` |
-| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `adjust_area`, `delete_area` |
+| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `draft_areas_from_rooms`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
+
+### Work from intent
+
+The server instructions give an agent the PDSO workflow, so that a user can ask in plain language ("map out the program of the second floor of this school") and does not need to know PDSO. The tools that make this short:
+
+- `setup_model()` with no levels makes area plans for the levels that have Rooms.
+- `list_rooms(level, include_outline=false)` gives number, name, area and bounding box of each Room.
+- `draft_areas_from_rooms(level, room_numbers, insets)` drafts one Area for each Room in each scheme, for example `insets = {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}`. A Room that fails does not stop the other Rooms. If an inset splits a Room outline, a larger simplify tolerance or the largest piece is used, and `warnings` says so.
+- `create_programs` places one program in each Area by `area_id`.
+- `run_sync` returns `program_volumes`: the families and the id and level of each instance.
+- `show_view(view, fit=true)` opens a plan and zooms it to its Areas (or Rooms) in one call. `view_type` selects one view when a floor plan and an area plan have the same name.
+- `show_program_volumes` shows the 3D view in the Revit window.
+
+### Versions, reloads and more than one client
+
+- `GET status` returns `api_version`. `get_status` of the MCP server adds `version_warning` when the extension in Revit is not the version that the server expects.
+- While pyRevit reloads, the PDSO routes are gone for some seconds. The MCP server waits (up to 60 s) and sends the request again.
+- The MCP server sends a request id (`_rid`) with each request, and the API returns it (`rid`). In tests, pyRevit Routes gave a client the reply of a different request when more than one request ran at the same time. With the request id, the server finds a wrong reply: it sends a read-only request again, and it stops with a clear error for a request that changes the model. Use one client for each Revit when you can.
+- `POST document/open` answers the dialog "Unresolved References" ("Ignore and continue opening the project"), so that the request does not wait for a click. The reply lists `dialogs_answered` and `dialogs_seen`.
 
 ### Tracked parameters in the API
 
@@ -179,6 +198,8 @@ A model that was not made for PDSO can have its own area schemes and Areas (for 
 The Program Volume of a program gets the shape of one Area that contains the Data Silo: the Area in a scheme with the name `PDSO - GSF` if there is one, and the smallest Area if not.
 
 ### Development
+
+`tools/deploy_vm.sh` copies `lib/` and `startup.py` to the Revit computer, checks the copy, and loads the new code: with the dev route if the flag file is there, or with a pyRevit reload if it is not (`PDSO_RELOAD=auto|dev|pyrevit|none`).
 
 The API code is imported on each request. With the flag file `%APPDATA%\pyRevit\pdso_api_dev.flag` on the Revit computer, `POST /pdso/dev/reload` drops the cached `pdso` modules, so that new code is used without a pyRevit reload. The flag also enables `POST /pdso/dev/exec`, which runs Python code in Revit. Do not keep the flag on a computer that is not for development.
 
