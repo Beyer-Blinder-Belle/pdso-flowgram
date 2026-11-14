@@ -7,7 +7,9 @@ from rpw import revit, db, DB
 from pyrevit import script
 
 # Custom Modules
-from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+from pdso.code.data.shared_parameter_constants import LAST_SYNCED
+from pdso.code.data.extended_shared_parameter import ROLE_AREA
+from pdso.code.business.parameter_registry_service import get_registry
 from pdso.code.data.extensible_storage_schemas import PdsoProgramVolumeInstanceSchema
 
 
@@ -76,37 +78,15 @@ class ExtendedProgramVolumeInstance(object):
         """Queue parameter resets at the start of every sync.
 
         Adds default values for PDSO parameters to the params_to_update queue.
-        Parameters cleared: ZFA, NSF, GSF, Last Synced, Integrity Hash.
+        Parameters cleared: every tracked parameter.
         """
 
-        pdso_params_to_clear = [
-            # Core identification parameters
-            standard_pdso_parameters["PDSO - Program UID"],
-            standard_pdso_parameters["PDSO - Program Display Name"],
-            standard_pdso_parameters["PDSO - Unit Layout Type"],
-            # User-managed data parameters
-            standard_pdso_parameters["PDSO - Program Type"],
-            standard_pdso_parameters["PDSO - Use Group"],
-            standard_pdso_parameters["PDSO - Planning Dept. Misc"],
-            standard_pdso_parameters["PDSO - Accessibility"],
-            standard_pdso_parameters["PDSO - Program Stacking"],
-            standard_pdso_parameters["PDSO - Program Market Segment"],
-            standard_pdso_parameters["PDSO - Misc Modifier"],
-            standard_pdso_parameters["PDSO - Load Factor"],
-            standard_pdso_parameters["PDSO - DU Bedroom Count"],
-            standard_pdso_parameters["PDSO - Bathroom Count"],
-            standard_pdso_parameters["PDSO - Bathroom Types"],
-            standard_pdso_parameters["PDSO - Kitchen Count"],
-            standard_pdso_parameters["PDSO - Kitchen Types"],
-            # Programmatically managed parameters - harvested from Areas
-            standard_pdso_parameters["PDSO - ZFA"],
-            standard_pdso_parameters["PDSO - NSF"],
-            standard_pdso_parameters["PDSO - GSF"],
-            # System metadata
-            standard_pdso_parameters["PDSO - Last Synced"],
-        ]
+        # Every tracked parameter is reset, then refilled from the Data Silo
+        pdso_params_to_clear = get_registry(revit.doc).parameters
 
         for parameter in pdso_params_to_clear:
+            if not parameter.has_default_value():
+                continue
             default_val = parameter.default_value()
             self.params_to_update[parameter.parameter_name] = default_val
 
@@ -426,17 +406,18 @@ class ExtendedProgramVolumeInstance(object):
         parameter values rather than queuing changes.
 
         Notes:
-            Parameters cleared: Area IDs, ZFA, NSF, GSF, Last Synced, Integrity Hash.
+            Parameters cleared: tracked Area parameters and Last Synced.
             Continues on error if individual parameter update fails.
         """
-        pdso_params_to_clear = [
-            standard_pdso_parameters["PDSO - ZFA"],
-            standard_pdso_parameters["PDSO - NSF"],
-            standard_pdso_parameters["PDSO - GSF"],
-            standard_pdso_parameters["PDSO - Last Synced"],
-        ]
+        registry = get_registry(revit.doc)
+        pdso_params_to_clear = registry.by_role(ROLE_AREA)
+        last_synced = registry.get(LAST_SYNCED)
+        if last_synced is not None:
+            pdso_params_to_clear.append(last_synced)
 
         for parameter in pdso_params_to_clear:
+            if not parameter.has_default_value():
+                continue
             self.logger.debug(
                 "Clearing parameter '{}' on data silo id: {}".format(
                     parameter.parameter_name, self.Id

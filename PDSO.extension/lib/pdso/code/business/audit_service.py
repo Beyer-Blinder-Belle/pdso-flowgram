@@ -42,10 +42,11 @@ from pdso.code.data.extended_program_volume_instance_collection import (
     ExtendedProgramVolumeInstanceCollection,
 )
 from pdso.code.data.extended_level_collection import ExtendedLevelCollection
-from pdso.code.data.shared_parameter_lookup_accelerator import (
-    Shared_Parameter_Lookup_Accelerator,
+from pdso.code.business.parameter_registry_service import (
+    check_parameter_bindings,
+    get_registry,
 )
-from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+from pdso.code.data.extended_shared_parameter import parameter_type_label
 from pdso.code.data.extended_program_volume_family_collection import (
     ExtendedProgramVolumeFamilyCollection,
 )
@@ -454,84 +455,47 @@ def generate_detailed_report(output, logger, doc=None):
     # Check Generic Model Parameters
     output.print_md("### Generic Model Parameters")
 
-    # List of required parameters for Generic Model category
-    required_params = [
-        "PDSO - Program UID",
-        "PDSO - Program Display Name",
-        "PDSO - Unit Layout Type",
-        "PDSO - Program Type",
-        "PDSO - Use Group",
-        "PDSO - Planning Dept. Misc",
-        "PDSO - Accessibility",
-        "PDSO - Program Stacking",
-        "PDSO - Program Market Segment",
-        "PDSO - Misc Modifier",
-        "PDSO - Load Factor",
-        "PDSO - DU Bedroom Count",
-        "PDSO - Bathroom Count",
-        "PDSO - Bathroom Types",
-        "PDSO - Kitchen Count",
-        "PDSO - Kitchen Types",
-        "PDSO - ZFA",
-        "PDSO - NSF",
-        "PDSO - GSF",
-        "PDSO - Last Synced",
-    ]
+    registry = get_registry(doc, refresh=True)
+    binding_check = check_parameter_bindings(doc, registry)
 
-    # Use Shared_Parameter_Lookup_Accelerator for efficient parameter checking
-    param_accelerator = Shared_Parameter_Lookup_Accelerator(doc)
-    binding_map = doc.ParameterBindings
-    missing_params = []
-
-    for param_name in required_params:
-        param_def = standard_pdso_parameters[param_name]
-
-        # Look up parameter by GUID using accelerator
-        shared_param_element = param_accelerator.lookup_shared_param(
-            param_def.parameter_guid
-        )
-
-        if shared_param_element is None:
-            missing_params.append(param_name)
-            continue
-
-        # Check if parameter is bound to Generic Models category
-        param_exists = False
-        element_binding = binding_map.get_Item(shared_param_element.GetDefinition())
-
-        if element_binding:
-            categories = element_binding.Categories
-            for cat in categories:
-                if cat.Id.Value == int(DB.BuiltInCategory.OST_GenericModel):
-                    param_exists = True
-                    break
-
-        if not param_exists:
-            missing_params.append(param_name)
-
-    # Separate found and missing parameters
-    found_params = [p for p in required_params if p not in missing_params]
-
-    if missing_params:
+    if not binding_check["configured"]:
         output.print_md(
-            "❌ Missing {} required generic model parameters:".format(
-                len(missing_params)
-            )
+            "❌ Parameters haven't been set up for this model. Run the "
+            "**Parameter Manager** before syncing."
         )
-        for param in missing_params:
-            output.print_md("  - {}".format(param))
-        output.print_md("")
-        output.print_md("✓ Found {} parameters:".format(len(found_params)))
-        for param in found_params:
-            output.print_md("  - {}".format(param))
     else:
+        if binding_check["missing_core"]:
+            output.print_md("❌ Required parameters that aren't tracked:")
+            for name in binding_check["missing_core"]:
+                output.print_md("  - {}".format(name))
+            output.print_md("")
+
+        if binding_check["missing"]:
+            output.print_md(
+                "❌ {} of {} tracked parameters are missing or set up incorrectly:".format(
+                    len(binding_check["missing"]), len(registry.parameters)
+                )
+            )
+            for name in binding_check["missing"]:
+                output.print_md(
+                    "  - {} ({})".format(name, binding_check["problems"][name])
+                )
+            output.print_md("")
+            output.print_md("Run the **Parameter Manager** to fix these.")
+            output.print_md("")
+
         output.print_md(
-            "✓ All {} required generic model parameters found:".format(
-                len(found_params)
+            "✓ {} tracked parameters found on Generic Models:".format(
+                len(binding_check["found"])
             )
         )
-        for param in found_params:
-            output.print_md("  - {}".format(param))
+        for name in binding_check["found"]:
+            parameter = registry.get(name)
+            output.print_md(
+                "  - {} ({}, {})".format(
+                    name, parameter_type_label(parameter.parameter_type), parameter.role
+                )
+            )
 
     output.print_md("\n")
 

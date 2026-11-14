@@ -36,6 +36,7 @@ from .family_manager_service import PDSOFamilyManagerService
 from .workset_coordination_service import WorksetCoordinationService
 from .extensible_storage_service import PDSOExtensibleStorageService
 from .level_mapping_service import PDSOLevelMappingService
+from .parameter_registry_service import get_registry
 
 
 # Option name -> (default value, permitted values)
@@ -169,6 +170,9 @@ class PDSOSyncService(object):
             self.current_step = "Initializing..."
             self.progress_status = "Starting sync process..."
             self.completion_message_visible = False
+
+            # Re-read the tracked parameter list (it may have changed since the last run)
+            get_registry(self.doc, refresh=True)
 
             # Instantiate services
             self.logger.info("Instantiating services...")

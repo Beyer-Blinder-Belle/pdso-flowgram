@@ -1,0 +1,6 @@
+# Revit binary files: never diff or normalize line endings
+*.rfa binary
+*.rvt binary
+*.rte binary
+*.rft binary
+*.txt text eol=crlf

@@ -44,7 +44,9 @@ from config_mapping_item import ConfigMappingItem
 from common.code.view_model_external_events import CustomizableEvent
 from common.code import generic_utils
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
-from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+from pdso.code.business.parameter_registry_service import (
+    check_parameter_bindings,
+)
 
 
 class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
@@ -676,38 +678,23 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             else:
                 self.check_data_silo_instances_status = "[ ! ]"
 
-            # Check 4: Are required shared parameters present?
-            missing_params = []
-
-            # Get all parameter bindings
-            binding_map = doc.ParameterBindings
-            param_names_in_doc = set()
-
-            iterator = binding_map.ForwardIterator()
-            iterator.Reset()
-            while iterator.MoveNext():
-                definition = iterator.Key
-                param_names_in_doc.add(definition.Name)
-
-            # Check which required parameters are missing
-            for param_name, param_def in standard_pdso_parameters.items():
-                if not param_def.required:
-                    continue
-                if param_name not in param_names_in_doc:
-                    missing_params.append(param_name)
-
-            total_required = sum(
-                1 for p in standard_pdso_parameters.values() if p.required
-            )
-
-            if len(missing_params) == 0:
+            # Check 4: Are the tracked shared parameters present?
+            binding_check = check_parameter_bindings(doc)
+            if not binding_check["configured"]:
                 self.check_shared_parameters_status = (
-                    "✓ All {} required parameters present".format(total_required)
+                    "✗ Not set up - run the Parameter Manager"
+                )
+            elif binding_check["missing"] or binding_check["missing_core"]:
+                missing = binding_check["missing_core"] + binding_check["missing"]
+                self.check_shared_parameters_status = (
+                    "✗ Missing {} parameter(s): {}".format(
+                        len(missing), ", ".join(missing[:3])
+                    )
                 )
             else:
                 self.check_shared_parameters_status = (
-                    "✗ Missing {} parameter(s): {}".format(
-                        len(missing_params), ", ".join(missing_params[:3])
+                    "✓ All {} tracked parameters present".format(
+                        len(binding_check["found"])
                     )
                 )
 

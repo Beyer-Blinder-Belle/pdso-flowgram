@@ -6,15 +6,30 @@ Built by the DCT team at [Beyer Blinder Belle](https://www.beyerblinderbelle.com
 
 ## What it does
 
-The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has three commands:
+The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four commands:
 
 | Button | What it does |
 | --- | --- |
+| **Model Setup** | Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
 | **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
+| **Parameter Manager** | Chooses which parameters PDSO tracks and creates them as shared parameters, bound to Generic Models (and optionally embedded in the Data Silo family). Must be run at least once per model before syncing. |
 | **Run Scripts** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
 
 All commands need an open **project** document; they are disabled in the family editor.
+
+## Tracked parameters
+
+The PDSO tools only sync the parameters a model *tracks*. The tracked list is set in the **Parameter Manager** and saved in the model's PDSO configuration (Extensible Storage).
+
+- **Built-in parameters** (Program UID, Program Stacking, ZFA/NSF/GSF, Last Synced, and the program data fields) ship with the tools as options. Nothing is created until you click **Apply Parameters**. On a model's first run, every built-in is ticked.
+- **Locked parameters** can't be untracked. They are *Program UID*, *Program Stacking*, *Last Synced*, and any parameter an Area Scheme mapping writes into.
+- **Custom parameters** can be added, with types Text, Multiline Text, Number, Integer, Area, Length and Yes/No. Once created, their name and type can't change.
+- **Shared parameter file**: the manager uses the file set in Revit (*Manage > Shared Parameters*). If that file is missing, it asks you to pick or create one, remembers your choice for the PDSO tools, and leaves Revit's setting unchanged. New definitions go in a `PDSO` group. Existing definitions are reused (first by GUID, then by name) instead of being duplicated.
+- **Presets** tick a set of parameters for a type of project. *Default* (every built-in parameter) and *Blank* (only the required ones) are built in. **Save as Preset** stores the current ticks as a JSON file in the presets folder. That folder is `%APPDATA%\PDSO\ParameterPresets` unless you choose another; point it at a shared network folder so the team uses the same presets. Presets keep the GUIDs of custom parameters, so they match across projects. Choosing a preset changes nothing in the model until you click **Apply Parameters**. To delete a preset, delete its file from the presets folder.
+- **Run Scripts** is blocked until the manager has run, and blocked again whenever a tracked parameter is missing from Generic Models.
+
+The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.py` and must never change.
 
 ## Requirements
 
@@ -37,6 +52,18 @@ pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
 Then reload pyRevit.
 
 For development, clone this repo and add its folder to pyRevit's custom extension directories (pyRevit → Settings → Custom Extension Directories), or run `pyrevit extensions paths add <path-to-repo>`.
+
+## Revit family
+
+PDSO needs the **Program Data Silo Object** family loaded in your project. The family file is in [`families/`](families/):
+
+- `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
+
+**Model Setup** loads it and sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+
+## Standards
+
+Model Setup is driven by JSON files in [`PDSO.extension/lib/pdso/standards/`](PDSO.extension/lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Model Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](PDSO.extension/lib/pdso/standards/README.md) for every option.
 
 ## HTTP API and MCP server
 
@@ -141,13 +168,16 @@ The windows and the API use the same UI-free services in `lib/pdso/code/business
 The repository uses the standard pyRevit extension layout:
 
 ```
+families/                             # Revit family files (.rfa)
 mcp/
 └── pdso_mcp_server.py                # MCP server for the HTTP API (runs on the agent's computer)
 PDSO.extension/
 ├── startup.py                        # Registers the HTTP API with pyRevit Routes
 ├── PDSO.tab/
 │   └── Program Data Silo Tools.panel/
+│       ├── 0.Setup.pushbutton/       # Model Setup from JSON standards (Shift+Click: options)
 │       ├── 1.Config.pushbutton/      # Project configuration window
+│       ├── 1b.Parameters.pushbutton/ # Parameter Manager (tracked shared parameters)
 │       ├── 2.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
 │       └── 3.Audit.pushbutton/       # Audit report
 └── lib/
@@ -157,7 +187,9 @@ PDSO.extension/
         │   ├── api/                  # HTTP API: request dispatcher and route handlers
         │   ├── business/             # Services: sync, hashing, level mapping, storage, ...
         │   ├── data/                 # Wrappers around Revit elements, schemas, parameter constants
+        │   ├── setup/                # Model Setup: standards loader, runner and steps
         │   └── view_models/          # WPF view models (MVVM)
+        ├── standards/                # Default JSON standards for Model Setup
         ├── xaml/                     # WPF windows and styles
         └── documentation/            # Developer notes
 ```
