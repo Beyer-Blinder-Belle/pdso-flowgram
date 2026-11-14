@@ -130,7 +130,29 @@ class ExtendedDataSilo(object):
         """
 
         # To do - improve with fallback logic and/or multi-area logic
-        return self.related_area_elements.get("PDSO - GSF", None)  # keyed by Area Scheme name
+        # related_area_elements is keyed by Area Scheme name.
+        # A model that uses the default scheme names: the GSF Area gives the shape
+        gsf_area = self.related_area_elements.get("PDSO - GSF", None)
+        if gsf_area is not None:
+            return gsf_area
+
+        # A model with its own scheme names: the smallest related Area gives
+        # the shape (the unit, not the floor plate that contains it)
+        smallest = None
+        smallest_size = None
+        for ext_area in self.related_area_elements.values():
+            if ext_area is None:
+                continue
+            try:
+                size = ext_area.Area
+            except Exception:
+                continue
+            if size <= 0:
+                continue
+            if smallest is None or size < smallest_size:
+                smallest = ext_area
+                smallest_size = size
+        return smallest
 
     @property
     def Name(self):
