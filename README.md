@@ -38,11 +38,20 @@ Then reload pyRevit.
 
 For development, clone this repo and add its folder to pyRevit's custom extension directories (pyRevit → Settings → Custom Extension Directories), or run `pyrevit extensions paths add <path-to-repo>`.
 
+## Revit family
+
+PDSO needs the **Program Data Silo Object** family loaded in your project. The family file is in [`families/`](families/):
+
+- `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
+
+Load it into your project, then open **Project Config** and set the Data Silo family name to match the loaded family's name. The default is `Program Data Silo Object - Rvt25`.
+
 ## Repository layout
 
 The repository uses the standard pyRevit extension layout:
 
 ```
+families/                             # Revit family files (.rfa)
 PDSO.extension/
 ├── PDSO.tab/
 │   └── Program Data Silo Tools.panel/
