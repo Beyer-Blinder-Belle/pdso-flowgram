@@ -49,7 +49,9 @@ def _create_views(ctx, spec, on_existing):
         scheme = revit_utils.find_area_scheme(ctx.doc, scheme_name)
         if scheme is None:
             ctx.add(
-                ctx.expand(spec["name"], area_scheme=scheme_name),
+                ctx.expand(
+                    spec["name"], area_scheme=scheme_name, level="(all levels)"
+                ),
                 status.FAILED,
                 "Area scheme '{}' is not in this model. Create it in Area and Volume "
                 "Computations, then run setup again.".format(scheme_name),

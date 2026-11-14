@@ -60,6 +60,31 @@ Strings can contain these tokens:
 
 This is a proposed format. The step that adds parameters is still being built. For now it only reports which parameters are already in the model. Don't change the GUIDs: the PDSO tools find parameters by GUID.
 
+The report can show a parameter as **Only in loaded families**. That happens when a family that uses the parameter (like the Data Silo family) is loaded. The parameter exists in the model then, but it isn't a project parameter, so it isn't listed in Project Parameters.
+
+| Key | Meaning |
+| --- | --- |
+| `categories` | Categories to bind the parameters to |
+| `shared_parameter_group` | Group name in the shared parameter file (default `PDSO`) |
+| `parameters[].type` | `string`, `multilineText`, `number` or `area` |
+| `parameters[].description` | Optional tooltip text |
+
+### Shared parameter file
+
+Revit can only add a shared parameter to a project from a shared parameter file. [`PDSO Shared Parameters.txt`](PDSO%20Shared%20Parameters.txt) is generated from the default `parameters.json`. To add the parameters by hand:
+
+1. **Manage → Project Parameters → New → Shared parameter → Select**.
+2. Browse to this file, choose the **PDSO** group, and pick a parameter.
+3. Select **Instance**, tick **Generic Models**, and click **OK**. Repeat for each parameter.
+
+If your company changed `parameters.json`, use **Shift+Click → Export PDSO shared parameter file** on the Model Setup button instead. It writes the file from whichever `parameters.json` Model Setup would use.
+
+After changing the default `parameters.json`, regenerate the shipped file:
+
+```bash
+python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
+```
+
 ## families.json
 
 | Key | Meaning |

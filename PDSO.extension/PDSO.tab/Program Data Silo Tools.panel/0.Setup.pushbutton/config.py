@@ -13,10 +13,15 @@ import shutil
 from pyrevit import forms, revit, script
 
 # Custom Modules
+from pdso.code.setup.shared_parameter_file import (
+    DEFAULT_FILE_NAME,
+    write_shared_parameter_file,
+)
 from pdso.code.setup.standards import (
     ENV_VAR,
     PROJECT_FOLDER_NAME,
     Standards,
+    StandardsError,
     default_standards_dir,
     get_user_standards_dir,
     set_user_standards_dir,
@@ -24,6 +29,7 @@ from pdso.code.setup.standards import (
 
 OPTION_USE = "Use a standards folder..."
 OPTION_EXPORT = "Export default standards to a folder..."
+OPTION_SHARED_PARAMETERS = "Export PDSO shared parameter file..."
 OPTION_OPEN = "Open the standards folders"
 OPTION_RESET = "Stop using my standards folder"
 
@@ -88,6 +94,41 @@ def _export_defaults():
         set_user_standards_dir(folder)
 
 
+def _export_shared_parameter_file(standards):
+    """Write a shared parameter file from the parameters.json Model Setup would use."""
+    try:
+        parameters = standards.load("parameters.json")
+    except StandardsError as error:
+        forms.alert(str(error), title="PDSO Model Setup")
+        return
+
+    path = forms.save_file(
+        file_ext="txt",
+        default_name=os.path.splitext(DEFAULT_FILE_NAME)[0],
+        title="Save PDSO shared parameter file",
+    )
+    if not path:
+        return
+
+    try:
+        write_shared_parameter_file(parameters.data, path)
+    except (ValueError, KeyError, IOError, OSError) as error:
+        forms.alert(
+            "Could not write the shared parameter file: {}".format(error),
+            title="PDSO Model Setup",
+        )
+        return
+
+    forms.alert(
+        "Saved {} parameters from:\n{}\n\nto:\n{}\n\nTo add them to the project: "
+        "Manage > Project Parameters > New > Shared parameter > Select, then pick "
+        "this file.".format(
+            len(parameters.data.get("parameters", [])), parameters.path, path
+        ),
+        title="PDSO Model Setup",
+    )
+
+
 def _open_folders(standards):
     for _, folder in standards.search_dirs:
         os.startfile(folder)
@@ -95,7 +136,7 @@ def _open_folders(standards):
 
 if __name__ == "__main__":
     standards = Standards(revit.doc)
-    options = [OPTION_USE, OPTION_EXPORT, OPTION_OPEN]
+    options = [OPTION_USE, OPTION_EXPORT, OPTION_SHARED_PARAMETERS, OPTION_OPEN]
     if get_user_standards_dir():
         options.append(OPTION_RESET)
 
@@ -105,6 +146,8 @@ if __name__ == "__main__":
         _use_folder()
     elif choice == OPTION_EXPORT:
         _export_defaults()
+    elif choice == OPTION_SHARED_PARAMETERS:
+        _export_shared_parameter_file(standards)
     elif choice == OPTION_OPEN:
         _open_folders(standards)
     elif choice == OPTION_RESET:

@@ -101,7 +101,8 @@ def _register_data_silo_family(ctx, family_name):
         ctx.add(
             "Project Config",
             status.WARNING,
-            "Could not set the Data Silo family to '{}'. Set it in Project Config.".format(
-                family_name
-            ),
+            "Using '{}' as the Data Silo family for this run, but couldn't save it to "
+            "Project Config. Set it there. {}".format(
+                family_name, ctx.storage_error or ""
+            ).strip(),
         )

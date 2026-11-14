@@ -3,3 +3,4 @@
 *.rvt binary
 *.rte binary
 *.rft binary
+*.txt text eol=crlf

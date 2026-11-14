@@ -56,6 +56,9 @@ class SetupContext(object):
         self.current_step = None
         self.current_file = None
 
+        # None until first use; False if the extensible_storage library is missing
+        self._storage = None
+        self.storage_error = None
         self.pdso_config = self._read_pdso_config()
         self.tokens = base_tokens()
 
@@ -115,18 +118,25 @@ class SetupContext(object):
     # ----- PDSO Project Config (Extensible Storage) -----
 
     def _storage_service(self):
-        """The PDSO Extensible Storage service, or None if the library isn't installed."""
-        try:
-            from pdso.code.business.extensible_storage_service import (
-                PDSOExtensibleStorageService,
-            )
-        except Exception as error:
-            self.logger.warning(
-                "PDSO Project Config is unavailable (is the extensible_storage "
-                "library installed?): {}".format(error)
-            )
-            return None
-        return PDSOExtensibleStorageService(self.doc)
+        """The PDSO Extensible Storage service, or None if the library isn't installed.
+
+        The reason it's unavailable is kept in storage_error for the report.
+        """
+        if self._storage is None:
+            try:
+                from pdso.code.business.extensible_storage_service import (
+                    PDSOExtensibleStorageService,
+                )
+
+                self._storage = PDSOExtensibleStorageService(self.doc)
+            except Exception as error:
+                self._storage = False
+                self.storage_error = (
+                    "PDSO Project Config is unavailable. Is the extensible_storage "
+                    "library installed? ({})".format(error)
+                )
+                self.logger.warning(self.storage_error)
+        return self._storage or None
 
     def _read_pdso_config(self):
         """Read the values setup needs from the model's PDSO Project Config."""
@@ -165,6 +175,7 @@ class SetupContext(object):
 
         Creates the Project Config with defaults first if the model doesn't have one.
         Must be called outside a transaction (Extensible Storage opens its own).
+        Later steps in this run use the family even if it can't be saved.
 
         Returns:
             bool: True if the Project Config now uses this family.
@@ -174,6 +185,7 @@ class SetupContext(object):
 
         service = self._storage_service()
         if service is None:
+            self.pdso_config["data_silo_family"] = family_name
             return False
 
         if not service.check_document_pdso_config_schema_exists():
@@ -181,10 +193,9 @@ class SetupContext(object):
             # Defaults may include area scheme mappings and a prefix
             self.pdso_config = self._read_pdso_config()
 
-        if service.update_document_config(data_silo_family_name=family_name):
-            self.pdso_config["data_silo_family"] = family_name
-            return True
-        return False
+        saved = service.update_document_config(data_silo_family_name=family_name)
+        self.pdso_config["data_silo_family"] = family_name
+        return bool(saved)
 
 
 def run_setup(doc, standards, steps):
