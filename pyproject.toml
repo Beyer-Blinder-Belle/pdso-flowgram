@@ -1,5 +1,6 @@
 [tool.ruff]
 target-version = "py37"
+extend-exclude = ["PDSO.extension/lib/extensible_storage"]  # vendored third-party code
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]

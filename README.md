@@ -21,15 +21,11 @@ All commands need an open **project** document; they are disabled in the family 
 
 - Autodesk Revit
 - [pyRevit](https://github.com/pyrevitlabs/pyRevit)
-- The [`extensible-storage-pyrevit`](https://github.com/khorn06/extensible-storage-pyrevit) library extension by Kris Horn. It is a separate project and is **not** bundled here.
+- The [`extensible-storage-pyrevit`](https://github.com/khorn06/extensible-storage-pyrevit) library by Kris Horn. A copy is bundled in `PDSO.extension/lib/extensible_storage`, so no separate install is needed (see its `NOTICE.md`).
 
 ## Installation
 
 Using the pyRevit CLI:
-
-```bash
-pyrevit extend lib extensible_storage https://github.com/khorn06/extensible-storage-pyrevit.git
-```
 
 ```bash
 pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
