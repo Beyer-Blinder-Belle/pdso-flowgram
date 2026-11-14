@@ -4,6 +4,8 @@
 
 Built by the DCT team at [Beyer Blinder Belle](https://www.beyerblinderbelle.com). This is BBB's first open-source project.
 
+**New to PDSO?** Start with the [User Guide](docs/user-guide.md) and the [Parameter Reference](docs/parameter-reference.md). **Coding agents** start at [AGENTS.md](AGENTS.md). All docs: [docs/](docs/README.md).
+
 ## What it does
 
 The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four commands:
@@ -13,7 +15,7 @@ The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four comm
 | **Model Setup** | Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
 | **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
 | **Parameter Manager** | Chooses which parameters PDSO tracks and creates them as shared parameters, bound to Generic Models (and optionally embedded in the Data Silo family). Must be run at least once per model before syncing. |
-| **Run Scripts** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
+| **Sync Data** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
 
 All commands need an open **project** document; they are disabled in the family editor.
@@ -27,7 +29,7 @@ The PDSO tools only sync the parameters a model *tracks*. The tracked list is se
 - **Custom parameters** can be added, with types Text, Multiline Text, Number, Integer, Area, Length and Yes/No. Once created, their name and type can't change.
 - **Shared parameter file**: the manager uses the file set in Revit (*Manage > Shared Parameters*). If that file is missing, it asks you to pick or create one, remembers your choice for the PDSO tools, and leaves Revit's setting unchanged. New definitions go in a `PDSO` group. Existing definitions are reused (first by GUID, then by name) instead of being duplicated.
 - **Presets** tick a set of parameters for a type of project. *Default* (every built-in parameter) and *Blank* (only the required ones) are built in. **Save as Preset** stores the current ticks as a JSON file in the presets folder. That folder is `%APPDATA%\PDSO\ParameterPresets` unless you choose another; point it at a shared network folder so the team uses the same presets. Presets keep the GUIDs of custom parameters, so they match across projects. Choosing a preset changes nothing in the model until you click **Apply Parameters**. To delete a preset, delete its file from the presets folder.
-- **Run Scripts** is blocked until the manager has run, and blocked again whenever a tracked parameter is missing from Generic Models.
+- **Sync Data** is blocked until the manager has run, and blocked again whenever a tracked parameter is missing from Generic Models.
 
 The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.py` and must never change.
 
