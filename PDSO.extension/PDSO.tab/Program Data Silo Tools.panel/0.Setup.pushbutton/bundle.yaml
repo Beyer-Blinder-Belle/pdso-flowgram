@@ -1,0 +1,14 @@
+# bundle title
+title: "Model\nSetup"
+
+# bundle tooltip
+tooltip: >-
+  Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family,
+  and creates view templates, working views and schedules. Everything it creates is
+  defined in JSON standards files that your company or project can customize.
+  Shift+Click to choose or export a standards folder.
+
+# bundle author
+author: BBB DCT
+
+context: doc-project
