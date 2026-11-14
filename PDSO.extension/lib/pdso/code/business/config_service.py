@@ -10,15 +10,13 @@ Example Usage:
     update_config(doc, {"program_volume_extrusion_height": 10.0})
 """
 
-# System Modules
-from System import Guid
-
 # 3rd Party Modules
 from pyrevit import script, DB
 
 # Custom Modules
 from ..data.shared_parameter_constants import standard_pdso_parameters
 from .errors import PDSOError
+from . import parameter_registry_service
 from .extensible_storage_service import PDSOExtensibleStorageService
 from .revit_helpers import find_level, id_value
 
@@ -107,12 +105,12 @@ def update_config(doc, updates):
     Args:
         doc: Revit Document
         updates (dict): Fields to change. Fields that are not given keep their
-            value. Map fields (area_scheme_mappings, levels_mapping, worksets,
-            tethered_parameters) are replaced as a whole and cannot be empty.
+            value. Map fields (area_scheme_mappings, levels_mapping, worksets)
+            are replaced as a whole and cannot be empty.
             "levels_mapping" maps each stacking key (for example "01") to a level
             name or level id. The "PDSO - Program Stacking" parameter of a Data
-            Silo uses these keys ("01-02" or "01, 03"). "tethered_parameters" is
-            a list of PDSO parameter names.
+            Silo uses these keys ("01-02" or "01, 03"). The tracked parameters
+            ("tethered_parameters") are not changed here: see parameter_service.
 
     Returns:
         dict: The configuration after the change (see get_config)
@@ -124,8 +122,12 @@ def update_config(doc, updates):
         "area_scheme_mappings",
         "levels_mapping",
         "worksets",
-        "tethered_parameters",
     ]
+    if "tethered_parameters" in updates:
+        raise PDSOError(
+            "tethered_parameters holds the tracked parameters. "
+            "Use POST /pdso/parameters and DELETE /pdso/parameters/<name>."
+        )
     unknown = [name for name in updates if name not in permitted]
     if unknown:
         raise PDSOError(
@@ -152,8 +154,12 @@ def update_config(doc, updates):
     if "area_scheme_mappings" in updates:
         mappings = updates["area_scheme_mappings"]
         _require_map(mappings, "area_scheme_mappings")
+        tracked = parameter_registry_service.get_registry(doc, refresh=True)
         for parameter_name in mappings:
-            if parameter_name not in standard_pdso_parameters:
+            if (
+                parameter_name not in standard_pdso_parameters
+                and parameter_name not in tracked
+            ):
                 raise PDSOError(
                     "area_scheme_mappings key '{}' is not a PDSO parameter.".format(
                         parameter_name
@@ -177,19 +183,6 @@ def update_config(doc, updates):
             (str(key), find_level(doc, reference).Id)
             for key, reference in mapping.items()
         )
-
-    if "tethered_parameters" in updates:
-        names = updates["tethered_parameters"]
-        if not isinstance(names, (list, tuple)) or not names:
-            raise PDSOError("tethered_parameters must be a list of parameter names.")
-        tethered = {}
-        for name in names:
-            if name not in standard_pdso_parameters:
-                raise PDSOError("'{}' is not a PDSO parameter.".format(name))
-            tethered[str(name)] = Guid(
-                str(standard_pdso_parameters[name].parameter_guid)
-            )
-        values["tethered_parameters"] = tethered
 
     initialize_config(doc)
     service = PDSOExtensibleStorageService(doc)
@@ -247,28 +240,34 @@ def run_model_checks(doc):
         else:
             add("data_silo_instances", "warning", "No Data Silo instances placed")
 
-    bound_names = set()
-    iterator = doc.ParameterBindings.ForwardIterator()
-    iterator.Reset()
-    while iterator.MoveNext():
-        bound_names.add(iterator.Key.Name)
-    required = [
-        name
-        for name, definition in standard_pdso_parameters.items()
-        if definition.is_required
-    ]
-    missing = sorted(name for name in required if name not in bound_names)
-    if missing:
+    binding_check = parameter_registry_service.check_parameter_bindings(doc)
+    if not binding_check["configured"]:
         add(
             "shared_parameters",
             "error",
-            "Missing {} parameter(s): {}".format(len(missing), ", ".join(missing)),
+            "Parameters not set up. Run the bootstrap or the Parameter Manager.",
+        )
+    elif binding_check["missing_core"]:
+        add(
+            "shared_parameters",
+            "error",
+            "Required parameters not tracked: {}".format(
+                ", ".join(binding_check["missing_core"])
+            ),
+        )
+    elif binding_check["missing"]:
+        add(
+            "shared_parameters",
+            "error",
+            "Tracked parameters missing on Generic Models: {}".format(
+                ", ".join(binding_check["missing"])
+            ),
         )
     else:
         add(
             "shared_parameters",
             "ok",
-            "All {} required parameters present".format(len(required)),
+            "All {} tracked parameters present".format(len(binding_check["found"])),
         )
 
     scheme_names = list(config.get("area_scheme_mappings", {}).values())

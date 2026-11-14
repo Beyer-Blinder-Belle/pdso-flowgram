@@ -124,7 +124,7 @@ class PDSOFamilyManagerService(object):
 
         if ext_area_for_program_volume_family_geometry is None:
             self.logger.warning(
-                ".  Skipping Data Silo '{}' because it has no related GSF area element.".format(
+                ".  Skipping Data Silo '{}' because no Area contains it.".format(
                     ext_data_silo.Id
                 )
             )
@@ -152,7 +152,7 @@ class PDSOFamilyManagerService(object):
             # Create new family
             fdoc = self.create_new_program_volume_family(
                 desired_family_name,
-                ext_data_silo.related_area_elements.get("PDSO - GSF", None).rpw_area,
+                ext_area_for_program_volume_family_geometry.rpw_area,
                 ext_data_silo.Location.Point,
             )
 
@@ -178,7 +178,7 @@ class PDSOFamilyManagerService(object):
             # Try to update the family geometry
             fdoc = self.update_program_volume_family_geometry(
                 ext_program_volume_family.rpw_element,
-                ext_data_silo.related_area_elements.get("PDSO - GSF", None).rpw_area,
+                ext_area_for_program_volume_family_geometry.rpw_area,
                 ext_data_silo.Location.Point,
             )
 

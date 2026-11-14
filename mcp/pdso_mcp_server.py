@@ -75,7 +75,11 @@ mcp = MCPServer(
         "audit. All lengths are decimal feet and all areas are square feet. Call "
         "get_status first. A model that is new to PDSO needs setup_model one time. "
         "After you change programs or areas, call run_sync to update the areas of "
-        "the programs and the Program Volumes."
+        "the programs and the Program Volumes. When the user describes data that "
+        "no program field holds, call create_parameter, then set the new field with "
+        "update_program or update_programs. In a model that has its own Areas and "
+        "area schemes, give the scheme names to setup_model (area_scheme_mappings) "
+        "and place the programs with create_programs."
     ),
 )
 
@@ -316,13 +320,18 @@ def create_level(name: str, elevation: float) -> dict:
 
 
 @mcp.tool()
-def setup_model(levels: list[str] | None = None) -> dict:
+def setup_model(
+    levels: list[str] | None = None,
+    area_scheme_mappings: dict[str, str] | None = None,
+) -> dict:
     """Make the model ready for PDSO. Creates only the items that are missing: the PDSO configuration, the 20 shared parameters, the Data Silo family, the configured area schemes, and one area plan for each scheme and level. It is safe to call again.
 
     Args:
         levels: Names of the levels that get area plans. Default: all levels.
+        area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
     """
-    return api("POST", "bootstrap", _clean({"levels": levels}), timeout=LONG_TIMEOUT)
+    body = _clean({"levels": levels, "area_scheme_mappings": area_scheme_mappings})
+    return api("POST", "bootstrap", body, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
@@ -340,7 +349,6 @@ def update_config(
     area_scheme_mappings: dict[str, str] | None = None,
     levels_mapping: dict[str, str] | None = None,
     worksets: dict[str, str] | None = None,
-    tethered_parameters: list[str] | None = None,
 ) -> dict:
     """Change PDSO configuration fields. Fields that you do not give keep their value. A map field is replaced as a whole.
 
@@ -352,7 +360,6 @@ def update_config(
         area_scheme_mappings: PDSO area parameter name to area scheme name, for example {"PDSO - GSF": "PDSO - GSF"}.
         levels_mapping: Stacking key to level name, for example {"01": "L1", "02": "L2"}. The "stacking" field of a program uses these keys ("01-02" or "01, 03").
         worksets: Element kind to workset name.
-        tethered_parameters: PDSO parameter names that the sync copies from a program to its Program Volumes.
     """
     body = _clean(
         {
@@ -363,7 +370,6 @@ def update_config(
             "area_scheme_mappings": area_scheme_mappings,
             "levels_mapping": levels_mapping,
             "worksets": worksets,
-            "tethered_parameters": tethered_parameters,
         }
     )
     return api("PUT", "config", body)
@@ -438,6 +444,34 @@ def get_program_fields() -> list:
 
 
 @mcp.tool()
+def list_parameters() -> dict:
+    """List the parameters of the model. "configured" is false until setup_model has run (the sync cannot run then). "types" are the permitted types of a new parameter. "parameters" has the tracked parameters first: name (Revit parameter name), field (the name to use in program fields and filters), type, role (core, area, standard, custom), tracked, editable, bound (false if the Revit parameter is missing or not on Generic Models) and problem. A built-in parameter that the model does not track has tracked false."""
+    return api("GET", "parameters")
+
+
+@mcp.tool()
+def create_parameter(name: str, type: str = "string") -> dict:
+    """Track a new program parameter for data that no field holds, for example "Tenant Type" or "Rent per SF". It becomes a Revit shared parameter on all programs and Program Volumes. The reply gives the field name (for example "rent_per_sf"): use it in update_program, update_programs, list_programs, summarize_programs and color_areas. The sync copies the value from a program to its Program Volumes. If the model has a shared parameter with the name already, that parameter is used and its values stay ("reattached": true).
+
+    Args:
+        name: Parameter name as Revit shows it, for example "Tenant Type". The name and the type cannot change later.
+        type: "string", "multilineText", "number", "integer", "area" (square feet), "length" (feet) or "yesno".
+    """
+    return api("POST", "parameters", {"name": name, "type": type})
+
+
+@mcp.tool()
+def delete_parameter(parameter: str, purge: bool = False) -> dict:
+    """Stop tracking a parameter. The required parameters cannot be deleted: Program UID, Program Stacking, Last Synced, and each parameter that an area scheme mapping writes into.
+
+    Args:
+        parameter: Field name or parameter name.
+        purge: False: PDSO stops using the parameter, but the Revit parameter and its values stay, and create_parameter with the same name gets them back. True: also remove the parameter from Generic Models. This deletes its values on all programs and Program Volumes.
+    """
+    return api("DELETE", f"parameters/{urllib.parse.quote(parameter, safe='')}", purge=purge)
+
+
+@mcp.tool()
 def list_programs(
     level: str | None = None,
     program_type: str | None = None,
@@ -504,6 +538,16 @@ def create_program(
     """
     body = {"level": level, "x": x, "y": y, "fields": dict(fields or {}, uid=uid)}
     return api("POST", "programs", body)
+
+
+@mcp.tool()
+def create_programs(items: list[dict[str, Any]]) -> dict:
+    """Create many programs in one step. Use this for a model that has Areas: one item for each Area. If one item is not valid, no program is created and the error names the item. Call run_sync afterward.
+
+    Args:
+        items: One object for each program. Either {"area_id": 123, "fields": {...}}: the program goes to a point inside that Area (see list_areas). Or {"level": "L1", "x": 10.0, "y": 5.0, "fields": {...}}. "fields" must have "uid" (it must match the UID pattern and be unique) and can have other fields, also custom fields.
+    """
+    return api("POST", "programs/batch", {"items": items}, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()

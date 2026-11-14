@@ -20,7 +20,8 @@ from pyrevit import script, DB
 
 # Custom Modules
 from ..data.shared_parameter_constants import standard_pdso_parameters
-from . import config_service
+from . import config_service, parameter_service
+from . import parameter_registry_service
 from .bootstrap_service import find_family
 from .errors import PDSOError
 from .revit_helpers import (
@@ -30,55 +31,42 @@ from .revit_helpers import (
     id_list,
     id_value,
     point_in_polygon,
+    polygon_area,
+    polygon_interior_point,
 )
 
 logger = script.get_logger()
 
-# Short field name -> PDSO parameter name
-FIELDS = [
-    ("uid", "PDSO - Program UID"),
-    ("display_name", "PDSO - Program Display Name"),
-    ("unit_layout_type", "PDSO - Unit Layout Type"),
-    ("program_type", "PDSO - Program Type"),
-    ("use_group", "PDSO - Use Group"),
-    ("planning_dept_misc", "PDSO - Planning Dept. Misc"),
-    ("accessibility", "PDSO - Accessibility"),
-    ("stacking", "PDSO - Program Stacking"),
-    ("market_segment", "PDSO - Program Market Segment"),
-    ("misc_modifier", "PDSO - Misc Modifier"),
-    ("load_factor", "PDSO - Load Factor"),
-    ("bedroom_count", "PDSO - DU Bedroom Count"),
-    ("bathroom_count", "PDSO - Bathroom Count"),
-    ("bathroom_types", "PDSO - Bathroom Types"),
-    ("kitchen_count", "PDSO - Kitchen Count"),
-    ("kitchen_types", "PDSO - Kitchen Types"),
-    ("zfa", "PDSO - ZFA"),
-    ("nsf", "PDSO - NSF"),
-    ("gsf", "PDSO - GSF"),
-    ("last_synced", "PDSO - Last Synced"),
-]
-PARAMETER_BY_FIELD = dict(FIELDS)
-FIELD_BY_PARAMETER = dict((parameter, field) for field, parameter in FIELDS)
-
-# The sync writes these fields. A caller cannot set them.
-MANAGED_FIELDS = ["zfa", "nsf", "gsf", "last_synced"]
 
 
-def field_schema():
+def _fields(doc):
+    """Field name -> parameter_service.Field, for the tracked parameters."""
+    fields = parameter_service.by_field(doc)
+    if not fields:
+        raise PDSOError(
+            "The parameters of the model are not set up. Run the bootstrap first.",
+            409,
+        )
+    return fields
+
+
+def field_schema(doc):
     """Describe the fields of a program.
 
     Returns:
         list[dict]: One dict per field with keys "field", "parameter", "type"
-            ("string", "multilineText", "number" or "area") and "editable"
+            (see GET /pdso/parameters), "editable" and "standard" (False for a
+            custom parameter)
     """
     return [
         {
-            "field": field,
-            "parameter": parameter,
-            "type": standard_pdso_parameters[parameter].parameter_type,
-            "editable": field not in MANAGED_FIELDS,
+            "field": parameter.field,
+            "parameter": parameter.name,
+            "type": parameter.parameter_type,
+            "editable": not parameter.managed and not parameter.missing,
+            "standard": parameter.standard,
         }
-        for field, parameter in FIELDS
+        for parameter in parameter_service.all_parameters(doc, include_missing=True)
     ]
 
 
@@ -107,8 +95,21 @@ def _silo_instances(doc, family_name):
 
 
 def _read_parameter(element, parameter_name):
-    definition = standard_pdso_parameters[parameter_name]
-    parameter = element.get_Parameter(definition.parameter_guid)
+    """Read a built-in PDSO parameter by its name.
+
+    The GUID comes from the tracked parameters (a model can use an adopted
+    shared parameter with a different GUID), then from the built-in catalog.
+    """
+    doc = element.Document
+    tracked = parameter_registry_service.get_registry(doc).get(parameter_name)
+    definition = tracked or standard_pdso_parameters[parameter_name]
+    if definition.parameter_guid is None:
+        return None
+    return _read_guid(element, definition.parameter_guid)
+
+
+def _read_guid(element, parameter_guid):
+    parameter = element.get_Parameter(parameter_guid)
     if parameter is None:
         return None
     if parameter.StorageType == DB.StorageType.String:
@@ -128,7 +129,9 @@ def _location(element):
     return {"x": point.X, "y": point.Y, "z": point.Z}
 
 
-def _summary(doc, element):
+def _summary(doc, element, parameters=None):
+    if parameters is None:
+        parameters = parameter_service.all_parameters(doc, include_missing=True)
     level = doc.GetElement(element.LevelId)
     data = {
         "id": id_value(element.Id),
@@ -136,8 +139,10 @@ def _summary(doc, element):
         "location": _location(element),
         "pinned": element.Pinned,
     }
-    for field, parameter_name in FIELDS:
-        data[field] = _read_parameter(element, parameter_name)
+    for parameter in parameters:
+        data[parameter.field] = (
+            None if parameter.missing else _read_guid(element, parameter.guid)
+        )
     return data
 
 
@@ -197,13 +202,15 @@ def list_programs(doc, filters=None):
     filters = dict(
         (key, value) for key, value in (filters or {}).items() if value is not None
     )
+    parameters = parameter_service.all_parameters(doc, include_missing=True)
+    known = set(parameter.field for parameter in parameters)
     for key in filters:
-        if key != "level" and key not in PARAMETER_BY_FIELD:
+        if key != "level" and key not in known:
             raise PDSOError("Unknown filter field: '{}'".format(key))
 
     programs = []
     for element in _silo_instances(doc, config["data_silo_family_name"]):
-        data = _summary(doc, element)
+        data = _summary(doc, element, parameters)
         if all(str(data.get(key)) == str(value) for key, value in filters.items()):
             programs.append(data)
     return sorted(programs, key=lambda item: (item["level"] or "", item["uid"] or ""))
@@ -216,7 +223,7 @@ def summarize_program_types(doc, group_by="program_type"):
         list[dict]: One dict per value with keys "value", "count", "gsf", "nsf",
             "zfa" and "uids"
     """
-    if group_by not in PARAMETER_BY_FIELD:
+    if group_by not in _fields(doc):
         raise PDSOError("Unknown field: '{}'".format(group_by))
     groups = {}
     for program in list_programs(doc):
@@ -292,11 +299,13 @@ def describe_program(doc, reference):
     Returns:
         dict: "id", "level", "location", "pinned", one key per field of FIELDS,
             "areas" (the containing Area of each configured scheme) and
-            "program_volumes" (the Program Volume family and its instances)
+            "program_volumes" (the Program Volume family and its instances;
+            each instance has "id", "level" and "fields": its parameter values)
     """
     element = resolve_program(doc, reference)
     config = _require_config(doc)
-    data = _summary(doc, element)
+    parameters = parameter_service.all_parameters(doc, include_missing=True)
+    data = _summary(doc, element, parameters)
     data["areas"] = containing_areas(doc, element)
 
     family_name = "{}{}".format(
@@ -312,6 +321,15 @@ def describe_program(doc, reference):
                     {
                         "id": id_value(instance.Id),
                         "level": level.Name if level is not None else None,
+                        "fields": dict(
+                            (
+                                parameter.field,
+                                None
+                                if parameter.missing
+                                else _read_guid(instance, parameter.guid),
+                            )
+                            for parameter in parameters
+                        ),
                     }
                 )
     data["program_volumes"] = {
@@ -327,32 +345,62 @@ def describe_program(doc, reference):
 # =============================================================================
 
 
-def _coerce(field, value):
-    parameter_type = standard_pdso_parameters[PARAMETER_BY_FIELD[field]].parameter_type
-    if parameter_type in ("number", "area"):
+def _coerce(parameter, value):
+    kind = parameter.parameter_type
+    if kind in ("number", "area", "length"):
         try:
             return float(value)
         except (TypeError, ValueError):
-            raise PDSOError("Field '{}' must be a number.".format(field))
+            raise PDSOError("Field '{}' must be a number.".format(parameter.field))
+    if kind == "integer":
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            raise PDSOError("Field '{}' must be an integer.".format(parameter.field))
+    if kind == "yesno":
+        if isinstance(value, bool):
+            return 1 if value else 0
+        text = str(value).strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return 1
+        if text in ("0", "false", "no", "off", ""):
+            return 0
+        raise PDSOError("Field '{}' must be true or false.".format(parameter.field))
     return "" if value is None else str(value)
 
 
-def _normalize_fields(fields):
+def _normalize_fields(doc, fields):
     """Accept short field names or full parameter names. Return short names."""
+    known = _fields(doc)
+    field_by_name = dict((parameter.name, field) for field, parameter in known.items())
     normalized = {}
     for key, value in (fields or {}).items():
-        field = FIELD_BY_PARAMETER.get(key, key)
-        if field not in PARAMETER_BY_FIELD:
+        field = field_by_name.get(key, key)
+        if field not in known:
             raise PDSOError(
                 "Unknown program field: '{}'. Fields: {}".format(
-                    key, ", ".join(field for field, _ in FIELDS)
+                    key,
+                    ", ".join(
+                        parameter.field
+                        for parameter in parameter_service.all_parameters(
+                            doc, include_missing=True
+                        )
+                    ),
                 )
             )
-        if field in MANAGED_FIELDS:
+        parameter = known[field]
+        if parameter.managed:
             raise PDSOError(
                 "Field '{}' is written by the sync and cannot be set.".format(field)
             )
-        normalized[field] = _coerce(field, value)
+        if parameter.missing:
+            raise PDSOError(
+                "Parameter '{}' is not in the model. Create it again.".format(
+                    parameter.name
+                ),
+                409,
+            )
+        normalized[field] = _coerce(parameter, value)
     return normalized
 
 
@@ -372,9 +420,10 @@ def _check_uid(doc, config, uid, own_id=None):
             )
 
 
-def _write_fields(element, fields):
+def _write_fields(doc, element, fields):
+    known = _fields(doc) if fields else {}
     for field, value in fields.items():
-        definition = standard_pdso_parameters[PARAMETER_BY_FIELD[field]]
+        definition = known[field].definition
         parameter = element.get_Parameter(definition.parameter_guid)
         if parameter is None:
             raise PDSOError(
@@ -388,6 +437,42 @@ def _write_fields(element, fields):
                 "Parameter '{}' is read-only.".format(definition.parameter_name), 409
             )
         parameter.Set(value)
+
+
+def _data_silo_symbol(doc, config):
+    family = find_family(doc, config["data_silo_family_name"])
+    if family is None:
+        raise PDSOError(
+            "The Data Silo family '{}' is not loaded. Run the bootstrap.".format(
+                config["data_silo_family_name"]
+            ),
+            409,
+        )
+    return doc.GetElement(list(family.GetFamilySymbolIds())[0])
+
+
+def _place_program(doc, symbol, level_element, x, y):
+    """Place one Data Silo. Call this in a transaction."""
+    if not symbol.IsActive:
+        symbol.Activate()
+        doc.Regenerate()
+    point = DB.XYZ(float(x), float(y), level_element.ProjectElevation)
+    element = doc.Create.NewFamilyInstance(
+        point, symbol, level_element, DB.Structure.StructuralType.NonStructural
+    )
+    # The instance is hosted on the level. Revit reads the Z of the point as
+    # an offset from the level, so set the offset to zero (else a program on
+    # a level that is not at elevation 0 is above its plan view range).
+    for built_in in (
+        DB.BuiltInParameter.INSTANCE_FREE_HOST_OFFSET_PARAM,
+        DB.BuiltInParameter.INSTANCE_ELEVATION_PARAM,
+    ):
+        offset = element.get_Parameter(built_in)
+        if offset is not None and not offset.IsReadOnly:
+            offset.Set(0.0)
+            break
+    doc.Regenerate()
+    return element
 
 
 def create_program(doc, level, x, y, fields):
@@ -404,42 +489,125 @@ def create_program(doc, level, x, y, fields):
         dict: The new program (see describe_program)
     """
     config = _require_config(doc)
-    fields = _normalize_fields(fields)
+    fields = _normalize_fields(doc, fields)
     _check_uid(doc, config, fields.get("uid"))
     level_element = find_level(doc, level)
 
-    family = find_family(doc, config["data_silo_family_name"])
-    if family is None:
-        raise PDSOError(
-            "The Data Silo family '{}' is not loaded. Run the bootstrap.".format(
-                config["data_silo_family_name"]
-            ),
-            409,
-        )
-    symbol = doc.GetElement(list(family.GetFamilySymbolIds())[0])
+    symbol = _data_silo_symbol(doc, config)
 
     with Transaction(doc, "PDSO - Create Program"):
-        if not symbol.IsActive:
-            symbol.Activate()
-            doc.Regenerate()
-        point = DB.XYZ(float(x), float(y), level_element.ProjectElevation)
-        element = doc.Create.NewFamilyInstance(
-            point, symbol, level_element, DB.Structure.StructuralType.NonStructural
-        )
-        # The instance is hosted on the level. Revit reads the Z of the point as
-        # an offset from the level, so set the offset to zero (else a program on
-        # a level that is not at elevation 0 is above its plan view range).
-        for built_in in (
-            DB.BuiltInParameter.INSTANCE_FREE_HOST_OFFSET_PARAM,
-            DB.BuiltInParameter.INSTANCE_ELEVATION_PARAM,
-        ):
-            offset = element.get_Parameter(built_in)
-            if offset is not None and not offset.IsReadOnly:
-                offset.Set(0.0)
-                break
-        doc.Regenerate()
-        _write_fields(element, fields)
+        element = _place_program(doc, symbol, level_element, x, y)
+        _write_fields(doc, element, fields)
     return describe_program(doc, id_value(element.Id))
+
+
+def _area_placement(doc, area_id):
+    """Level and interior point of an Area, for a Data Silo.
+
+    Returns:
+        tuple: (Level, x, y)
+    """
+    # Import here: area_drafting_service imports this module.
+    from . import area_drafting_service
+
+    area = area_drafting_service.get_area(doc, area_id)
+    loops = [
+        loop["points"]
+        for loop in area_drafting_service._loops(area)
+        if len(loop["points"]) >= 3
+    ]
+    if not loops:
+        raise PDSOError(
+            "Area {} has no outline (it is not placed or not enclosed).".format(
+                area_id
+            )
+        )
+    outer = max(loops, key=lambda points: abs(polygon_area(points)))
+    holes = [points for points in loops if points is not outer]
+
+    def usable(x, y):
+        return point_in_polygon(x, y, outer) and not any(
+            point_in_polygon(x, y, hole) for hole in holes
+        )
+
+    candidates = []
+    try:
+        candidates.append(polygon_interior_point(outer))
+    except PDSOError:
+        pass
+    count = len(outer)
+    for i in range(count):
+        a, b, c = outer[i - 1], outer[i], outer[(i + 1) % count]
+        candidates.append(((a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0))
+    for x, y in candidates:
+        if usable(x, y):
+            return doc.GetElement(area.LevelId), x, y
+    raise PDSOError(
+        "Cannot find a point inside the outline of Area {}.".format(area_id)
+    )
+
+
+def create_programs(doc, items):
+    """Place many Data Silos in one transaction.
+
+    Args:
+        doc: Revit Document
+        items (list): One dict per program. Either {"area_id", "fields"}: the
+            Data Silo goes to a point inside the Area, on the level of the
+            Area. Or {"level", "x", "y", "fields"}. "uid" is required in
+            "fields".
+
+    Returns:
+        dict: {"created": [programs]} (see list_programs for the keys). If one
+            item is not valid, no program is placed and the error names the
+            item.
+    """
+    if not isinstance(items, list) or not items:
+        raise PDSOError("'items' must be a list with at least one program.")
+    config = _require_config(doc)
+    symbol = _data_silo_symbol(doc, config)
+
+    placements = []
+    uids = set()
+    for index, item in enumerate(items):
+        label = "items[{}]".format(index)
+        if isinstance(item, dict) and item.get("area_id") is not None:
+            label = "{} (area_id {})".format(label, item.get("area_id"))
+        try:
+            if not isinstance(item, dict):
+                raise PDSOError("An item must be an object.")
+            fields = _normalize_fields(doc, item.get("fields"))
+            uid = fields.get("uid")
+            _check_uid(doc, config, uid)
+            if uid in uids:
+                raise PDSOError("UID '{}' is in the list two times.".format(uid), 409)
+            uids.add(uid)
+            if item.get("area_id") is not None:
+                level_element, x, y = _area_placement(doc, item["area_id"])
+            else:
+                if item.get("x") is None or item.get("y") is None:
+                    raise PDSOError("Give 'area_id', or 'level', 'x' and 'y'.")
+                level_element = find_level(doc, item.get("level"))
+                x, y = float(item["x"]), float(item["y"])
+        except PDSOError as error:
+            raise PDSOError("{}: {}".format(label, error), 400)
+        except (TypeError, ValueError) as error:
+            raise PDSOError("{}: {}".format(label, error), 400)
+        placements.append((level_element, x, y, fields))
+
+    created_ids = []
+    with Transaction(doc, "PDSO - Create Programs"):
+        for level_element, x, y, fields in placements:
+            element = _place_program(doc, symbol, level_element, x, y)
+            _write_fields(doc, element, fields)
+            created_ids.append(element.Id)
+    parameters = parameter_service.all_parameters(doc, include_missing=True)
+    return {
+        "created": [
+            _summary(doc, doc.GetElement(element_id), parameters)
+            for element_id in created_ids
+        ]
+    }
 
 
 def update_program(doc, reference, fields=None, x=None, y=None):
@@ -457,14 +625,14 @@ def update_program(doc, reference, fields=None, x=None, y=None):
     """
     element = resolve_program(doc, reference)
     config = _require_config(doc)
-    fields = _normalize_fields(fields)
+    fields = _normalize_fields(doc, fields)
     if "uid" in fields:
         _check_uid(doc, config, fields["uid"], own_id=id_value(element.Id))
     if not fields and x is None and y is None:
         raise PDSOError("Give fields or a position to change.")
 
     with Transaction(doc, "PDSO - Update Program"):
-        _write_fields(element, fields)
+        _write_fields(doc, element, fields)
         if x is not None or y is not None:
             current = element.Location.Point
             target = DB.XYZ(
@@ -487,7 +655,7 @@ def update_programs(doc, filters, fields):
     Returns:
         dict: {"updated": [element ids]}
     """
-    fields = _normalize_fields(fields)
+    fields = _normalize_fields(doc, fields)
     if not fields:
         raise PDSOError("Give the fields to change.")
     if "uid" in fields:
@@ -497,7 +665,7 @@ def update_programs(doc, filters, fields):
     targets = list_programs(doc, filters)
     with Transaction(doc, "PDSO - Update Programs"):
         for program in targets:
-            _write_fields(get_program_element(doc, program["id"]), fields)
+            _write_fields(doc, get_program_element(doc, program["id"]), fields)
     return {"updated": [program["id"] for program in targets]}
 
 

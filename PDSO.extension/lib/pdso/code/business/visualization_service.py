@@ -24,7 +24,12 @@ from System.Collections.Generic import List
 from pyrevit import script, DB
 
 # Custom Modules
-from . import area_drafting_service, config_service, program_service
+from . import (
+    area_drafting_service,
+    config_service,
+    parameter_service,
+    program_service,
+)
 from .errors import PDSOError
 from .revit_helpers import (
     Transaction,
@@ -304,7 +309,7 @@ def color_areas(doc, view, color_by="program_type", labels=True):
         doc: Revit Document
         view: Area plan view
         color_by (str): Program field that gives the color (see
-            program_service.FIELDS)
+            GET /pdso/programs/schema)
         labels (bool): Also write a text label in each Area
 
     Returns:
@@ -312,7 +317,7 @@ def color_areas(doc, view, color_by="program_type", labels=True):
             "area"}], "areas_colored"}
     """
     _require_area_plan(view)
-    if color_by not in program_service.PARAMETER_BY_FIELD:
+    if color_by not in parameter_service.by_field(doc):
         raise PDSOError("Unknown program field: '{}'".format(color_by))
 
     level = view.GenLevel
@@ -422,7 +427,7 @@ def ensure_program_volume_view(
     Returns:
         dict: {"view": {"id", "name"}, "legend": [...], "volumes_colored"}
     """
-    if color_by not in program_service.PARAMETER_BY_FIELD:
+    if color_by not in parameter_service.by_field(doc):
         raise PDSOError("Unknown program field: '{}'".format(color_by))
     if building not in ("ghost", "show"):
         raise PDSOError("'building' must be 'ghost' or 'show'.")

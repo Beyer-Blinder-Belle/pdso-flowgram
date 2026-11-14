@@ -89,8 +89,9 @@ Then reload pyRevit. The API is at `http://127.0.0.1:48884/pdso/` (48884 is the 
 | --- | --- |
 | Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `POST document/close`, `POST document/save`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
 | Setup | `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
+| Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
-| Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `GET/PUT/DELETE programs/<uid or id>` |
+| Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `POST programs/batch`, `GET/PUT/DELETE programs/<uid or id>` |
 | Selection | `GET/POST selection` |
 | Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `GET/PUT/DELETE areas/<id>` |
 | Visualization | `POST views/export`, `POST views/color-areas`, `POST views/clear-colors`, `POST views/program-volumes` |
@@ -149,13 +150,35 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | --- | --- |
 | Model | `get_status`, `open_project`, `close_project`, `new_project`, `save_project`, `list_levels`, `create_level`, `list_rooms` |
 | Setup | `setup_model`, `get_config`, `update_config`, `check_config` |
+| Parameters | `list_parameters`, `create_parameter`, `delete_parameter` |
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
-| Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `update_program`, `update_programs`, `delete_program` |
+| Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
 | Selection | `select_elements`, `select_programs`, `get_selection` |
 | Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
+
+### Tracked parameters in the API
+
+The API uses the tracked parameters of the model (see [Tracked parameters](#tracked-parameters)). It does the work of the Parameter Manager without the window.
+
+- `POST bootstrap` sets up the parameters of a model that tracks no parameter: all built-in parameters (the *Default* preset). It does not change a model that tracks parameters.
+- `GET parameters` lists the tracked parameters, and the built-in parameters that the model does not track.
+- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. If the model has one shared parameter with the name, that parameter is used and its values stay.
+- Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name (`Rent per SF` is `rent_per_sf`).
+- `DELETE parameters/<field or name>` stops the tracking. The Revit parameter and its values stay. With `purge=true`, the parameter is also removed from Generic Models, and its values are deleted. The required parameters cannot be deleted.
+- New shared parameter definitions go into the shared parameter file that Revit is set to use, then the fallback file of the Parameter Manager. If there is none, the API uses a file in the temporary folder.
+
+### A model that has its own Areas
+
+A model that was not made for PDSO can have its own area schemes and Areas (for example `Gross Building` and `Rentable`).
+
+1. `POST bootstrap` with `area_scheme_mappings`, for example `{"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}`. The key is the parameter that gets the Area value. The value is the area scheme. Then the bootstrap makes no `PDSO - ...` area scheme.
+2. `POST programs/batch` with `items`: `[{"area_id": <id>, "fields": {"uid": ...}}]`. Each Data Silo goes to a point inside its Area. If one item is not valid, no Data Silo is placed.
+3. `POST sync`.
+
+The Program Volume of a program gets the shape of one Area that contains the Data Silo: the Area in a scheme with the name `PDSO - GSF` if there is one, and the smallest Area if not.
 
 ### Development
 

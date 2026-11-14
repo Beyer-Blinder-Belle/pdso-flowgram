@@ -17,6 +17,7 @@ from pdso.code.business import (
     bootstrap_service,
     config_service,
     model_service,
+    parameter_service,
     program_service,
     visualization_service,
 )
@@ -179,8 +180,12 @@ def activate_view(ctx):
 
 @route("POST", "bootstrap")
 def bootstrap(ctx):
-    """Create the PDSO items that the model does not have. Body: levels?"""
-    return bootstrap_service.bootstrap(ctx.require_doc(), levels=ctx.arg("levels"))
+    """Create the PDSO items that are missing. Body: levels?, area_scheme_mappings?"""
+    return bootstrap_service.bootstrap(
+        ctx.require_doc(),
+        levels=ctx.arg("levels"),
+        area_scheme_mappings=ctx.arg("area_scheme_mappings"),
+    )
 
 
 @route("GET", "config")
@@ -199,6 +204,33 @@ def put_config(ctx):
 def get_config_checks(ctx):
     """Run the model checks of the Project Config window."""
     return config_service.run_model_checks(ctx.require_doc())
+
+
+# =============================================================================
+# Parameters: the standard PDSO parameters and the custom parameters
+# =============================================================================
+
+
+@route("GET", "parameters")
+def list_parameters(ctx):
+    """List the standard and the custom parameters of the model."""
+    return parameter_service.list_parameters(ctx.require_doc())
+
+
+@route("POST", "parameters")
+def create_parameter(ctx):
+    """Create a custom parameter. Body: name, type? (see GET parameters)"""
+    return parameter_service.create_parameter(
+        ctx.require_doc(), ctx.arg("name", required=True), ctx.arg("type", "string")
+    )
+
+
+@route("DELETE", "parameters/<ref>")
+def delete_parameter(ctx, ref):
+    """Delete a custom parameter (field or name). Query: purge? (delete values)"""
+    return parameter_service.delete_parameter(
+        ctx.require_doc(), ref, purge=_flag(ctx.arg("purge"))
+    )
 
 
 # =============================================================================
@@ -288,7 +320,7 @@ def get_audit(ctx):
 @route("GET", "programs/schema")
 def get_program_schema(ctx):
     """List the fields of a program and which fields can be set."""
-    return program_service.field_schema()
+    return program_service.field_schema(ctx.require_doc())
 
 
 @route("GET", "programs/summary")
@@ -314,6 +346,14 @@ def create_program(ctx):
         _number(ctx, "x", True),
         _number(ctx, "y", True),
         ctx.arg("fields", required=True),
+    )
+
+
+@route("POST", "programs/batch")
+def create_programs(ctx):
+    """Place many programs. Body: items = [{area_id, fields} | {level, x, y, fields}]"""
+    return program_service.create_programs(
+        ctx.require_doc(), ctx.arg("items", required=True)
     )
 
 

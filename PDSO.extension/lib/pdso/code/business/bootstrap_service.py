@@ -23,25 +23,12 @@ import tempfile
 from pyrevit import script, DB
 
 # Custom Modules
-from ..data.shared_parameter_constants import standard_pdso_parameters
-from . import config_service
+from . import config_service, parameter_service
 from .errors import PDSOError
 from .family_manager_service import ProgramVolumeFamilyLoadOptions
 from .revit_helpers import Transaction, all_levels, find_level, id_value
 
 logger = script.get_logger()
-
-SHARED_PARAMETER_GROUP = "PDSO"
-
-
-def _spec_type(parameter_type):
-    """Revit data type of a PDSO parameter type."""
-    return {
-        "string": DB.SpecTypeId.String.Text,
-        "multilineText": DB.SpecTypeId.String.MultilineText,
-        "number": DB.SpecTypeId.Number,
-        "area": DB.SpecTypeId.Area,
-    }[parameter_type]
 
 
 # Half of the side of the Data Silo marker (a square extrusion), in feet
@@ -49,18 +36,27 @@ DATA_SILO_MARKER_HALF_SIZE = 1.0
 DATA_SILO_MARKER_HEIGHT = 1.0
 
 
-def bootstrap(doc, levels=None):
+def bootstrap(doc, levels=None, area_scheme_mappings=None):
     """Create each PDSO item that the model does not have.
 
     Args:
         doc: Revit Document (a project, with no open transaction)
         levels (list): Level names or ids that get area plans. Default: all levels.
+        area_scheme_mappings (dict): PDSO area parameter name -> name of the
+            area scheme that gives its value. Written to the configuration
+            before the area schemes and area plans are made. Use this for a
+            model that has its own area schemes. Default: the configuration is
+            not changed.
 
     Returns:
         dict: What was created and what was there already
     """
     report = {}
     report["config_created"] = config_service.initialize_config(doc)
+    if area_scheme_mappings:
+        config_service.update_config(
+            doc, {"area_scheme_mappings": area_scheme_mappings}
+        )
     config = config_service.get_config(doc)
 
     report["shared_parameters"] = ensure_shared_parameters(doc)
@@ -89,124 +85,18 @@ def bootstrap(doc, levels=None):
 # =============================================================================
 
 
-def _required_parameters():
-    return [
-        definition
-        for definition in standard_pdso_parameters.values()
-        if definition.is_required
-    ]
-
-
-def _external_definitions(app, path):
-    """Make a shared parameter file with the PDSO parameters.
-
-    Returns:
-        dict: Parameter name -> ExternalDefinition
-    """
-    with open(path, "w"):
-        pass  # Revit fills an empty file
-    app.SharedParametersFilename = path
-    definition_file = app.OpenSharedParameterFile()
-    if definition_file is None:
-        raise PDSOError("Revit could not open the shared parameter file.", 500)
-    group = definition_file.Groups.Create(SHARED_PARAMETER_GROUP)
-    for definition in _required_parameters():
-        options = DB.ExternalDefinitionCreationOptions(
-            definition.parameter_name, _spec_type(definition.parameter_type)
-        )
-        options.GUID = definition.parameter_guid
-        group.Definitions.Create(options)
-
-    # Revit rejects a definition object that Create() returned ("The referenced
-    # object is not valid"). Read the definitions again from the file.
-    group = app.OpenSharedParameterFile().Groups.get_Item(SHARED_PARAMETER_GROUP)
-    return dict(
-        (
-            definition.parameter_name,
-            group.Definitions.get_Item(definition.parameter_name),
-        )
-        for definition in _required_parameters()
-    )
-
-
-def _is_bound_to_generic_models(doc, definition):
-    binding = doc.ParameterBindings.get_Item(definition)
-    if binding is None:
-        return False
-    generic_model = int(DB.BuiltInCategory.OST_GenericModel)
-    return any(category.Id.Value == generic_model for category in binding.Categories)
-
-
 def ensure_shared_parameters(doc):
-    """Bind the required PDSO shared parameters to Generic Models (instance).
+    """Set up the tracked parameters, if the model tracks no parameter yet.
+
+    A new model gets all built-in PDSO parameters (the "Default" preset of the
+    Parameter Manager): shared parameters, bound to Generic Models (instance),
+    and saved as the tracked parameters of the model. A model that tracks
+    parameters is not changed.
 
     Returns:
         dict: {"created": [names], "existing": [names]}
     """
-    app = doc.Application
-    created = []
-    existing = []
-    to_bind = []
-
-    for definition in _required_parameters():
-        element = DB.SharedParameterElement.Lookup(doc, definition.parameter_guid)
-        if element is not None and _is_bound_to_generic_models(
-            doc, element.GetDefinition()
-        ):
-            existing.append(definition.parameter_name)
-        else:
-            to_bind.append(definition)
-
-    if not to_bind:
-        return {"created": created, "existing": sorted(existing)}
-
-    path = os.path.join(tempfile.gettempdir(), "pdso_shared_parameters.txt")
-    original_path = app.SharedParametersFilename
-    try:
-        externals = _external_definitions(app, path)
-
-        generic_models = doc.Settings.Categories.get_Item(
-            DB.BuiltInCategory.OST_GenericModel
-        )
-        with Transaction(doc, "PDSO - Bind Shared Parameters"):
-            for definition in to_bind:
-                external = externals[definition.parameter_name]
-                categories = app.Create.NewCategorySet()
-                categories.Insert(generic_models)
-                element = DB.SharedParameterElement.Lookup(
-                    doc, definition.parameter_guid
-                )
-                bound = False
-                if element is not None:
-                    # The parameter is in the model but not on Generic Models:
-                    # keep its categories and add Generic Models.
-                    old_binding = doc.ParameterBindings.get_Item(
-                        element.GetDefinition()
-                    )
-                    if old_binding is not None:
-                        for category in old_binding.Categories:
-                            categories.Insert(category)
-                        binding = app.Create.NewInstanceBinding(categories)
-                        bound = doc.ParameterBindings.ReInsert(
-                            element.GetDefinition(), binding, DB.GroupTypeId.Data
-                        )
-                if not bound:
-                    binding = app.Create.NewInstanceBinding(categories)
-                    bound = doc.ParameterBindings.Insert(
-                        external, binding, DB.GroupTypeId.Data
-                    )
-                if not bound:
-                    raise PDSOError(
-                        "Could not bind parameter '{}'.".format(
-                            definition.parameter_name
-                        ),
-                        500,
-                    )
-                created.append(definition.parameter_name)
-    finally:
-        app.SharedParametersFilename = original_path or ""
-
-    return {"created": sorted(created), "existing": sorted(existing)}
+    return parameter_service.setup_default(doc)
 
 
 # =============================================================================
