@@ -1,0 +1,15 @@
+# bundle title
+title: "Project\nConfig"
+
+# bundle tooltip
+tooltip: Set up model-level configuation for PDSO tools.
+
+# bundle author
+author: BBB DCT
+
+context: doc-project
+
+engine:
+  clean: false
+  full_frame: false
+  persistent: true

@@ -1,0 +1,16 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Height="925"
+    MaxWidth="700"
+    MinWidth="450"
+    Width="490"
+    x:Uid="bbbtools-pdso-window"
+>
+    <Window.Resources>
+        <!-- The Source will be set dynamically in Python -->
+    </Window.Resources>
+
+    <ScrollViewer>
+        <ContentPresenter x:Name="BodyContent" />
+    </ScrollViewer>
+</Window>

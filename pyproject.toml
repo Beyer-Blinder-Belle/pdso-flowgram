@@ -1,0 +1,18 @@
+[tool.ruff]
+target-version = "py37"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "UP",   # pyupgrade — invalid syntax for IronPython 2.7
+    "ANN",  # type annotations — not used in IronPython
+    "E402", # module-level import not at top — required by clr.AddReference() pattern
+    "E722", # bare except — intentional defensive pattern in Revit API code
+    "E731", # lambda assignment — intentional public API shortcuts
+    "F403", # star imports — required pattern for Autodesk.Revit.DB / UI
+    "F405", # may be from star import — affects unicode builtin in IronPython 2.7
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

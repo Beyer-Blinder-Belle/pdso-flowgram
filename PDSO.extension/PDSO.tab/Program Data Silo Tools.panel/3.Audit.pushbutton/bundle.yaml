@@ -1,0 +1,18 @@
+# bundle title
+title: "Audit\nReport"
+
+# bundle tooltip
+tooltip: Runs an audit report on Program Data Silo Objects (PDSO) to check for data consistency and synchronization issues. Active doc must be Project type to activate.
+
+# bundle help url
+help_url: ""
+
+# bundle author
+author: BBB DCT
+
+context: doc-project
+
+engine:
+  clean: false
+  full_frame: false
+  persistent: true

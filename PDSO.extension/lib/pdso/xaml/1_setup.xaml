@@ -1,0 +1,318 @@
+<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- HEADER -->
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1*" />
+            <ColumnDefinition Width="7*" />
+        </Grid.ColumnDefinitions>
+        <Image
+            x:Name="bbb_logo"
+            Grid.Column="0"
+            HorizontalAlignment="Center"
+            Tag="common\assets\BBB_Logo.jpg"
+            VerticalAlignment="Top"
+            Width="auto" />
+        <StackPanel Grid.Column="1">
+            <TextBlock
+                FontSize="24"
+                FontWeight="Bold"
+                Padding="10 0 0 0"
+                TextWrapping="Wrap"
+                Text="PDSO Tools Configuration" />
+            <TextBlock
+                FontSize="12"
+                Padding="10 0 0 0"
+                TextWrapping="Wrap"
+                Text="Adjust the Program Data Silo Tools for your project needs." />
+        </StackPanel>
+    </Grid>
+
+    <!-- MAIN CONTENT: Scrollable Sections -->
+    <Border Padding="10" Margin="8,0,12,0">
+        <StackPanel>
+
+            <!-- ABOUT SECTION -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5" Background="#E3F2FD">
+                <StackPanel>
+                    <TextBlock
+                        FontSize="14"
+                        FontWeight="Bold"
+                        Text="Usage"
+                        Margin="0,0,0,10" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        Margin="0,0,0,10"
+                        Text="All configurable properties are saved on a per-project basis, using Revit's Extended Data Schema model. It is extremely ill-advised to adjust these values mid-project, unless you fully understand the implications." />
+                    <!-- Worksharing Status -->
+                    <TextBlock
+                        x:Name="WorksharingStatusText"
+                        TextWrapping="Wrap"
+                        Margin="0,10,0,10"
+                        FontWeight="Bold"
+                        Foreground="{Binding config_ownership_color}"
+                        Text="{Binding config_ownership_message}" />
+
+                    <!-- Unsaved Changes Status (duplicate for visibility) -->
+                    <TextBlock
+                        x:Name="UnsavedChangesStatusTop"
+                        TextWrapping="Wrap"
+                        Margin="0,10,0,10"
+                        FontWeight="Bold"
+                        FontStyle="Italic"
+                        Foreground="{Binding unsaved_changes_color}"
+                        Text="{Binding unsaved_changes_message}" />
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 1: Data Silo Settings -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="10">
+                    <TextBlock
+                        FontSize="14"
+                        FontWeight="Bold"
+                        Text="Data Silo Configuration"
+                        Margin="0,0,0,10" />
+
+                    <!-- Data Silo Family Name -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Data Silo Family Name:" />
+                    <TextBox
+                        Text="{Binding data_silo_family_name, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+
+                    <!-- Help Text for Data Silo Family Name -->
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="This is the name of the Data Silo Family. Instances of this family are the 'Source of truth' for all PDSO program data. The family must be a point-based generic model family. PDSO Tools ships with a family that works right out of the box, with graphics that are easy-to-locate in working views and easy to hide in presentation views."
+                    />
+                    <!-- UID Pattern -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Program UID Regex Pattern:" />
+                    <TextBox
+                        Text="{Binding uid_pattern, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="The Program UID is a unique identifier that ties a Data Silo to its Program Volume Family/ Program Volume Instances. Enter a regex pattern into the field to validate Program UIDs against, or leave this field blank if you do not wish to enforce any convention on the Program UID values." />
+
+
+                    <TextBlock
+                        FontWeight="Bold"
+                        Text="Area Scheme to Parameter Mappings:"
+                        Margin="0,20,0,5" />
+
+                    <!-- Area Scheme Mappings with Checks -->
+                    <Border BorderBrush="#E0E0E0" BorderThickness="1" Padding="10" CornerRadius="3"
+                        Margin="0,0,0,0">
+                        <StackPanel>
+
+                            <TextBlock
+                                TextWrapping="Wrap"
+                                FontSize="10"
+                                Foreground="#666666"
+                                Margin="5,0,0,10"
+                                Text="Map Area Schemes to their corresponding Parameters on Data Silos and Program Volume families." />
+
+                            <StackPanel x:Name="AreaSchemeMappingsContainer" />
+
+                            <Button
+                                x:Name="AddAreaMappingButton"
+                                Content="+ Add Area Scheme Mapping"
+                                Style="{DynamicResource ActionButton}"
+                                HorizontalAlignment="Left"
+                                Padding="10,5"
+                                Margin="0,10,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,8,0,0"
+                        Text="For each of these Area Schemes, the PDSO Tools will solve point-area inclusion to determine what Area the Data Silo is inside of, then write the Area's 'area' (sf) value into the associated parameter on the Data Silo." />
+
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,8,0,10"
+                        Text="Each Parameter Name should correspond to a Shared Parameter of type 'area' that has been added to Generic Model category. the Shared Parameter should ideally also be set up as 'read-only' (to reduce the likelihood of users accidentally editing the value manually)." />
+
+                    <!-- Data Silo Workset -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Data Silo Workset:"
+                    />
+                    <ComboBox
+                        x:Name="DataSiloWorksetComboBox"
+                        SelectedValue="{Binding data_silo_workset, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="When using PDSO tools, recommended best practice is to have Data Silos in their own dedicated workset. The PDSO tools can help enforce this by flagging Data Silos that are not in the selected workset." />
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 2: Program Volume Settings -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="10">
+                    <TextBlock
+                        FontSize="14"
+                        FontWeight="Bold"
+                        Text="Program Volume Configuration"
+                        Margin="0,0,0,10" />
+
+                    <!-- Family Name Prefix -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Program Volume Family Name Prefix:" />
+                    <TextBox
+                        Text="{Binding program_volume_family_name_prefix, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="The PDSO tools will add this prefix to all Program Volume Families that it creates; it will also use the prefix to find those families in the document to update them." />
+
+                    <!-- Extrusion Height -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Program Volume Extrusion Height (feet):" />
+                    <TextBox
+                        Text="{Binding program_volume_extrusion_height, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="The PDSO tools will extrude Program Volume Families to this height." />
+
+                    <!-- Program Volume Workset -->
+                    <TextBlock
+                        FontWeight="Bold"
+                        Margin="0,10,0,5"
+                        Text="Program Volume Workset:" />
+                    <ComboBox
+                        x:Name="ProgramVolumeWorksetComboBox"
+                        SelectedValue="{Binding program_volume_workset, UpdateSourceTrigger=PropertyChanged}"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="When using PDSO tools, recommended best practice is to have all instances of Program Volume Families in their own dedicated workset. The PDSO tools can help enforce this by creating instances only in the selected workset and flagging instances that are not in the selected workset." />
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 3: Level Mapping Configuration -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="10">
+                    <TextBlock
+                        FontSize="14"
+                        FontWeight="Bold"
+                        Text="Level Mapping Configuration"
+                        Margin="0,0,0,10" />
+
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="Map custom level identifiers to actual Revit levels for the stacking functionality. Identifiers should be alphanumeric and sortable (e.g., '01', '02', 'Lvl 01', 'B1L02', etc.)." />
+
+                    <Border BorderBrush="#E0E0E0" BorderThickness="1" Padding="10" CornerRadius="3"
+                        Margin="0,0,0,10">
+                        <StackPanel>
+                            <StackPanel x:Name="LevelsMappingsContainer" />
+
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button
+                                    x:Name="AddLevelMappingButton"
+                                    Content="+ Add Level Mapping"
+                                    Style="{DynamicResource ActionButton}"
+                                    HorizontalAlignment="Left"
+                                    Padding="10,5"
+                                    Margin="0,0,10,0" />
+
+                                <Button
+                                    x:Name="SortLevelMappingsButton"
+                                    Content="Sort by Identifier"
+                                    Style="{DynamicResource ActionButton}"
+                                    HorizontalAlignment="Left"
+                                    Padding="10,5"
+                                    Margin="0,0,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="Level mappings are stored in the project and will be used to resolve level references in stacking parameters (e.g., '03-05, 10' resolves to the levels mapped to identifiers 03, 04, 05, and 10)." />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </Border>
+
+    <!-- FOOTER: Unsaved Changes Indicator and Save Button -->
+    <Grid Margin="10,20,10,20">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Unsaved Changes Indicator -->
+        <TextBlock
+            x:Name="UnsavedChangesIndicator"
+            Grid.Column="0"
+            Text="{Binding unsaved_changes_message}"
+            TextWrapping="Wrap"
+            FontSize="12"
+            FontStyle="Italic"
+            FontWeight="Bold"
+            Foreground="{Binding unsaved_changes_color}"
+            Margin="20,0,20,0"
+            VerticalAlignment="Center" />
+
+        <Button
+            x:Name="SaveButton"
+            Grid.Column="1"
+            Content="Save Configuration"
+            Style="{DynamicResource ActionButton}"
+            Height="36"
+            VerticalAlignment="Center"
+            Padding="20,8"
+            Margin="10,0,0,0"
+            IsEnabled="{Binding has_unsaved_changes}" />
+    </Grid>
+
+</StackPanel>
