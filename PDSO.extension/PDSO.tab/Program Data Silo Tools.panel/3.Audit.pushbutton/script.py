@@ -300,7 +300,8 @@ def generate_detailed_report(output, logger):
         # Load area schemes (read-only)
         logger.debug("Loading area schemes...")
         area_scheme_objects = []
-        for pdso_scheme_name, area_scheme_name in area_scheme_mappings_dict.items():
+        # Stored as {Revit area scheme name: PDSO parameter}, e.g. {"Gross Building": "PDSO - GSF"}
+        for area_scheme_name, pdso_scheme_name in area_scheme_mappings_dict.items():
             try:
                 ext_area_scheme = ExtendedAreaScheme(
                     revit.doc, area_scheme_name, pdso_scheme_name
@@ -435,8 +436,8 @@ def generate_detailed_report(output, logger):
         )
     )
     output.print_md("- **Configured Area Schemes:**")
-    for pdso_scheme, area_scheme in area_scheme_mappings_dict.items():
-        output.print_md("  - {} → {}".format(pdso_scheme, area_scheme))
+    for area_scheme, pdso_scheme in area_scheme_mappings_dict.items():
+        output.print_md("  - {} → {}".format(area_scheme, pdso_scheme))
     output.print_md("")
 
     # Check Generic Model Parameters
@@ -648,12 +649,8 @@ def generate_detailed_report(output, logger):
         row = [level_name, data_silo_id]
 
         for area_scheme in area_scheme_objects:
-            scheme_name = area_scheme.area_scheme_name
-            pdso_scheme_key = None
-            for pdso_key, area_val in area_scheme_mappings_dict.items():
-                if area_val == scheme_name:
-                    pdso_scheme_key = pdso_key
-                    break
+            # Data silos store their areas under the PDSO parameter ("PDSO - GSF")
+            pdso_scheme_key = area_scheme.bound_silo_parameter_name
 
             if (
                 pdso_scheme_key
@@ -1237,7 +1234,15 @@ def generate_detailed_report(output, logger):
                 boundary_issues,
                 boundary_checked_count,
                 boundary_failed_count,
-                area_scheme_mappings_dict.get("PDSO - GSF", "PDSO - GSF"),
+                # The Revit area scheme mapped to PDSO - GSF
+                next(
+                    (
+                        scheme
+                        for scheme, pdso in area_scheme_mappings_dict.items()
+                        if pdso == "PDSO - GSF"
+                    ),
+                    "PDSO - GSF",
+                ),
             )
             output.print_md("")
 

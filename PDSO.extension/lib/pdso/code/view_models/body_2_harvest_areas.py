@@ -513,9 +513,10 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
                     else {}
                 )
 
+                # Stored as {Revit area scheme name: PDSO parameter}
                 for (
-                    pdso_scheme_name,
                     area_scheme_name,
+                    pdso_scheme_name,
                 ) in area_scheme_mappings_dict.items():
                     try:
                         ext_area_scheme = ExtendedAreaScheme(
@@ -1388,12 +1389,13 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
             area_scheme_mappings_dict = (
                 dict(config.area_scheme_mappings) if config.area_scheme_mappings else {}
             )
-            for pdso_scheme, area_scheme in area_scheme_mappings_dict.items():
-                self.logger.info("    {} -> {}".format(pdso_scheme, area_scheme))
+            for area_scheme, pdso_scheme in area_scheme_mappings_dict.items():
+                self.logger.info("    {} -> {}".format(area_scheme, pdso_scheme))
 
-            # Create area schemes list dynamically from config
+            # Create area schemes list dynamically from config.
+            # Stored as {Revit area scheme name: PDSO parameter}
             area_schemes = [
-                {"pdso": k, "area": v} for k, v in area_scheme_mappings_dict.items()
+                {"pdso": v, "area": k} for k, v in area_scheme_mappings_dict.items()
             ]
 
             # Log UI settings (for conditional execution)

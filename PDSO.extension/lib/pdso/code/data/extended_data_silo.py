@@ -58,7 +58,7 @@ class ExtendedDataSilo(object):
         # PDSO-specific properties and correlations
         self.params_to_update = {}  # Dict[str (Parameter Name), Any (New Value)]
         # self.entity_fields_to_update = {}  # Dict[str (Field Name), Any (New Value)]
-        self.related_area_elements = {}  # Dict[str (Area Scheme Name), ExtendedArea]
+        self.related_area_elements = {}  # Dict[str (PDSO parameter, e.g. "PDSO - GSF"), ExtendedArea]
         self.related_program_volume_family = None
         self.related_program_volume_instances = []  # List[ExtendedProgramVolumeInstance]
 
