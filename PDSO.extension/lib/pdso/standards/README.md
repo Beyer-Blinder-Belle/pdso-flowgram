@@ -71,7 +71,7 @@ The report can show a parameter as **Only in loaded families**. That happens whe
 
 ### Shared parameter file
 
-Revit can only add a shared parameter to a project from a shared parameter file. [`PDSO Shared Parameters.txt`](PDSO%20Shared%20Parameters.txt) is generated from the default `parameters.json`. To add the parameters by hand:
+Revit can only add a shared parameter to a project from a shared parameter file. **Model Setup's parameters step does this for you**: it writes a temporary file from `parameters.json`, binds every parameter to the configured categories, and puts your own shared parameter file setting back. [`PDSO Shared Parameters.txt`](PDSO%20Shared%20Parameters.txt) is the same file, generated from the default `parameters.json`. To add the parameters by hand instead:
 
 1. **Manage → Project Parameters → New → Shared parameter → Select**.
 2. Browse to this file, choose the **PDSO** group, and pick a parameter.

@@ -165,10 +165,14 @@ class SetupContext(object):
         return config
 
     def area_scheme_name(self, pdso_scheme_key):
-        """The Revit area scheme mapped to a PDSO scheme key ("PDSO - GSF") in Project Config."""
-        return self.pdso_config["area_scheme_mappings"].get(
-            pdso_scheme_key, pdso_scheme_key
-        )
+        """The Revit area scheme mapped to a PDSO scheme key ("PDSO - GSF") in Project Config.
+
+        Project Config stores {Revit area scheme name: PDSO parameter}.
+        """
+        for scheme_name, pdso_key in self.pdso_config["area_scheme_mappings"].items():
+            if pdso_key == pdso_scheme_key:
+                return scheme_name
+        return pdso_scheme_key
 
     def set_data_silo_family(self, family_name):
         """Point the model's PDSO Project Config at a Data Silo family.
