@@ -1,0 +1,10 @@
+title: "Harvest\nLayout"
+
+tooltip: >-
+  Save the furniture and equipment layout of a Room or Area into the Unit
+  Layout Catalogue, so it can be recommended and placed in future projects.
+  Shift-click to choose the catalogue folder.
+
+author: BBB DCT + hackathon team
+
+context: doc-project
