@@ -65,9 +65,9 @@ class PdsoConfigDocumentSchema(BaseSchema):
     @map_field(key_type=str, value_type=str)
     def area_scheme_mappings():
         """
-        Dictionary mapping Area Schemes to Data Silo parameters.
-        Key: Name of Area Scheme (e.g., "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA")
-        Value: Name of parameter to bind to (e.g., "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA")
+        Dictionary mapping Data Silo parameters to the Area Schemes that fill them.
+        Key: PDSO parameter the Area's value is written to (e.g., "PDSO - GSF")
+        Value: Name of the Revit Area Scheme (e.g., "Gross Building")
         """
 
     # Program Volume Family prefix

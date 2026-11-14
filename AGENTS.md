@@ -94,7 +94,7 @@ families/               Data Silo .rfa (Revit 2026)
 ## Known gaps and traps
 
 - **The HTTP API has no authentication.** It listens on `127.0.0.1` only; reach it from another machine with an SSH port forward, never by opening the port. The dev flag file `%APPDATA%\pyRevit\pdso_api_dev.flag` enables `POST /pdso/dev/exec` (arbitrary Python in Revit); keep it off non-dev machines.
-- **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that, but the docstring in `extensible_storage_schemas.py` still says the opposite.
+- **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that. The Project Config screen shows each row as Area Scheme → Parameter and swaps on load and save; it also reads configs saved the old way (`{scheme: parameter}`) and rewrites them correctly on the next save.
 - **"Yes - Recompute All Geometry" isn't acted on.** It's accepted as an option, but phase 2 only checks for `"No"`.
 - **Program Volumes are found by family name `{prefix}{UID}`.** Changing a UID or the prefix leaves the old family behind (suspected; see architecture.md).
 - **Model Setup's `parameters` step only reports.** The Parameter Manager (or `POST bootstrap` / `parameter_service`) creates and binds parameters.

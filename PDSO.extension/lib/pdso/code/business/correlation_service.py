@@ -91,8 +91,11 @@ class PDSOCorrelationService(object):
                                 str(ext_data_silo.Id.Value), str(ext_area.Id.Value)
                             )
                         )
+                        # Keyed by PDSO parameter ("PDSO - GSF"), which is what
+                        # every reader looks it up by, not by the Revit scheme
+                        # name, which can be anything ("Gross Building")
                         ext_data_silo.related_area_elements[
-                            ext_area.area_scheme_name
+                            ext_area.bound_silo_parameter_name
                         ] = ext_area
                         ext_area.related_data_silos.append(ext_data_silo)
                         break

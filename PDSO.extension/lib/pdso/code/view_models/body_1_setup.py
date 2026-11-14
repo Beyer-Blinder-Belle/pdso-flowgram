@@ -47,6 +47,7 @@ from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageS
 from pdso.code.business.parameter_registry_service import (
     check_parameter_bindings,
 )
+from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
 
 
 class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
@@ -442,8 +443,20 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
                         }
 
                     if area_mappings:
-                        for key, value in area_mappings.items():
-                            item = ConfigMappingItem(key, value, self)
+                        # Stored as {PDSO parameter: Revit area scheme} (see
+                        # docs/agent/architecture.md). Rows on this screen are
+                        # (area scheme, parameter), so swap on the way in.
+                        for stored_key, stored_value in area_mappings.items():
+                            if (
+                                stored_key not in standard_pdso_parameters
+                                and stored_value in standard_pdso_parameters
+                            ):
+                                # Saved by an older Project Config, which wrote
+                                # {scheme: parameter}. Saving again fixes it.
+                                scheme, parameter = stored_key, stored_value
+                            else:
+                                scheme, parameter = stored_value, stored_key
+                            item = ConfigMappingItem(scheme, parameter, self)
                             self.area_scheme_mappings.append(item)
                     else:
                         # Create default mappings if none exist
@@ -1310,11 +1323,12 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
                 "areas": self.area_workset or "",
             }
 
-            # Build area_scheme_mappings dictionary
+            # Build area_scheme_mappings dictionary: {PDSO parameter: Revit area
+            # scheme}. Rows on this screen are (area scheme, parameter).
             area_mappings = {}
             for item in self.area_scheme_mappings:
                 if item.key and item.value:
-                    area_mappings[item.key] = item.value
+                    area_mappings[item.value] = item.key
             # Only add if not empty (extensible storage can't handle empty dicts)
             if area_mappings:
                 config_updates["area_scheme_mappings"] = area_mappings
