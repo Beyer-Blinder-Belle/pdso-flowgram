@@ -63,10 +63,11 @@ if PDSO_LIB and PDSO_LIB not in sys.path:
 
 Or pass `workspace=<repo>/PDSO.extension/lib` to `run_query`.
 
+That one folder covers `pdso`, `common` and the vendored `extensible_storage` library. The most useful import is `from pdso.code.business.parameter_registry_service import get_registry`.
+
 *Unverified:*
 
 - Whether pyRevit puts extension `lib` folders on `sys.path` for agent runs.
-- Whether the separate `extensible_storage` lib extension can be imported. It's needed by anything that touches `extensible_storage_schemas.py`.
 - Whether PDSO classes work outside a command context. They call `script.get_output()` in `__init__`, which assumes a pyRevit output window.
 
 If any of these fail, fall back to the raw-API recipes.
@@ -122,14 +123,20 @@ else:
     result = cfg
 ```
 
-Fields to expect: `data_silo_family_name`, `program_volume_family_name_prefix`, `area_scheme_mappings`, `levels_mapping`, `uid_pattern`, `program_volume_extrusion_height`, `worksets`, `last_run_timestamp`. The other recipes take `family_name` and `prefix` from this result, through `inputs`.
+Fields to expect:
+
+- `data_silo_family_name`, `program_volume_family_name_prefix`
+- `area_scheme_mappings`, `levels_mapping`, `uid_pattern`, `program_volume_extrusion_height`, `worksets`, `last_run_timestamp`
+- `tethered_parameters`: the **tracked parameter list** (`{name: guid}`). It's empty if the Parameter Manager has never been applied, and then Sync Data is blocked.
+
+The other recipes take `family_name`, `prefix` and `params` (the keys of `tethered_parameters`) from this result, through `inputs`.
 
 ### 2. List Data Silos and their data
 
-`inputs`: `{"family_name": "<data_silo_family_name>"}`
+`inputs`: `{"family_name": "<data_silo_family_name>", "params": [<tracked names from recipe 1>]}`. If `params` is omitted, the script falls back to the built-in names.
 
 ```python
-PDSO_PARAMS = [
+BUILT_IN = [
     "PDSO - Program UID", "PDSO - Program Display Name", "PDSO - Unit Layout Type",
     "PDSO - Program Type", "PDSO - Use Group", "PDSO - Planning Dept. Misc",
     "PDSO - Accessibility", "PDSO - Program Stacking", "PDSO - Program Market Segment",
@@ -137,6 +144,7 @@ PDSO_PARAMS = [
     "PDSO - Bathroom Count", "PDSO - Bathroom Types", "PDSO - Kitchen Count",
     "PDSO - Kitchen Types", "PDSO - ZFA", "PDSO - NSF", "PDSO - GSF", "PDSO - Last Synced",
 ]
+PDSO_PARAMS = inputs.get("params") or BUILT_IN
 
 def eid(e):
     return e.Value if hasattr(e, "Value") else e.IntegerValue
@@ -148,7 +156,7 @@ def value(p):
     if st == DB.StorageType.String:
         return p.AsString()
     if st == DB.StorageType.Integer:
-        return p.AsInteger()
+        return p.AsInteger()  # Integer and Yes/No custom parameters
     if st == DB.StorageType.Double:
         return p.AsValueString()  # display units, e.g. "1040 SF"
     return p.AsValueString()
@@ -219,15 +227,19 @@ Compare with recipe 2 to find orphans: a UID here with no Data Silo means a rena
 
 ### 5. Edit Data Silo values (`run_modify`)
 
-`inputs`: `{"family_name": "...", "updates": {"00-07-01": {"PDSO - DU Bedroom Count": 2, "PDSO - Unit Layout Type": "2BR - Type A"}}}`
+`inputs`: `{"family_name": "...", "tracked": [<tracked names>], "area_params": [<area_scheme_mappings keys and values>], "updates": {"00-07-01": {"PDSO - DU Bedroom Count": 2, "PDSO - Unit Layout Type": "2BR - Type A"}}}`
 
 ```python
-PROTECTED = {"PDSO - GSF", "PDSO - NSF", "PDSO - ZFA", "PDSO - Last Synced"}
 fam, updates = inputs["family_name"], inputs["updates"]
+tracked = set(inputs["tracked"])
+# Sync-owned: harvested SF parameters and Last Synced. Pass both sides of
+# area_scheme_mappings, since the code reads that map in both directions.
+PROTECTED = set(inputs.get("area_params") or []) | {
+    "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA", "PDSO - Last Synced"}
 
-bad = [n for u in updates.values() for n in u if n in PROTECTED or not n.startswith("PDSO - ")]
+bad = [n for u in updates.values() for n in u if n in PROTECTED or n not in tracked]
 if bad:
-    raise Exception("Refusing to write sync-owned or non-PDSO parameters: {}".format(bad))
+    raise Exception("Refusing to write sync-owned or untracked parameters: {}".format(bad))
 
 silos = {}
 col = (DB.FilteredElementCollector(doc)
@@ -272,7 +284,8 @@ Run it with `dry_run=true` first and show the user the change set. The values on
 
 ## Rules for agents
 
-- **Write only to Data Silos**, and only the user-owned `PDSO - *` parameters. Never write Program Volumes, the harvested SF parameters, `PDSO - Last Synced`, or Area parameters.
+- **Write only to Data Silos**, and only **tracked**, user-owned parameters. Never write Program Volumes, the harvested SF parameters, `PDSO - Last Synced`, or Area parameters.
+- **Don't change which parameters are tracked** from a script. That's the Parameter Manager's job (`PDSOParameterSetupService.apply`), and untracking deletes values.
 - **Don't change Program UIDs** without telling the user it orphans Program Volumes (see architecture known gaps).
 - **Don't write extensible storage config** (Project Config) from scripts. It's per-project setup, and wrong values orphan elements. Ask the user to change it in Project Config.
 - **Don't create or delete Areas or Data Silos** unless the user asked for that exact change.

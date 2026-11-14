@@ -16,24 +16,45 @@ Cardinality: one DSO → at most one Area per scheme (same level, point inside) 
 
 ## Persistent state (extensible storage)
 
-Defined in `data/extensible_storage_schemas.py` with the `extensible_storage` library (`BaseSchema`, `simple_field`, `map_field`). Accessed through `business/extensible_storage_service.py`. **Never change these GUIDs.**
+Defined in `data/extensible_storage_schemas.py` with the `extensible_storage` library (`BaseSchema`, `simple_field`, `map_field`), which is vendored, unmodified, in `PDSO.extension/lib/extensible_storage/`. Accessed through `business/extensible_storage_service.py`. **Never change these GUIDs.**
 
 | Schema | GUID | Lives on | Fields |
 | --- | --- | --- | --- |
-| `PdsoConfigDocumentSchema` | `7b533d48-f078-48ad-a393-48d73b71e96b` | `doc.ProjectInformation` | `version`, `last_run_timestamp{}`, `data_silo_family_name`, `uid_pattern` (regex, may be blank), `area_scheme_mappings{pdso_key: area_scheme_name}`, `program_volume_family_name_prefix`, `program_volume_extrusion_height` (feet), `tethered_parameters{name: guid}` (unused), `levels_mapping{identifier: ElementId}`, `worksets{"Area"/"Data Silo"/"Program Volume": name or "Not enforced"}` |
+| `PdsoConfigDocumentSchema` | `7b533d48-f078-48ad-a393-48d73b71e96b` | `doc.ProjectInformation` | `version`, `last_run_timestamp{}`, `data_silo_family_name`, `uid_pattern` (regex, may be blank), `area_scheme_mappings{pdso_key: area_scheme_name}`, `program_volume_family_name_prefix`, `program_volume_extrusion_height` (feet), `tethered_parameters{name: guid}` (the **tracked parameter list**, written only by the Parameter Manager), `levels_mapping{identifier: ElementId}`, `worksets{"Area"/"Data Silo"/"Program Volume": name or "Not enforced"}` |
 | `PdsoProgramVolumeInstanceSchema` | `2cd38c37-88ed-42c7-9fc2-a03b1cbb5cb7` | each PV instance | `is_primary_instance`, `parent_data_silo_id`, `hashed_parameters{}` (defined, not used yet) |
 | `PdsoProgramVolumeFamilySchema` | `581b2f54-bec4-46ab-9afc-07656e795f65` | each PV `Family` | `hashed_area_curve_geometry{"PDSO - GSF": hash}`, `area_basepoint{}` (defined, not used yet) |
 
 Reading: `with PdsoConfigDocumentSchema(doc.ProjectInformation) as c: c.uid_pattern`. Map fields come back as .NET dictionaries; convert with `dict(...)` or iterate `.Keys`. `get_document_config()` returns the schema object (a context manager) or `None` if Project Config was never saved.
 
-`area_scheme_mappings` keys are the **PDSO keys** (`"PDSO - GSF"` etc.) and values are the **Revit area scheme names**, so users can rename schemes. The UI also describes the key as the DSO parameter that receives the SF. Code throughout uses the literal `"PDSO - GSF"` key.
+`area_scheme_mappings` direction is **inconsistent in the code**, so treat it carefully:
+
+- The sync (`body_2_harvest_areas.py`) reads `{key: value}` as `{DSO parameter: Revit area scheme}`. It builds `ExtendedAreaScheme(doc, area_scheme_name=value, bound_silo_parameter_name=key)`. So does `setup/runner.area_scheme_name`.
+- The schema docstring and `parameter_registry_service.get_area_mapped_parameter_names` read it as `{Revit area scheme: DSO parameter}`. They treat the values as parameter names, which get locked as tracked.
+- With the defaults (`"PDSO - GSF": "PDSO - GSF"`, etc.), keys equal values, so both readings agree.
+
+Separately, `DSO.related_area_elements` is keyed by the **Revit area scheme name**, and phase 2 looks up the literal `"PDSO - GSF"`. Program Volume geometry therefore needs a Revit area scheme named exactly `PDSO - GSF`.
 
 ## Parameters
 
-`data/shared_parameter_constants.py` → `standard_pdso_parameters: {name: ExtendedSharedParameter(name, type, required, guid)}`. 20 real parameters plus a `"Fake"` test entry. `standards/parameters.json` mirrors it for Model Setup. Full table: [../parameter-reference.md](../parameter-reference.md).
+PDSO parameters are **per model**. A model tracks a subset of the built-in catalog plus any custom parameters, chosen in the **Parameter Manager**.
 
-- Harvested (Area → DSO): `PDSO - GSF`, `PDSO - NSF`, `PDSO - ZFA`. Set in `data_service.queue_area_updates`, together with `PDSO - Last Synced` (`"%Y-%m-%d %H:%M:%S"`).
-- Pushed (DSO → every PV instance): all 20, a hardcoded list in `data_service.queue_program_volume_instance_data_updates`. Adding a parameter means updating constants, `parameters.json`, that list, and regenerating `standards/PDSO Shared Parameters.txt` (`python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py`).
+- **Catalog**: `data/shared_parameter_constants.py` → `standard_pdso_parameters` (an `OrderedDict` of 20 `ExtendedSharedParameter`s, with fixed GUIDs). Each has a `role` from `data/extended_shared_parameter.py`:
+  - `core`: always tracked. These are `PROGRAM_UID`, `PROGRAM_STACKING` and `LAST_SYNCED`, listed in `CORE_PARAMETER_NAMES`.
+  - `area`: ZFA, NSF, GSF; written by the harvest and not user-modifiable.
+  - `standard`: the remaining built-ins.
+  - `custom`: added by users; the types are Text, Multiline Text, Number, Integer, Area, Length and Yes/No.
+- **Tracked list**: `config.tethered_parameters{name: guid}`. **Always read it through `business/parameter_registry_service.get_registry(doc, refresh=False)`**, which returns a `TrackedParameterRegistry` (`.parameters`, `.names()`, `.get(name)`, `.by_role(...)`, `.is_configured`). Never hardcode a parameter list. Parameters written into by an area mapping are locked as tracked too.
+- **Applying**: `PDSOParameterSetupService.apply(...)` in the same module. It creates or reuses shared parameter definitions in the `PDSO` group, by GUID first and then by name. It binds them to Generic Models, optionally adds them to the Data Silo family, and saves the tracked list. The shared parameter file is Revit's own, or a remembered fallback (pyRevit user config `PDSO_ParameterManager`).
+- **Presets**: `business/parameter_preset_service.py`. JSON files go in `%APPDATA%\PDSO\ParameterPresets` or a chosen folder. *Default* and *Blank* are built in.
+- **UI**: `view_models/body_3_parameters.py` + `xaml/3_parameters.xaml`.
+- **Network paths**: wrap file access on possibly offline drives in `common/code/background.call_with_timeout` (never call the Revit API inside it).
+
+Flow of values:
+
+- Harvested (Area → DSO): the parameters named in `area_scheme_mappings`. Set in `data_service.queue_area_updates`, together with `PDSO - Last Synced` (`"%Y-%m-%d %H:%M:%S"`). `ExtendedDataSilo.queue_resetting_params` first resets the `area`-role and Last Synced values, so a DSO that left its Area loses the old SF.
+- Pushed (DSO → every PV instance): **every tracked parameter** (`get_registry(doc).parameters`), in `data_service.queue_program_volume_instance_data_updates`.
+
+`standards/parameters.json`, the Model Setup `parameters` step and `standards/PDSO Shared Parameters.txt` predate the Parameter Manager. They still list the 20 built-ins.
 
 ## Commands
 
@@ -41,10 +62,11 @@ Reading: `with PdsoConfigDocumentSchema(doc.ProjectInformation) as c: c.uid_patt
 | --- | --- | --- | --- |
 | Model Setup | `0.Setup.pushbutton` | `setup.runner.run_setup(doc, standards, steps)` | Yes, one `TransactionGroup` "PDSO Model Setup", one transaction per item |
 | Project Config | `1.Config.pushbutton` | `view_models/body_1_setup.PDSO_View_Model_1_Setup` (modeless WPF, window Uid `bbbtools-pdso-window`) | Yes, ES config on Save |
+| Parameter Manager | `1b.Parameters.pushbutton` | `view_models/body_3_parameters.py` → `PDSOParameterSetupService.apply` | Yes, on **Apply Parameters**: parameter bindings, Data Silo family, `tethered_parameters` |
 | Sync Data | `2.RunScripts.pushbutton` | `view_models/body_2_harvest_areas.PDSO_View_Model_2_Harvest_Areas` (modeless WPF) | Yes, via `ExternalEvent` |
 | Audit Report | `3.Audit.pushbutton` | `generate_detailed_report(output, logger)` | No |
 
-Bundles use `context: doc-project`; Config, Sync and Audit use a persistent engine (`engine: persistent: true`) so the modeless windows survive.
+Button order comes from the panel's `bundle.yaml` `layout`. Bundles use `context: doc-project`; Config, Parameters, Sync and Audit use a persistent engine (`engine: persistent: true`) so the modeless windows survive.
 
 ## Sync pipeline
 
@@ -56,7 +78,7 @@ The checks, in order:
 
 1. Config in ES.
 2. Level mappings complete for every DSO's stacking (⚠; DSOs with errors are skipped).
-3. PDSO parameters on Generic Models.
+3. Tracked parameters (`check_parameter_bindings`): ✗ if the Parameter Manager has never run, if a core parameter isn't tracked, or if any tracked parameter isn't bound to Generic Models.
 4. Configured area schemes exist.
 5. Areas exist.
 6. No grouped areas.
@@ -96,7 +118,7 @@ Skipped when the UI option is `No`.
 
 - `correlate_data_silos_to_program_volume_instances` lists the expected instance per required level. It reuses existing instances, matched by **family name `{prefix}{UID}`** and `LevelId` (not by `parent_data_silo_id`). It creates missing ones and marks extra ones `should_be_deleted`.
 - New instances go at the DSO's XY on each target level, with Z set so the offset from the level is 0.
-- `queue_program_volume_instance_data_updates` copies all 20 parameters.
+- `queue_program_volume_instance_data_updates` copies every tracked parameter. The sync calls `get_registry(doc, refresh=True)` at the start.
 - Transactions: `PDSO - Unpin Instances`, `PDSO - Update Program Volume Instances`, then workset fixes and pinning.
 
 Each phase catches its own exceptions and logs them; a failure in one phase doesn't stop the next. Phases 2 and 3 reuse the collections that phase 1 built.
@@ -113,9 +135,10 @@ Verify these before relying on them. They're good candidates for issues or hacka
 2. **The "Recompute All Geometry" option is not honored.** Phase 2 only checks for `"No"`; both "Yes" options use the hash cache.
 3. **The geometry hash ignores the DSO position and the extrusion height (suspected).** Geometry is stored relative to the DSO location, but the hash covers only the Area boundary. Moving a DSO inside its Area, or changing the configured height, may leave a stale family. `area_basepoint` was probably meant for this. Today the workaround is to delete the PV family and sync again.
 4. **Changing a Program UID orphans its Program Volumes (suspected).** PV families and instances are found by the name `{prefix}{UID}`. After a UID edit the sync builds a new family and leaves the old one in the model. Changing the prefix in Project Config orphans every PV the same way.
-5. **GSF is the only geometry source.** The `"PDSO - GSF"` key is hardcoded in `family_manager_service.py`, `extended_data_silo.py` and `extended_area.py`.
-6. **The Model Setup parameters step only reports.** `steps/parameters.py` doesn't bind parameters yet.
-7. **Default family name mismatch.** A fresh config has `data_silo_family_name = "Program Data Silo Object - Rvt25"`, while the shipped family is `PDSO - Program Data Silo Object - Rvt26`. Model Setup fixes it.
-8. **Command-context assumptions.** Most classes call `script.get_output()` in `__init__` and some code uses the global `revit.doc` instead of an injected `doc`.
-9. **Unused fields.** `tethered_parameters` and `hashed_parameters` are defined but not used, and the pushed parameter list is hardcoded.
-10. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.
+5. **GSF is the only geometry source, and it is matched by scheme name.** The `"PDSO - GSF"` literal is in `family_manager_service.py`, `extended_data_silo.py` and `extended_area.py`. Renaming the Revit GSF scheme breaks Program Volume geometry even if Project Config maps it.
+6. **`area_scheme_mappings` direction is inconsistent.** The sync and the Parameter Manager read it in opposite directions (see Persistent state). Any mapping where a key differs from its value probably misbehaves in one of the two.
+7. **Model Setup's parameters step overlaps the Parameter Manager.** `steps/parameters.py` is still a placeholder that only reports, and `standards/parameters.json` is separate from the tracked list. Decide whether Model Setup should call `PDSOParameterSetupService.apply` or drop the step.
+8. **Default family name mismatch.** A fresh config has `data_silo_family_name = "Program Data Silo Object - Rvt25"`, while the shipped family is `PDSO - Program Data Silo Object - Rvt26`. Model Setup fixes it.
+9. **Command-context assumptions.** Most classes call `script.get_output()` in `__init__` and some code uses the global `revit.doc` instead of an injected `doc`.
+10. **Unused fields.** `hashed_parameters` (PV instance) and `area_basepoint` (PV family) are defined but not used.
+11. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.

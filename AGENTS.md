@@ -27,7 +27,8 @@ Data flow: **Area SF → Data Silo → Program Volumes.** Nothing flows back to 
 - **Revit API writes need a transaction**, and from a modeless window they need an `ExternalEvent` (see `lib/common/code/view_model_external_events.py`).
 - **Never write to Program Volumes or to the harvested SF parameters** as a data-entry path. The sync overwrites them.
 - Lint: `ruff check .` (config in `pyproject.toml`). There are no automated tests; Revit is needed to run anything.
-- External runtime deps that are **not** in this repo: `pyrevit`, `rpw` (bundled with pyRevit), and `extensible_storage` (separate lib extension, [khorn06/extensible-storage-pyrevit](https://github.com/khorn06/extensible-storage-pyrevit)).
+- **Never hardcode the PDSO parameter list.** Each model tracks its own set (Parameter Manager). Read it through `parameter_registry_service.get_registry(doc)`.
+- Runtime deps: `pyrevit` and `rpw` (both ship with pyRevit). `extensible_storage` is vendored, unmodified, in `PDSO.extension/lib/extensible_storage/` (third-party, see its `NOTICE.md`; excluded from Ruff). Don't edit it.
 
 ## Map
 
@@ -36,18 +37,21 @@ PDSO.extension/
   PDSO.tab/Program Data Silo Tools.panel/
     0.Setup.pushbutton/      script.py  → setup.runner.run_setup   (config.py = Shift+Click menu)
     1.Config.pushbutton/     script.py  → view_models/body_1_setup.py (WPF window, modeless)
+    1b.Parameters.pushbutton/ script.py → view_models/body_3_parameters.py (Parameter Manager)
     2.RunScripts.pushbutton/ script.py  → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
     3.Audit.pushbutton/      script.py  (self-contained report, ~1.5k lines, read-only)
+  lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     business/   services: correlation, data (queues param writes), family_manager (PV geometry),
                 hashing (change detection), level_mapping (stacking), workset_coordination,
-                extensible_storage_service, area_boundary_service
+                extensible_storage_service, area_boundary_service,
+                parameter_registry_service (tracked params + Apply), parameter_preset_service
     data/       Extended* wrappers around rpw elements + collections; schemas; parameter constants
     setup/      Model Setup: standards loader (standards.py), runner.py, steps/*.py
     view_models/ WPF MVVM. body_2_harvest_areas.py holds the sync orchestration (see gaps)
   lib/pdso/standards/   default JSON standards + generated shared parameter file
   lib/pdso/xaml/        WPF windows
-  lib/common/           external-event helper, generic utils, icons
+  lib/common/           external-event helper, background.call_with_timeout (slow network paths), utils, icons
 families/               Data Silo .rfa (Revit 2026)
 ```
 
@@ -55,7 +59,8 @@ families/               Data Silo .rfa (Revit 2026)
 
 | Question | Look at |
 | --- | --- |
-| Parameter names, types, GUIDs | `lib/pdso/code/data/shared_parameter_constants.py` (runtime) and `lib/pdso/standards/parameters.json` (Model Setup). Keep them in sync. |
+| Built-in parameter catalog (names, types, GUIDs, roles) | `lib/pdso/code/data/shared_parameter_constants.py`; roles in `data/extended_shared_parameter.py` |
+| Which parameters a model tracks / syncs | `business/parameter_registry_service.py` (`get_registry`, `check_parameter_bindings`, `PDSOParameterSetupService.apply`), stored in `config.tethered_parameters` |
 | What is stored in the model | `lib/pdso/code/data/extensible_storage_schemas.py` |
 | Default Project Config values | `extensible_storage_service.initialize_document_schema_with_defaults` |
 | Sync entry point and the 3 phases | `body_2_harvest_areas.py`: `_execute_sync_process`, `_execute_phase_1_area_harvest`, `_execute_phase_2_family_geometry`, `_execute_phase_3_instance_updates` |
@@ -70,9 +75,9 @@ families/               Data Silo .rfa (Revit 2026)
 ## Known gaps and traps
 
 - **The sync only runs through the WPF window.** The orchestration lives in the view model and writes progress to UI properties. There is no headless `run_sync(doc, options)` yet, so nothing can call it from a script or the MCP without refactoring.
-- **GSF is hardcoded as the geometry source.** Program Volume shape always comes from the area mapped under the key `"PDSO - GSF"`.
-- **The Model Setup `parameters` step only reports.** It doesn't add parameters yet; `parameters.json` is a proposed format.
-- **`"Fake"` in `standard_pdso_parameters`** is a test entry, not a real parameter.
+- **GSF is hardcoded as the geometry source.** Program Volume shape comes from the Area in the Revit scheme named exactly `PDSO - GSF`.
+- **`area_scheme_mappings` is read in opposite directions** by the sync (parameter → scheme) and the Parameter Manager (scheme → parameter). It's harmless while keys equal values (the default). Details in architecture.md.
+- **Model Setup's `parameters` step only reports.** The Parameter Manager is what actually creates and binds parameters; `standards/parameters.json` predates it.
 - **Default `data_silo_family_name`** in a fresh config is `Program Data Silo Object - Rvt25`, which doesn't match the shipped family. Model Setup overwrites it with `PDSO - Program Data Silo Object - Rvt{yy}`.
 - **Most classes call `script.get_output()`** in `__init__`. That assumes a pyRevit command context and may misbehave elsewhere (for example, MCP runs).
 - **`body_1_setup.py` and `body_2_harvest_areas.py` are large** (1.4k and 2.7k lines). Use `grep -n "def "` to navigate instead of reading them whole.

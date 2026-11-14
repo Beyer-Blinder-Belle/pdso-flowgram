@@ -1,8 +1,10 @@
 # Data Silo Parameter Reference
 
-These are the standard PDSO shared parameters on the Data Silo family. They come from the Data Silo template and fit most projects; not every project uses every one.
+These are the **built-in** PDSO parameters. They're options, not requirements: each project picks the ones it **tracks** in the **Parameter Manager**, and only tracked parameters are created in the model and synced. Projects can also add their own custom parameters there.
 
-All parameters are **instance** parameters on **Generic Models**, in the `PDSO` shared parameter group. The PDSO tools find them by **GUID**, so don't recreate them under a new GUID. The definitions live in [`parameters.json`](../PDSO.extension/lib/pdso/standards/parameters.json) and [`shared_parameter_constants.py`](../PDSO.extension/lib/pdso/code/data/shared_parameter_constants.py).
+**Locked** parameters are always tracked: `PDSO - Program UID`, `PDSO - Program Stacking`, `PDSO - Last Synced`, and any parameter an area scheme mapping writes into (by default GSF, NSF and ZFA).
+
+All parameters are **instance** parameters on **Generic Models**, in the `PDSO` shared parameter group. The PDSO tools find built-ins by **GUID**, so don't recreate them under a new GUID. The definitions live in [`shared_parameter_constants.py`](../PDSO.extension/lib/pdso/code/data/shared_parameter_constants.py).
 
 **Who writes each value**
 
@@ -10,13 +12,13 @@ All parameters are **instance** parameters on **Generic Models**, in the `PDSO` 
 - **Sync (Area)**: Sync Data reads it from the Area the Data Silo sits in. Anything typed here is overwritten.
 - **Sync (system)**: Sync Data sets it.
 
-**Every** parameter below is copied from the Data Silo to its Program Volumes on each sync, so the same names are available to tag and schedule on Program Volumes. Values typed directly on a Program Volume are overwritten.
+**Every tracked** parameter is copied from the Data Silo to its Program Volumes on each sync, so the same names are available to tag and schedule on Program Volumes. Values typed directly on a Program Volume are overwritten.
 
 ## Identity
 
 | Parameter | Type | Who writes it | Purpose | Example |
 | --- | --- | --- | --- | --- |
-| `PDSO - Program UID` | Text | You | Unique ID for the unit. It names the unit's Program Volume family (`<prefix><UID>`) and ties the Data Silo to its Program Volumes. Must be unique. Convention is `BLDG-FLR-UNIT`, 2 characters each, which the default Project Config pattern enforces. | `00-07-01`, `NB-02-UD` |
+| `PDSO - Program UID` (locked) | Text | You | Unique ID for the unit. It names the unit's Program Volume family (`<prefix><UID>`) and ties the Data Silo to its Program Volumes. Must be unique. Convention is `BLDG-FLR-UNIT`, 2 characters each, which the default Project Config pattern enforces. | `00-07-01`, `NB-02-UD` |
 | `PDSO - Program Display Name` | Text | You | Name shown on drawings. Often the same as the unit number; use it if the client has a naming standard. | `701` |
 | `PDSO - Unit Layout Type` | Text | You | Layout type that matches the enlarged unit plans. Add `Mirr.` or `Sim.` for mirrored or similar layouts. | `2BR - Type A`, `0BR - Type C Mirr.` |
 
@@ -40,7 +42,7 @@ You can't type these. They're harvested from the Area that contains the Data Sil
 | `PDSO - Load Factor` | Number | You | Assumed square feet per occupant. | | `60` |
 | `PDSO - Accessibility` | Text | You | Accessibility labels. | IH, IV, Adaptable (Type A/B/C), UFAS | `Adaptable (Type A)` |
 | `PDSO - Planning Dept. Misc` | Text | You | Other labels required by agencies or planning departments, such as HPD. | | |
-| `PDSO - Program Stacking` | Multiline text | You | Other floors this unit repeats on, as level identifiers from **Project Config → Level Mapping**. Ranges and lists are allowed. The Data Silo's own level is always included. | | `10-22, 24, 26` |
+| `PDSO - Program Stacking` (locked) | Multiline text | You | Other floors this unit repeats on, as level identifiers from **Project Config → Level Mapping**. Ranges and lists are allowed. The Data Silo's own level is always included. | | `10-22, 24, 26` |
 
 ## Unit details
 
@@ -57,11 +59,11 @@ You can't type these. They're harvested from the Area that contains the Data Sil
 
 | Parameter | Type | Who writes it | Purpose | Example |
 | --- | --- | --- | --- | --- |
-| `PDSO - Last Synced` | Text | Sync (system) | When Sync Data last updated this element. If it's older than your last edit, sync again. | `2026-11-14 09:32:05` |
+| `PDSO - Last Synced` (locked) | Text | Sync (system) | When Sync Data last updated this element. If it's older than your last edit, sync again. | `2026-11-14 09:32:05` |
 
 ## Not implemented yet
 
-These are in the original design, but there are no parameters for them yet:
+These are in the original design, but there are no built-in parameters for them yet. A project can add them as custom parameters in the Parameter Manager.
 
 | Planned field | Type | Purpose |
 | --- | --- | --- |
