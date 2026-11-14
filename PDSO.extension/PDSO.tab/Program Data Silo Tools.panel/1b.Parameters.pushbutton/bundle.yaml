@@ -1,0 +1,15 @@
+# bundle title
+title: "Parameter\nManager"
+
+# bundle tooltip
+tooltip: Choose which parameters the PDSO tools track, and create them as shared parameters in the model and the Data Silo family. Run this at least once before syncing.
+
+# bundle author
+author: BBB DCT
+
+context: doc-project
+
+engine:
+  clean: false
+  full_frame: false
+  persistent: true

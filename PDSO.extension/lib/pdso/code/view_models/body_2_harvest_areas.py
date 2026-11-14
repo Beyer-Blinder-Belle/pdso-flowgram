@@ -37,10 +37,10 @@ from ..business.family_manager_service import PDSOFamilyManagerService
 from ..business.workset_coordination_service import WorksetCoordinationService
 from ..business.extensible_storage_service import PDSOExtensibleStorageService
 from ..business.level_mapping_service import PDSOLevelMappingService
-from ..data.shared_parameter_lookup_accelerator import (
-    Shared_Parameter_Lookup_Accelerator,
+from ..business.parameter_registry_service import (
+    check_parameter_bindings,
+    get_registry,
 )
-from ..data.shared_parameter_constants import standard_pdso_parameters
 
 
 class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
@@ -612,81 +612,47 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
                 "level_mappings", self.check_level_mappings_status
             )
 
-        # CHECK 3: Generic Model Parameters
+        # CHECK 3: Generic Model Parameters (tracked in the Parameter Manager)
         try:
-            # List of required parameters for Generic Model category
-            required_params = [
-                "PDSO - Program UID",
-                "PDSO - Program Display Name",
-                "PDSO - Unit Layout Type",
-                "PDSO - Program Type",
-                "PDSO - Use Group",
-                "PDSO - Planning Dept. Misc",
-                "PDSO - Accessibility",
-                "PDSO - Program Stacking",
-                "PDSO - Program Market Segment",
-                "PDSO - Misc Modifier",
-                "PDSO - Load Factor",
-                "PDSO - DU Bedroom Count",
-                "PDSO - Bathroom Count",
-                "PDSO - Bathroom Types",
-                "PDSO - Kitchen Count",
-                "PDSO - Kitchen Types",
-                "PDSO - ZFA",
-                "PDSO - NSF",
-                "PDSO - GSF",
-                "PDSO - Last Synced",
-            ]
-
             if config is None:
                 self.check_generic_model_parameters_status = (
                     "✗ Config not found - cannot validate parameters"
                 )
                 has_errors = True
             else:
-                # Use Shared_Parameter_Lookup_Accelerator for efficient parameter checking
-                param_accelerator = Shared_Parameter_Lookup_Accelerator(revit.doc)
-                binding_map = revit.doc.ParameterBindings
-                missing_params = []
+                registry = get_registry(revit.doc, refresh=True)
+                binding_check = check_parameter_bindings(revit.doc, registry)
 
-                for param_name in required_params:
-                    param_def = standard_pdso_parameters[param_name]
-
-                    # Look up parameter by GUID using accelerator
-                    shared_param_element = param_accelerator.lookup_shared_param(
-                        param_def.parameter_guid
-                    )
-
-                    if shared_param_element is None:
-                        missing_params.append(param_name)
-                        continue
-
-                    # Check if parameter is bound to Generic Models category
-                    param_exists = False
-                    element_binding = binding_map.get_Item(
-                        shared_param_element.GetDefinition()
-                    )
-
-                    if element_binding:
-                        categories = element_binding.Categories
-                        for cat in categories:
-                            if cat.Id.Value == int(DB.BuiltInCategory.OST_GenericModel):
-                                param_exists = True
-                                break
-
-                    if not param_exists:
-                        missing_params.append(param_name)
-
-                if missing_params:
+                if not binding_check["configured"]:
                     self.check_generic_model_parameters_status = (
-                        "✗ Missing {} required generic model parameters".format(
-                            len(missing_params)
+                        "✗ Parameters not set up - run the Parameter Manager first"
+                    )
+                    has_errors = True
+                elif binding_check["missing_core"]:
+                    self.check_generic_model_parameters_status = (
+                        "✗ Required parameters not tracked: {} - run the Parameter "
+                        "Manager".format(", ".join(binding_check["missing_core"]))
+                    )
+                    has_errors = True
+                elif binding_check["missing"]:
+                    for name in binding_check["missing"]:
+                        self.logger.warning(
+                            "Tracked parameter '{}': {}".format(
+                                name, binding_check["problems"][name]
+                            )
+                        )
+                    self.check_generic_model_parameters_status = (
+                        "✗ {} of {} tracked parameters missing on Generic Models - "
+                        "run the Parameter Manager".format(
+                            len(binding_check["missing"]), len(registry.parameters)
                         )
                     )
                     has_errors = True
                 else:
                     self.check_generic_model_parameters_status = (
-                        "✓ All required generic model parameters found"
+                        "✓ All {} tracked parameters found".format(
+                            len(binding_check["found"])
+                        )
                     )
 
             self._update_check_icon_and_color(
@@ -1390,6 +1356,9 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
             self.current_step = "Initializing..."
             self.progress_status = "Starting sync process..."
             self.completion_message_visibility = Visibility.Collapsed
+
+            # Re-read the tracked parameter list (it may have changed since the last run)
+            get_registry(revit.doc, refresh=True)
 
             # Instantiate services
             self.logger.info("Instantiating services...")

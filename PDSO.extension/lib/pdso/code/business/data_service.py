@@ -5,7 +5,8 @@ import datetime
 from pyrevit import script
 
 # Custom Modules
-from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+from pdso.code.data.shared_parameter_constants import LAST_SYNCED
+from pdso.code.business.parameter_registry_service import get_registry
 
 
 class PDSODataService(object):
@@ -52,7 +53,7 @@ class PDSODataService(object):
                     related_area.bound_silo_parameter_name
                 ] = area_value
 
-            ext_data_silo.params_to_update["PDSO - Last Synced"] = current_time
+            ext_data_silo.params_to_update[LAST_SYNCED] = current_time
 
     def queue_program_volume_instance_location_updates(
         self, ext_data_silos, ext_program_volume_instance_collection
@@ -135,34 +136,8 @@ class PDSODataService(object):
 
         self.logger.info("Pushing data from Data Silos to Program Volumes...")
 
-        current_time = self.current_time()
-
-        pdso_params_to_push = [
-            # Core identification parameters
-            standard_pdso_parameters["PDSO - Program UID"],
-            standard_pdso_parameters["PDSO - Program Display Name"],
-            standard_pdso_parameters["PDSO - Unit Layout Type"],
-            # User-managed data parameters
-            standard_pdso_parameters["PDSO - Program Type"],
-            standard_pdso_parameters["PDSO - Use Group"],
-            standard_pdso_parameters["PDSO - Planning Dept. Misc"],
-            standard_pdso_parameters["PDSO - Accessibility"],
-            standard_pdso_parameters["PDSO - Program Stacking"],
-            standard_pdso_parameters["PDSO - Program Market Segment"],
-            standard_pdso_parameters["PDSO - Misc Modifier"],
-            standard_pdso_parameters["PDSO - Load Factor"],
-            standard_pdso_parameters["PDSO - DU Bedroom Count"],
-            standard_pdso_parameters["PDSO - Bathroom Count"],
-            standard_pdso_parameters["PDSO - Bathroom Types"],
-            standard_pdso_parameters["PDSO - Kitchen Count"],
-            standard_pdso_parameters["PDSO - Kitchen Types"],
-            # Programmatically managed parameters - harvested from Areas
-            standard_pdso_parameters["PDSO - ZFA"],
-            standard_pdso_parameters["PDSO - NSF"],
-            standard_pdso_parameters["PDSO - GSF"],
-            # System metadata
-            standard_pdso_parameters["PDSO - Last Synced"],
-        ]
+        # Every tracked parameter is pushed (set up in the Parameter Manager)
+        pdso_params_to_push = get_registry(self.doc).parameters
 
         for ext_data_silo in ext_data_silos:
             for parameter in pdso_params_to_push:

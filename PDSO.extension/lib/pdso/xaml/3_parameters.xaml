@@ -1,0 +1,165 @@
+<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- HEADER -->
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1*" />
+            <ColumnDefinition Width="7*" />
+        </Grid.ColumnDefinitions>
+        <Image
+            x:Name="bbb_logo"
+            Grid.Column="0"
+            HorizontalAlignment="Center"
+            Tag="common\assets\BBB_Logo.jpg"
+            VerticalAlignment="Top"
+            Width="auto" />
+        <StackPanel Grid.Column="1">
+            <TextBlock
+                FontSize="24"
+                FontWeight="Bold"
+                Padding="10 0 0 0"
+                TextWrapping="Wrap"
+                Text="PDSO Parameter Manager" />
+            <TextBlock
+                FontSize="12"
+                Padding="10 0 0 0"
+                TextWrapping="Wrap"
+                Text="Choose which parameters the PDSO tools track, then create them in the model." />
+        </StackPanel>
+    </Grid>
+
+    <Border Padding="10" Margin="8,0,12,0">
+        <StackPanel>
+
+            <!-- STATUS SECTION -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5" Background="#E3F2FD">
+                <StackPanel>
+                    <TextBlock FontSize="14" FontWeight="Bold" Text="Status" Margin="0,0,0,10" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontWeight="Bold"
+                        Margin="0,0,0,8"
+                        Foreground="{Binding setup_status_color}"
+                        Text="{Binding setup_status_message}" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        Margin="0,0,0,4"
+                        FontWeight="Bold"
+                        Text="Shared parameter file:" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        Margin="0,0,0,8"
+                        Foreground="{Binding shared_parameter_file_color}"
+                        Text="{Binding shared_parameter_file_message}" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Text="Tracked parameters are created as shared parameters (in the 'PDSO' group of the shared parameter file), bound to the Generic Models category as instance parameters, and pushed from each Data Silo to its Program Volumes during a sync. Parameters already in the model or the shared parameter file are reused, not duplicated." />
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 1: Built-in parameters -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="5">
+                    <TextBlock FontSize="14" FontWeight="Bold" Text="Built-in Parameters"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="Parameters that ship with the PDSO tools. Locked rows are required: the tools read or write them directly, or an Area Scheme mapping writes into them. Untick any optional parameter your project doesn't need." />
+                    <Border BorderBrush="#E0E0E0" BorderThickness="1" Padding="8" CornerRadius="3">
+                        <StackPanel x:Name="BuiltInParametersContainer" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 2: Custom parameters -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="5">
+                    <TextBlock FontSize="14" FontWeight="Bold" Text="Custom Parameters"
+                        Margin="0,0,0,5" />
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="0,0,0,10"
+                        Text="Add your own program data fields. Once created, a shared parameter's name and type can't be changed; untick it and add a new one instead." />
+                    <Border BorderBrush="#E0E0E0" BorderThickness="1" Padding="8" CornerRadius="3">
+                        <StackPanel>
+                            <StackPanel x:Name="CustomParametersContainer" />
+                            <Button
+                                x:Name="AddCustomParameterButton"
+                                Content="+ Add Custom Parameter"
+                                Style="{DynamicResource ActionButton}"
+                                HorizontalAlignment="Left"
+                                Padding="10,5"
+                                Margin="0,10,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- SECTION 3: Options -->
+            <Border BorderBrush="#2196F3" BorderThickness="2" Padding="15" Margin="0,0,0,15"
+                CornerRadius="5">
+                <StackPanel Margin="5">
+                    <TextBlock FontSize="14" FontWeight="Bold" Text="Options" Margin="0,0,0,10" />
+                    <CheckBox x:Name="AddToFamilyCheckBox" Margin="0,0,0,4">
+                        <TextBlock TextWrapping="Wrap" Text="{Binding add_to_family_label}" />
+                    </CheckBox>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="20,0,0,10"
+                        Text="Embeds the tracked parameters in the Data Silo family as instance parameters and reloads it, so the family carries them into other projects. The project binding to Generic Models is created either way." />
+                    <CheckBox x:Name="UnbindRemovedCheckBox" Margin="0,0,0,4">
+                        <TextBlock TextWrapping="Wrap"
+                            Text="Delete untracked parameters from the model (deletes their values)" />
+                    </CheckBox>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        FontSize="10"
+                        Foreground="#666666"
+                        Margin="20,0,0,0"
+                        Text="Off: unticking a parameter only stops the PDSO tools from syncing it; the parameter and its values stay in the model. On: it's also unbound from Generic Models (and removed from the Data Silo family), and every value is lost." />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </Border>
+
+    <!-- FOOTER -->
+    <Grid Margin="10,10,10,20">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock
+            Grid.Column="0"
+            Text="{Binding unsaved_changes_message}"
+            TextWrapping="Wrap"
+            FontSize="12"
+            FontStyle="Italic"
+            FontWeight="Bold"
+            Foreground="{Binding unsaved_changes_color}"
+            Margin="20,0,20,0"
+            VerticalAlignment="Center" />
+        <Button
+            x:Name="ApplyButton"
+            Grid.Column="1"
+            Content="Apply Parameters"
+            Style="{DynamicResource ActionButton}"
+            Height="36"
+            VerticalAlignment="Center"
+            Padding="20,8"
+            Margin="10,0,0,0" />
+    </Grid>
+</StackPanel>

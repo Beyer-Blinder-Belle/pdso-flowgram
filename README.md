@@ -11,10 +11,23 @@ The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has three com
 | Button | What it does |
 | --- | --- |
 | **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
+| **Parameter Manager** | Chooses which parameters PDSO tracks and creates them as shared parameters, bound to Generic Models (and optionally embedded in the Data Silo family). Must be run at least once per model before syncing. |
 | **Run Scripts** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
 
 All commands need an open **project** document; they are disabled in the family editor.
+
+## Tracked parameters
+
+The PDSO tools only sync the parameters a model *tracks*. The tracked list is set in the **Parameter Manager** and saved in the model's PDSO configuration (Extensible Storage).
+
+- **Built-in parameters** (Program UID, Program Stacking, ZFA/NSF/GSF, Last Synced, and the program data fields) ship with the tools as options. Nothing is created until you click **Apply Parameters**. On a model's first run, every built-in is ticked.
+- **Locked parameters** can't be untracked. They are *Program UID*, *Program Stacking*, *Last Synced*, and any parameter an Area Scheme mapping writes into.
+- **Custom parameters** can be added, with types Text, Multiline Text, Number, Integer, Area, Length and Yes/No. Once created, their name and type can't change.
+- **Shared parameter file**: the manager uses the file set in Revit (*Manage > Shared Parameters*). If that file is missing, it asks you to pick or create one, remembers your choice for the PDSO tools, and leaves Revit's setting unchanged. New definitions go in a `PDSO` group. Existing definitions are reused (first by GUID, then by name) instead of being duplicated.
+- **Run Scripts** is blocked until the manager has run, and blocked again whenever a tracked parameter is missing from Generic Models.
+
+The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.py` and must never change.
 
 ## Requirements
 
@@ -47,6 +60,7 @@ PDSO.extension/
 ├── PDSO.tab/
 │   └── Program Data Silo Tools.panel/
 │       ├── 1.Config.pushbutton/      # Project configuration window
+│       ├── 1b.Parameters.pushbutton/ # Parameter Manager (tracked shared parameters)
 │       ├── 2.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
 │       └── 3.Audit.pushbutton/       # Audit report
 └── lib/
