@@ -1,0 +1,13 @@
+{
+  "_comment": "Families to load. 'files' are tried in order and the first that exists is loaded. Relative paths resolve against the folder this file is in.",
+  "families": [
+    {
+      "name": "PDSO - Program Data Silo Object - Rvt{revit_yy}",
+      "files": [
+        "{repo_dir}/families/PDSO - Program Data Silo Object - Rvt{revit_yy}.rfa"
+      ],
+      "on_existing": "skip",
+      "use_as_data_silo_family": true
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 layout:
+  - 0.Setup
   - 1.Config
   - 2.RunScripts
   - 3.Audit

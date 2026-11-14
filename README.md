@@ -6,10 +6,11 @@ Built by the DCT team at [Beyer Blinder Belle](https://www.beyerblinderbelle.com
 
 ## What it does
 
-The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has three commands:
+The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four commands:
 
 | Button | What it does |
 | --- | --- |
+| **Model Setup** | Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
 | **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
 | **Run Scripts** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
@@ -44,7 +45,11 @@ PDSO needs the **Program Data Silo Object** family loaded in your project. The f
 
 - `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
 
-Load it into your project, then open **Project Config** and set the Data Silo family name to match the loaded family's name. The default is `Program Data Silo Object - Rvt25`.
+**Model Setup** loads it and sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+
+## Standards
+
+Model Setup is driven by JSON files in [`PDSO.extension/lib/pdso/standards/`](PDSO.extension/lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Model Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](PDSO.extension/lib/pdso/standards/README.md) for every option.
 
 ## Repository layout
 
@@ -55,6 +60,7 @@ families/                             # Revit family files (.rfa)
 PDSO.extension/
 ├── PDSO.tab/
 │   └── Program Data Silo Tools.panel/
+│       ├── 0.Setup.pushbutton/       # Model Setup from JSON standards (Shift+Click: options)
 │       ├── 1.Config.pushbutton/      # Project configuration window
 │       ├── 2.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
 │       └── 3.Audit.pushbutton/       # Audit report
@@ -64,7 +70,9 @@ PDSO.extension/
         ├── code/
         │   ├── business/             # Services: sync, hashing, level mapping, storage, ...
         │   ├── data/                 # Wrappers around Revit elements, schemas, parameter constants
+        │   ├── setup/                # Model Setup: standards loader, runner and steps
         │   └── view_models/          # WPF view models (MVVM)
+        ├── standards/                # Default JSON standards for Model Setup
         ├── xaml/                     # WPF windows and styles
         └── documentation/            # Developer notes
 ```
