@@ -14,7 +14,6 @@ A model that has never run the Parameter Manager has an empty registry: it is
 
 # Python standard libraries
 import os
-import threading
 import traceback
 
 # 3rd Party Modules
@@ -22,6 +21,7 @@ from pyrevit import script
 from rpw import DB
 
 # Custom Modules
+from common.code.background import TimedOut, call_with_timeout
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
 from pdso.code.data.extended_shared_parameter import (
     ExtendedSharedParameter,
@@ -327,19 +327,12 @@ def path_exists(path, timeout=DEFAULT_PATH_TIMEOUT_S):
     """
     if not path:
         return False
-    outcome = {}
-
-    def check():
-        try:
-            outcome["exists"] = os.path.isfile(path)
-        except Exception:
-            outcome["exists"] = False
-
-    worker = threading.Thread(target=check)
-    worker.daemon = True  # never keep Revit waiting on a hung network call
-    worker.start()
-    worker.join(timeout)
-    return outcome.get("exists")
+    try:
+        return call_with_timeout(os.path.isfile, timeout, path)
+    except TimedOut:
+        return None
+    except Exception:
+        return False
 
 
 def get_configured_shared_parameter_path(doc):

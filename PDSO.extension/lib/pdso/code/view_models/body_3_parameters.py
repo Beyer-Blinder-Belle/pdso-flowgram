@@ -4,6 +4,8 @@
 Lets users choose which parameters the PDSO tools track:
 - Built-in parameters (from the catalog) are listed as options; core ones are locked.
 - Custom parameters can be added, and removed again before they are created.
+- Presets (Default, Blank, or user-saved) tick a set of parameters in one go,
+  and the current selection can be saved as a new preset.
 
 "Apply" creates/reuses shared parameter definitions, binds them to Generic Models,
 optionally embeds them in the Data Silo family, and saves the tracked list to the
@@ -14,6 +16,7 @@ document config. Nothing is created until Apply runs at least once.
 import os
 import threading
 import traceback
+from collections import OrderedDict
 
 # 3rd Party Modules
 from pyrevit import revit, DB, forms
@@ -39,13 +42,26 @@ from System.Windows import (
     VerticalAlignment,
 )
 import System
-from System import Action
+from System import Action, Guid
 
 # Custom Modules
 from base_view_model import PDSO_Base_View_Model
 from common.code import generic_utils
+from common.code.background import TimedOut, call_with_timeout
 from common.code.view_model_external_events import CustomizableEvent
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
+from pdso.code.business.parameter_preset_service import (
+    DEFAULT_PRESET_NAME,
+    ParameterPreset,
+    PresetParameter,
+    find_existing_preset_file,
+    get_builtin_presets,
+    get_preset_folder,
+    list_user_presets,
+    save_preset,
+    set_preset_folder,
+    validate_preset_name,
+)
 from pdso.code.business.parameter_registry_service import (
     PDSOParameterSetupService,
     check_parameter_bindings,
@@ -72,6 +88,12 @@ COLOR_WARNING = "#FF9800"
 COLOR_ERROR = "#F44336"
 COLOR_MUTED = "#666666"
 
+# Dropdown entry that shows what the model tracks now (not a preset)
+CURRENT_SETUP_LABEL = "Current model setup"
+
+# Seconds to wait on the presets folder (it may be on a network drive)
+PRESET_FOLDER_TIMEOUT_S = 10.0
+
 
 class ParameterRow(object):
     """One row in the Parameter Manager (plain state; rows are rebuilt on change)."""
@@ -87,6 +109,7 @@ class ParameterRow(object):
         was_tracked,
         is_locked=False,
         lock_reason="",
+        from_preset=False,
     ):
         self.name = name
         self.parameter_type = parameter_type
@@ -97,13 +120,22 @@ class ParameterRow(object):
         self.was_tracked = was_tracked  # tracked in the saved config
         self.is_locked = is_locked
         self.lock_reason = lock_reason
+        self.from_preset = from_preset  # custom row loaded from a preset
         self.status_text = ""
         self.status_color = COLOR_MUTED
 
     @property
     def is_new(self):
-        """A custom row that isn't in the saved config yet (name/type still editable)."""
+        """A custom row that isn't in the saved config yet (can be removed)."""
         return not self.is_builtin and not self.was_tracked
+
+    @property
+    def is_editable(self):
+        """Name and type can be edited: a new custom row typed in by the user.
+
+        Rows from a preset carry a GUID, so their name and type stay fixed.
+        """
+        return self.is_new and not self.is_locked and self.guid is None
 
     def to_definition(self):
         """Build the ExtendedSharedParameter this row stands for."""
@@ -149,6 +181,23 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         self.built_in_container = None
         self.custom_container = None
 
+        # Presets
+        self._builtin_presets = get_builtin_presets()
+        self._user_presets = []
+        self._preset_folder = get_preset_folder()
+        self._preset_folder_message = ""
+        self._selected_preset_name = DEFAULT_PRESET_NAME
+        self._rows_edited = False  # hand edits since the last preset was loaded
+        self._suppress_preset_selection = False
+        self._preset_load_id = 0
+        self.preset_combo = None
+
+        # Cached model state the rows are built from (filled by _load_state)
+        self._registry = None
+        self._binding_check = None
+        self._area_mapped = set()
+        self._model_names = set()
+
         self.custom_event_handler = CustomizableEvent()
 
     # =========================================================================
@@ -164,6 +213,8 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
             self._load_state()
             self._wire_controls()
             self._refresh_rows_ui()
+            self._populate_preset_combo()
+            self._start_preset_load()
         except Exception as e:
             self.logger.error("Error during Parameter Manager setup: {}".format(e))
             self.logger.error(traceback.format_exc())
@@ -182,93 +233,25 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         registry = get_registry(doc, refresh=True)
         self._is_configured = registry.is_configured
         binding_check = check_parameter_bindings(doc, registry)
-        area_mapped = set(get_area_mapped_parameter_names(doc))
 
-        model_names = set(
+        # Cache what the rows are built from, so presets can rebuild them later
+        # without calling the Revit API from the UI thread
+        self._registry = registry
+        self._binding_check = binding_check
+        self._area_mapped = set(get_area_mapped_parameter_names(doc))
+        self._model_names = set(
             spe.Name
             for spe in DB.FilteredElementCollector(doc).OfClass(DB.SharedParameterElement)
         )
 
-        rows = []
-        # Built-in options; on first run, all are ticked (matches the old hard-coded set)
-        for name, catalog_entry in standard_pdso_parameters.items():
-            tracked_entry = registry.get(name)
-            if registry.is_configured:
-                is_tracked = tracked_entry is not None
-            else:
-                is_tracked = True
-            row = ParameterRow(
-                name,
-                catalog_entry.parameter_type,
-                catalog_entry.role,
-                tracked_entry.parameter_guid if tracked_entry else catalog_entry.parameter_guid,
-                is_builtin=True,
-                is_tracked=is_tracked,
-                was_tracked=tracked_entry is not None,
-            )
-            if catalog_entry.role == ROLE_CORE:
-                row.is_locked, row.lock_reason = True, "Required by the PDSO tools"
-            elif name in area_mapped:
-                row.is_locked, row.lock_reason = True, "Used by an Area Scheme mapping"
-            if row.is_locked:
-                row.is_tracked = True
-            rows.append(row)
-
-        # Custom parameters already tracked
-        for parameter in registry.parameters:
-            if parameter.parameter_name in standard_pdso_parameters:
-                continue
-            row = ParameterRow(
-                parameter.parameter_name,
-                parameter.parameter_type,
-                parameter.role,
-                parameter.parameter_guid,
-                is_builtin=False,
-                is_tracked=True,
-                was_tracked=True,
-            )
-            if parameter.parameter_name in area_mapped:
-                row.is_locked, row.lock_reason = True, "Used by an Area Scheme mapping"
-            rows.append(row)
-
-        # Area Scheme mappings that write into a parameter nobody has set up yet
-        known = set(r.name for r in rows)
-        for name in sorted(area_mapped - known):
-            rows.append(
-                ParameterRow(
-                    name,
-                    "area",
-                    ROLE_AREA,
-                    None,
-                    is_builtin=False,
-                    is_tracked=True,
-                    was_tracked=False,
-                    is_locked=True,
-                    lock_reason="Used by an Area Scheme mapping",
-                )
-            )
-
-        # Status per row
-        for row in rows:
-            if row.was_tracked and row.is_tracked:
-                if row.name in binding_check["found"]:
-                    row.status_text, row.status_color = "In model", COLOR_OK
-                else:
-                    row.status_text = binding_check["problems"].get(row.name, "Missing")
-                    row.status_color = COLOR_ERROR
-            elif row.is_tracked:
-                if row.name in model_names:
-                    row.status_text, row.status_color = "In model - will be tracked", COLOR_WARNING
-                else:
-                    row.status_text, row.status_color = "Will be created", COLOR_WARNING
-            else:
-                if row.name in model_names:
-                    row.status_text = "In model - not tracked"
-                else:
-                    row.status_text = "Not tracked"
-                row.status_color = COLOR_MUTED
-
-        self.rows = rows
+        # A model that's set up shows its own setup; a new one starts from Default
+        if registry.is_configured:
+            self._selected_preset_name = CURRENT_SETUP_LABEL
+            self._build_rows(None)
+        else:
+            self._selected_preset_name = DEFAULT_PRESET_NAME
+            self._build_rows(self._find_preset(DEFAULT_PRESET_NAME))
+        self._rows_edited = False
 
         # Overall status
         if not registry.is_configured:
@@ -298,6 +281,364 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         self._start_shared_parameter_file_check()
 
         self.has_unsaved_changes = not registry.is_configured
+
+    # =========================================================================
+    # Rows
+    # =========================================================================
+
+    def _build_rows(self, preset):
+        """Build the rows from the cached model state, optionally ticked from a preset.
+
+        Args:
+            preset (ParameterPreset or None): None shows the model's current setup.
+        """
+        registry = self._registry
+        area_mapped = self._area_mapped
+        rows = []
+
+        # Built-in parameters
+        preset_builtins = preset.builtin_names if preset is not None else None
+        for name, catalog_entry in standard_pdso_parameters.items():
+            tracked_entry = registry.get(name)
+            if preset is not None:
+                is_tracked = name in preset_builtins
+            else:
+                is_tracked = tracked_entry is not None
+            row = ParameterRow(
+                name,
+                catalog_entry.parameter_type,
+                catalog_entry.role,
+                tracked_entry.parameter_guid if tracked_entry else catalog_entry.parameter_guid,
+                is_builtin=True,
+                is_tracked=is_tracked,
+                was_tracked=tracked_entry is not None,
+            )
+            if catalog_entry.role == ROLE_CORE:
+                row.is_locked, row.lock_reason = True, "Required by the PDSO tools"
+            elif name in area_mapped:
+                row.is_locked, row.lock_reason = True, "Used by an Area Scheme mapping"
+            if row.is_locked:
+                row.is_tracked = True
+            rows.append(row)
+
+        # Custom parameters the model already tracks
+        preset_customs = OrderedDict()
+        if preset is not None:
+            for entry in preset.custom_parameters:
+                preset_customs[entry.name] = entry
+        for parameter in registry.parameters:
+            name = parameter.parameter_name
+            if name in standard_pdso_parameters:
+                continue
+            in_preset = preset_customs.pop(name, None) is not None
+            row = ParameterRow(
+                name,
+                parameter.parameter_type,
+                parameter.role,
+                parameter.parameter_guid,
+                is_builtin=False,
+                is_tracked=preset is None or in_preset,
+                was_tracked=True,
+            )
+            if name in area_mapped:
+                row.is_locked, row.lock_reason = True, "Used by an Area Scheme mapping"
+                row.is_tracked = True
+            rows.append(row)
+
+        # Custom parameters from the preset that the model doesn't track yet
+        for entry in preset_customs.values():
+            guid = None
+            if entry.guid:
+                try:
+                    guid = Guid(entry.guid)
+                except Exception:
+                    self.logger.warning(
+                        "Preset parameter '{}' has an invalid GUID; a new one will be "
+                        "created.".format(entry.name)
+                    )
+            row = ParameterRow(
+                entry.name,
+                entry.parameter_type,
+                ROLE_AREA if entry.name in area_mapped else ROLE_CUSTOM,
+                guid,
+                is_builtin=False,
+                is_tracked=True,
+                was_tracked=False,
+                from_preset=True,
+            )
+            if entry.name in area_mapped:
+                row.is_locked, row.lock_reason = True, "Used by an Area Scheme mapping"
+            rows.append(row)
+
+        # Area Scheme mappings that write into a parameter nobody has set up yet
+        known = set(r.name for r in rows)
+        for name in sorted(area_mapped - known):
+            rows.append(
+                ParameterRow(
+                    name,
+                    "area",
+                    ROLE_AREA,
+                    None,
+                    is_builtin=False,
+                    is_tracked=True,
+                    was_tracked=False,
+                    is_locked=True,
+                    lock_reason="Used by an Area Scheme mapping",
+                )
+            )
+
+        for row in rows:
+            self._set_row_status(row)
+        self.rows = rows
+
+    def _set_row_status(self, row):
+        """Set a row's status text from the cached model state."""
+        binding_check = self._binding_check
+        if row.was_tracked and row.is_tracked:
+            if row.name in binding_check["found"]:
+                row.status_text, row.status_color = "In model", COLOR_OK
+            else:
+                row.status_text = binding_check["problems"].get(row.name, "Missing")
+                row.status_color = COLOR_ERROR
+        elif row.is_tracked:
+            if row.name in self._model_names:
+                row.status_text, row.status_color = "In model - will be tracked", COLOR_WARNING
+            else:
+                row.status_text, row.status_color = "Will be created", COLOR_WARNING
+        elif row.was_tracked:
+            row.status_text, row.status_color = "Will stop being tracked", COLOR_WARNING
+        else:
+            if row.name in self._model_names:
+                row.status_text = "In model - not tracked"
+            else:
+                row.status_text = "Not tracked"
+            row.status_color = COLOR_MUTED
+
+    # =========================================================================
+    # Presets
+    # =========================================================================
+
+    def _all_presets(self):
+        return self._builtin_presets + self._user_presets
+
+    def _find_preset(self, name):
+        for preset in self._all_presets():
+            if preset.name.lower() == (name or "").lower():
+                return preset
+        return None
+
+    @property
+    def preset_folder_message(self):
+        return self._preset_folder_message
+
+    @preset_folder_message.setter
+    def preset_folder_message(self, value):
+        self._preset_folder_message = value
+        self.on_property_changed("preset_folder_message")
+
+    def _populate_preset_combo(self):
+        """Fill the preset dropdown and select the current preset (no events fired)."""
+        if self.preset_combo is None:
+            return
+        self._suppress_preset_selection = True
+        try:
+            self.preset_combo.Items.Clear()
+            entries = []
+            if self._is_configured:
+                entries.append((CURRENT_SETUP_LABEL, CURRENT_SETUP_LABEL))
+            for preset in self._builtin_presets:
+                label = "{} (built-in)".format(preset.name)
+                entries.append((label, preset.name))
+            for preset in self._user_presets:
+                entries.append((preset.name, preset.name))
+
+            for label, key in entries:
+                item = ComboBoxItem()
+                item.Content = label
+                item.Tag = key
+                self.preset_combo.Items.Add(item)
+                if key.lower() == (self._selected_preset_name or "").lower():
+                    self.preset_combo.SelectedItem = item
+        finally:
+            self._suppress_preset_selection = False
+
+    def _start_preset_load(self):
+        """Read user presets from the presets folder off the UI thread."""
+        folder = self._preset_folder
+        self._preset_load_id += 1
+        load_id = self._preset_load_id
+        self.preset_folder_message = "Presets folder: {} (loading...)".format(folder)
+
+        def load():
+            try:
+                presets, problems = call_with_timeout(
+                    list_user_presets, PRESET_FOLDER_TIMEOUT_S, folder
+                )
+                outcome = (presets, problems, None)
+            except TimedOut:
+                outcome = ([], [], "couldn't be reached (network drive offline?)")
+            except Exception as e:
+                outcome = ([], [], "couldn't be read: {}".format(e))
+            try:
+                self.Dispatcher.BeginInvoke(
+                    Action(lambda: self._on_presets_loaded(load_id, folder, *outcome))
+                )
+            except Exception:
+                pass  # window was closed
+
+        worker = threading.Thread(target=load)
+        worker.daemon = True
+        worker.start()
+
+    def _on_presets_loaded(self, load_id, folder, presets, problems, error):
+        """Show the presets read in the background (runs on the UI thread)."""
+        if load_id != self._preset_load_id:
+            return  # a newer load has started since
+        self._user_presets = presets
+        if error:
+            self.preset_folder_message = "Presets folder: {} {}".format(folder, error)
+        else:
+            self.preset_folder_message = "Presets folder: {} ({} saved preset{})".format(
+                folder, len(presets), "" if len(presets) == 1 else "s"
+            )
+        for problem in problems:
+            self.logger.warning("Skipped preset file {}".format(problem))
+        self._populate_preset_combo()
+
+    def _on_preset_selected(self, sender, args):
+        if self._suppress_preset_selection or self._registry is None:
+            return
+        selected = sender.SelectedItem
+        if selected is None:
+            return
+        key = selected.Tag
+        if key == self._selected_preset_name:
+            return
+
+        if self._rows_edited:
+            if not forms.alert(
+                "Load '{}'? This replaces the ticks and custom rows you've changed "
+                "here.".format(key),
+                title="PDSO Parameter Manager",
+                sub_msg="Nothing has been applied to the model yet, so nothing is lost "
+                "from the model.",
+                yes=True,
+                no=True,
+            ):
+                self._populate_preset_combo()  # put the old selection back
+                return
+
+        preset = None if key == CURRENT_SETUP_LABEL else self._find_preset(key)
+        self._selected_preset_name = key
+        self._build_rows(preset)
+        self._refresh_rows_ui()
+        self._rows_edited = False
+        # Loading a preset is a change to apply, unless it's the model's own setup
+        self.has_unsaved_changes = preset is not None or not self._is_configured
+
+    def _on_save_preset_clicked(self, sender, args):
+        try:
+            errors = self._validate_rows()
+            if errors:
+                forms.alert(
+                    "Fix these before saving a preset:",
+                    title="PDSO Parameter Manager",
+                    expanded="\n".join(errors),
+                )
+                return
+
+            current = self._find_preset(self._selected_preset_name)
+            default_name = (
+                current.name if current is not None and not current.is_builtin else ""
+            )
+            name = forms.ask_for_string(
+                default=default_name,
+                prompt="Name for this preset (e.g. 'Residential' or 'Hospitality'):",
+                title="Save Parameter Preset",
+            )
+            if name is None:
+                return
+            name = name.strip()
+            problem = validate_preset_name(name)
+            if problem:
+                forms.alert(problem, title="Save Parameter Preset")
+                return
+
+            parameters = []
+            no_guid = []
+            for row in self.rows:
+                if not row.is_tracked:
+                    continue
+                if row.is_builtin:
+                    parameters.append(PresetParameter(row.name, True))
+                else:
+                    if row.guid is None:
+                        no_guid.append(row.name.strip())
+                    parameters.append(
+                        PresetParameter(
+                            row.name.strip(),
+                            False,
+                            row.parameter_type,
+                            str(row.guid) if row.guid is not None else None,
+                        )
+                    )
+
+            if no_guid and not forms.alert(
+                "Save without fixed GUIDs for: {}?".format(", ".join(no_guid)),
+                title="Save Parameter Preset",
+                sub_msg="These custom parameters haven't been created yet, so they "
+                "have no GUID. Each project that loads this preset will create its "
+                "own, and schedules or tags won't match across projects. To avoid "
+                "this, click Apply Parameters first, then save the preset.",
+                yes=True,
+                no=True,
+            ):
+                return
+
+            folder = self._preset_folder
+            existing_path = call_with_timeout(
+                find_existing_preset_file, PRESET_FOLDER_TIMEOUT_S, folder, name
+            )
+            if existing_path and not forms.alert(
+                "A preset named '{}' already exists. Replace it?".format(name),
+                title="Save Parameter Preset",
+                yes=True,
+                no=True,
+            ):
+                return
+
+            preset = ParameterPreset(name, parameters)
+            path = call_with_timeout(
+                save_preset, PRESET_FOLDER_TIMEOUT_S, folder, preset, existing_path
+            )
+            self.output.print_md("Saved parameter preset **{}** to `{}`".format(name, path))
+
+            # Show it as the selected preset; the ticks already match it
+            self._selected_preset_name = name
+            self._rows_edited = False
+            self._start_preset_load()
+
+        except TimedOut:
+            forms.alert(
+                "The presets folder couldn't be reached:\n{}".format(self._preset_folder),
+                title="Save Parameter Preset",
+                sub_msg="Check the network connection, or use Change Folder to pick "
+                "another folder.",
+            )
+        except Exception as e:
+            self.logger.error("Error saving preset: {}".format(e))
+            self.logger.error(traceback.format_exc())
+            forms.alert(
+                "The preset couldn't be saved: {}".format(e), title="Save Parameter Preset"
+            )
+
+    def _on_change_preset_folder_clicked(self, sender, args):
+        folder = forms.pick_folder(title="Choose a folder for PDSO parameter presets")
+        if not folder:
+            return
+        set_preset_folder(folder)
+        self._preset_folder = folder
+        self._start_preset_load()
 
     # =========================================================================
     # Shared parameter file check (background)
@@ -450,9 +791,21 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
     def unsaved_changes_color(self):
         return COLOR_WARNING if self._has_unsaved_changes else COLOR_OK
 
-    def _mark_changed(self):
+    def _mark_changed(self, manual=False):
+        """Flag unsaved changes. manual=True for edits the user made by hand
+        (used to warn before a preset replaces them)."""
         if not self._is_initializing:
             self.has_unsaved_changes = True
+            if manual:
+                self._rows_edited = True
+
+    def _on_row_toggled(self, row, status_block):
+        self._set_row_status(row)
+        status_block.Text = row.status_text
+        status_block.Foreground = System.Windows.Media.BrushConverter().ConvertFromString(
+            row.status_color
+        )
+        self._mark_changed(manual=True)
 
     # =========================================================================
     # Controls
@@ -475,6 +828,18 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         add_button = self.find_element_by_name(content, "AddCustomParameterButton")
         if add_button:
             add_button.Click += self._on_add_custom_clicked
+
+        self.preset_combo = self.find_element_by_name(content, "PresetComboBox")
+        if self.preset_combo:
+            self.preset_combo.SelectionChanged += self._on_preset_selected
+
+        save_preset_button = self.find_element_by_name(content, "SavePresetButton")
+        if save_preset_button:
+            save_preset_button.Click += self._on_save_preset_clicked
+
+        change_folder_button = self.find_element_by_name(content, "ChangePresetFolderButton")
+        if change_folder_button:
+            change_folder_button.Click += self._on_change_preset_folder_clicked
 
         apply_button = self.find_element_by_name(content, "ApplyButton")
         if apply_button:
@@ -511,7 +876,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         self.rows[-1].status_text = "Will be created"
         self.rows[-1].status_color = COLOR_WARNING
         self._refresh_rows_ui()
-        self._mark_changed()
+        self._mark_changed(manual=True)
 
     # =========================================================================
     # Row UI
@@ -581,11 +946,11 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
 
         def on_checked(sender, args):
             row.is_tracked = True
-            self._mark_changed()
+            self._on_row_toggled(row, status)
 
         def on_unchecked(sender, args):
             row.is_tracked = False
-            self._mark_changed()
+            self._on_row_toggled(row, status)
 
         checkbox.Checked += on_checked
         checkbox.Unchecked += on_unchecked
@@ -593,7 +958,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         grid.Children.Add(checkbox)
 
         # Name
-        if row.is_new and not row.is_locked:
+        if row.is_editable:
             name_box = TextBox()
             name_box.Text = row.name
             name_box.Margin = Thickness(2, 0, 6, 0)
@@ -601,7 +966,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
 
             def on_name_changed(sender, args):
                 row.name = sender.Text
-                self._mark_changed()
+                self._mark_changed(manual=True)
 
             name_box.TextChanged += on_name_changed
             name_control = name_box
@@ -618,7 +983,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         grid.Children.Add(name_control)
 
         # Type
-        if row.is_new and not row.is_locked:
+        if row.is_editable:
             type_combo = ComboBox()
             type_combo.Margin = Thickness(0, 0, 6, 0)
             type_combo.VerticalAlignment = VerticalAlignment.Center
@@ -634,7 +999,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
                 selected = sender.SelectedItem
                 if selected is not None:
                     row.parameter_type = selected.Tag
-                    self._mark_changed()
+                    self._mark_changed(manual=True)
 
             type_combo.SelectionChanged += on_type_changed
             type_control = type_combo
@@ -679,7 +1044,7 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
             def on_remove(sender, args):
                 self.rows.remove(row)
                 self._refresh_rows_ui()
-                self._mark_changed()
+                self._mark_changed(manual=True)
 
             remove_button.Click += on_remove
             Grid.SetColumn(remove_button, 4)
@@ -864,5 +1229,6 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         try:
             self._load_state()
             self._refresh_rows_ui()
+            self._populate_preset_combo()
         finally:
             self._is_initializing = False
