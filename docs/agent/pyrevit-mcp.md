@@ -44,7 +44,7 @@ Setup, the full tool table and the route table are in the root [README → HTTP 
 
 ## Path B: the pyRevit agent runtime (low level)
 
-> Status, checked 2026-11-14: the runtime shipped in **pyRevit 7.0** (October 2026) and is **experimental and off by default**. Facts below come from the [pyRevit agent runtime docs](https://docs.pyrevitlabs.io/agent-runtime/). Items marked *unverified* haven't been tested against a PDSO model yet. Confirm them on first use and update this file.
+> Status, checked 2026-11-14: the runtime shipped in **pyRevit 7.0** (October 2026) and is **experimental and off by default**. Facts below come from the [pyRevit agent runtime docs](https://docs.pyrevitlabs.io/agent-runtime/). Recipes 1–4 were run against a PDSO model on 2026-11-14 (Revit 2026.4, pyRevit 7.0.1, `pyrevit mcp install claude`). Recipe 5 and the sync script haven't been run yet. Items marked *unverified* haven't been tested; confirm them on first use and update this file.
 
 ### Setup (once per workstation)
 
@@ -85,7 +85,10 @@ The runtime can't press ribbon buttons yet: `list_commands`/`run_command` and th
 
 The runtime injects `doc`, `uidoc`, `app`, `uiapp`, `DB`, `UI` and `inputs` (a dict). Assign `result` to return JSON-serializable data; printed output is returned too.
 
-- Engine: IronPython by default (2.7.12 or 3.4.2, whichever pyRevit is attached to). Read `get_context().scripting` instead of guessing. Write the recipes below in syntax both versions accept: no f-strings, use `.format()`.
+- Engine: IronPython by default (2.7.12 or 3.4.2, whichever pyRevit is attached to). CPython 3.12 is also available with `engine="cpython"`. Read `get_context().scripting` instead of guessing. Write the recipes below in syntax both versions accept: no f-strings, use `.format()`.
+- `DB` is injected. The `revit-scripting` skill also shows `from pyrevit.api import DB, UI`, which works too.
+- **IronPython can't return non-ASCII text.** A `result` containing `²` (from `AsValueString()` on an area, for example `94 m²`), `é` or similar fails with `ResultSerializationError`. Return raw numbers (`AsDouble()`, Revit internal units: feet and square feet) or run with `engine="cpython"`.
+- **CPython: put the logic in a function.** List and dict comprehensions at the top level of a script can't see the script's own variables (the run fails with `'NoneType' object is not subscriptable` and "assigning None to unbound local" warnings). Wrap the script in `def main(doc, DB, inputs): ...` and end with `result = main(doc, DB, inputs)`.
 - `run_query`: `timeout_s` defaults to 300. `workspace=<folder>` puts that folder on `sys.path` and re-imports it fresh on every run.
 - `run_modify`: **the script opens and commits its own `DB.Transaction`.** The runtime wraps the whole run in a `TransactionGroup` named `Agent: <title>`, so it shows up as one undo entry. A transaction left open fails the run.
 - Changing another open document fails the run. Family documents opened with `EditFamily` are allowed, because they have no file.
@@ -145,10 +148,13 @@ def read_field(ent, f):
         d = ent.Get[IDictionary[String, String]](name)
         return dict((k, d[k]) for k in d.Keys)
     if vt == "System.Double":
-        try:
-            return ent.Get[Double](name, DB.UnitTypeId.Feet)
-        except Exception:
-            return ent.Get[Double](name)
+        # Use a unit the field accepts: program_volume_extrusion_height is a
+        # plain Number (feet by convention), so Feet is rejected.
+        spec = f.GetSpecTypeId()
+        units = [] if spec.Empty() else list(DB.UnitUtils.GetValidUnits(spec))
+        unit = next((u for u in units if u.TypeId == DB.UnitTypeId.General.TypeId),
+                    units[0] if units else None)
+        return ent.Get[Double](name, unit) if unit else ent.Get[Double](name)
     if vt in SIMPLE:
         return ent.Get[SIMPLE[vt]](name)
     return "<{} not decoded>".format(vt)
@@ -202,7 +208,7 @@ def value(p):
     if st == DB.StorageType.Integer:
         return p.AsInteger()  # Integer and Yes/No custom parameters
     if st == DB.StorageType.Double:
-        return p.AsValueString()  # display units, e.g. "1040 SF"
+        return round(p.AsDouble(), 2)  # internal units: sq ft for areas, ft for lengths
     return p.AsValueString()
 
 fam = inputs["family_name"]
@@ -223,7 +229,7 @@ result = {"count": len(rows), "data_silos": rows}
 
 #### 3. Health check (no sync needed)
 
-Builds on recipe 2. Add this after building `rows`:
+Builds on recipe 2. Add this after building `rows` (on CPython, put both in a function first; see Script contract):
 
 ```python
 import re

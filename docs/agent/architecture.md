@@ -51,17 +51,17 @@ Flow of values:
 - Harvested (Area → DSO): the parameters named in `area_scheme_mappings`. Set in `data_service.queue_area_updates`, together with `PDSO - Last Synced` (`"%Y-%m-%d %H:%M:%S"`). `ExtendedDataSilo.queue_resetting_params` first resets the `area`-role and Last Synced values, so a DSO that left its Area loses the old SF.
 - Pushed (DSO → every PV instance): **every tracked parameter** (`get_registry(doc).parameters`), in `data_service.queue_program_volume_instance_data_updates`.
 
-`standards/parameters.json`, the Model Setup `parameters` step and `standards/PDSO Shared Parameters.txt` predate the Parameter Manager. They still list the 20 built-ins.
+`standards/parameters.json` and `standards/PDSO Shared Parameters.txt` predate the Parameter Manager and still list the 20 built-ins. They're only used by Quick Setup's Shift+Click **Export PDSO shared parameter file**.
 
 ## Commands
 
 | Ribbon button | Folder | Entry | Writes to model? |
 | --- | --- | --- | --- |
-| Model Setup | `0.Setup.pushbutton` | `setup.runner.run_setup(doc, standards, steps)` | Yes, one `TransactionGroup` "PDSO Model Setup", one transaction per item |
-| Project Config | `1.Config.pushbutton` | `view_models/body_1_setup.PDSO_View_Model_1_Setup` (modeless WPF, window Uid `bbbtools-pdso-window`) | Yes, ES config on Save |
-| Parameter Manager | `1b.Parameters.pushbutton` | `view_models/body_3_parameters.py` → `PDSOParameterSetupService.apply` | Yes, on **Apply Parameters**: parameter bindings, Data Silo family, `tethered_parameters` |
-| Sync Data | `2.RunScripts.pushbutton` | `view_models/body_2_harvest_areas.py` (modeless WPF) → `PDSOPreflightService`, `PDSOSyncService` | Yes, via `ExternalEvent` |
-| Audit Report | `3.Audit.pushbutton` | `business/audit_service.generate_detailed_report(output, logger)` | No |
+| Project Config | `0.Config.pushbutton` | `view_models/body_1_setup.PDSO_View_Model_1_Setup` (modeless WPF, window Uid `bbbtools-pdso-window`) | Yes, ES config on Save |
+| Parameter Manager | `1.Parameters.pushbutton` | `view_models/body_3_parameters.py` → `PDSOParameterSetupService.apply` | Yes, on **Apply Parameters**: parameter bindings, Data Silo family, `tethered_parameters` |
+| Quick Setup | `2.Setup.pushbutton` | `setup.runner.run_setup(doc, standards, steps)` | Yes, one `TransactionGroup` "PDSO Quick Setup", one transaction per item |
+| Sync Data | `3.RunScripts.pushbutton` | `view_models/body_2_harvest_areas.py` (modeless WPF) → `PDSOPreflightService`, `PDSOSyncService` | Yes, via `ExternalEvent` |
+| Audit Report | `4.Audit.pushbutton` | `business/audit_service.generate_detailed_report(output, logger)` | No |
 
 Button order comes from the panel's `bundle.yaml` `layout`. Bundles use `context: doc-project`; Config, Parameters, Sync and Audit use a persistent engine (`engine: persistent: true`) so the modeless windows survive.
 
@@ -129,7 +129,10 @@ Skipped when `program_volume_data_update` is `No`.
 
 Each phase catches its own exceptions and logs them; a failure in one phase doesn't stop the next. Phases 2 and 3 reuse the collections that phase 1 built.
 
-## Model Setup
+## Quick Setup
+
+Users run it **last** of the three setup buttons: Project Config → Parameter Manager → Quick Setup. Steps (`setup.json` order): `area_schemes` (creates the Revit schemes named in `area_scheme_mappings` by copying an existing scheme and renaming it), `families` (loads the shipped Data Silo family; keeps Project Config's family if it names a different, loaded one), `view_templates`, `views`, `schedules`. There is no parameters step; the Parameter Manager owns parameters.
+
 
 `setup/standards.py` resolves each `<id>.json` from the first folder that has it: project `PDSO Standards/` next to the (central) model, then the user folder picked with Shift+Click, then `%PDSO_STANDARDS_DIR%`, then `lib/pdso/standards/`. Files aren't merged. Tokens such as `{revit_yy}` and `{repo_dir}` are expanded. `setup/runner.py` runs the steps in `STEP_RUNNERS` (`setup/steps/__init__.py`) in `setup.json` order and collects report rows with `SetupContext.add()`. Format spec: `PDSO.extension/lib/pdso/standards/README.md`.
 
@@ -151,10 +154,9 @@ Verify these before relying on them. They're good candidates for issues or hacka
 1. **The "Recompute All Geometry" option is not honored.** It's in `SYNC_OPTIONS`, but phase 2 only checks for `"No"`; both "Yes" options use the hash cache.
 2. **The geometry hash ignores the DSO position and the extrusion height (suspected).** Geometry is stored relative to the DSO location, but the hash covers only the Area boundary. Moving a DSO inside its Area, or changing the configured height, may leave a stale family. `area_basepoint` was probably meant for this. Today the workaround is to delete the PV family and sync again.
 3. **Changing a Program UID orphans its Program Volumes (suspected).** PV families and instances are found by the name `{prefix}{UID}`. After a UID edit the sync builds a new family and leaves the old one in the model. Changing the prefix in Project Config orphans every PV the same way. The audit counts orphaned PV instances but doesn't remove them.
-4. ~~**Stale schema docstring.**~~ Fixed: the docstring, the Project Config screen (which saved scheme → parameter) and the correlation key now all use parameter → scheme.
-5. **Model Setup's parameters step overlaps the Parameter Manager and bootstrap.** `steps/parameters.py` is still a placeholder that only reports, and `standards/parameters.json` is separate from the tracked list. Decide whether Model Setup should call `PDSOParameterSetupService.apply` or drop the step.
-6. **Two setup paths.** Model Setup (ribbon, JSON standards) and `bootstrap_service` (API) both prepare a model, with different rules. Changes to one may need the other.
-7. **Default family name mismatch.** A fresh config has `data_silo_family_name = "Program Data Silo Object - Rvt25"`, while the shipped family is `PDSO - Program Data Silo Object - Rvt26`. Model Setup and bootstrap set the real one.
-8. **Leftover global `revit.doc`.** `audit_service.py` and `data/extended_program_volume_instance.py` still use `revit.doc` instead of an injected `doc`. That's fine with one open document, but risky with several.
-9. **Unused fields.** `hashed_parameters` (PV instance) and `area_basepoint` (PV family) are defined but not used.
-10. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.
+4. **The UID pattern is only enforced by the API.** `config.uid_pattern` is checked in `program_service.py` when programs are created or updated through the API. Preflight, Sync Data and the Data Silo schedule never check it, so a UID typed in Revit that breaks the pattern (seen: `01-01`) syncs anyway. The Audit Report only displays the pattern.
+5. ~~**Stale schema docstring.**~~ Fixed: the docstring, the Project Config screen (which saved scheme → parameter) and the correlation key now all use parameter → scheme.
+6. **Two setup paths.** Quick Setup (ribbon, JSON standards) and `bootstrap_service` (API) both prepare a model, with different rules. Changes to one may need the other.
+7. **Leftover global `revit.doc`.** `audit_service.py` and `data/extended_program_volume_instance.py` still use `revit.doc` instead of an injected `doc`. That's fine with one open document, but risky with several.
+8. **Unused fields.** `hashed_parameters` (PV instance) and `area_basepoint` (PV family) are defined but not used.
+9. **Doc drift.** The intranet reference says DSO values are copied to Areas. They aren't; data never flows to Areas.

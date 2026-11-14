@@ -9,7 +9,7 @@ Orientation for coding agents. Read this first, then open only the doc you need.
 | HTTP API routes, MCP tools and setup | [README.md → HTTP API and MCP server](README.md#http-api-and-mcp-server) |
 | What users see and do, step by step | [docs/user-guide.md](docs/user-guide.md) |
 | Every Data Silo parameter, who writes it | [docs/parameter-reference.md](docs/parameter-reference.md) |
-| Model Setup JSON standards format | [PDSO.extension/lib/pdso/standards/README.md](PDSO.extension/lib/pdso/standards/README.md) |
+| Quick Setup JSON standards format | [PDSO.extension/lib/pdso/standards/README.md](PDSO.extension/lib/pdso/standards/README.md) |
 
 ## What this is
 
@@ -41,11 +41,11 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
 PDSO.extension/
   startup.py                 registers the HTTP API (pyRevit Routes, API name "pdso")
   PDSO.tab/Program Data Silo Tools.panel/
-    0.Setup.pushbutton/      → setup.runner.run_setup (config.py = Shift+Click menu)
-    1.Config.pushbutton/     → view_models/body_1_setup.py (Project Config window)
-    1b.Parameters.pushbutton/→ view_models/body_3_parameters.py (Parameter Manager window)
-    2.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
-    3.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
+    0.Config.pushbutton/     → view_models/body_1_setup.py (Project Config window)
+    1.Parameters.pushbutton/ → view_models/body_3_parameters.py (Parameter Manager window)
+    2.Setup.pushbutton/      → setup.runner.run_setup ("Quick Setup"; config.py = Shift+Click menu)
+    3.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
+    4.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
   lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     api/        dispatcher.py (routing, {"ok","data"|"error"} envelope), handlers.py (route table)
@@ -59,7 +59,7 @@ PDSO.extension/
                   parameter_registry_service, parameter_preset_service  ← building blocks
                   revit_helpers, log_capture, errors
     data/       Extended* wrappers around rpw elements + collections; schemas; parameter catalog
-    setup/      Model Setup: standards loader, runner, steps/*.py
+    setup/      Quick Setup: standards loader, runner, steps/*.py
     view_models/ WPF MVVM (thin over the services)
   lib/pdso/standards/   default JSON standards + generated shared parameter file
   lib/pdso/xaml/        WPF windows
@@ -89,7 +89,7 @@ families/               Data Silo .rfa (Revit 2026)
 | Stacking notation (`03-05, 10`) | `business/level_mapping_service.py`; background in `lib/pdso/code/legacy/LEVEL_MAPPING_PROCESS.md` |
 | Program Volume geometry and naming | `business/family_manager_service.py` (`<prefix><Program UID>`); shape Area chosen in `ExtendedDataSilo.get_area_for_program_volume_family_geometry` |
 | Skip-if-unchanged logic | `business/hashing_service.py` + hashes stored in the PV family schema |
-| Adding a Model Setup step | `setup/steps/__init__.py` (`STEP_RUNNERS`) + `standards/setup.json` |
+| Adding a Quick Setup step | `setup/steps/__init__.py` (`STEP_RUNNERS`) + `standards/setup.json` |
 
 ## Known gaps and traps
 
@@ -97,8 +97,7 @@ families/               Data Silo .rfa (Revit 2026)
 - **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that. The Project Config screen shows each row as Area Scheme → Parameter and swaps on load and save; it also reads configs saved the old way (`{scheme: parameter}`) and rewrites them correctly on the next save.
 - **"Yes - Recompute All Geometry" isn't acted on.** It's accepted as an option, but phase 2 only checks for `"No"`.
 - **Program Volumes are found by family name `{prefix}{UID}`.** Changing a UID or the prefix leaves the old family behind (suspected; see architecture.md).
-- **Model Setup's `parameters` step only reports.** The Parameter Manager (or `POST bootstrap` / `parameter_service`) creates and binds parameters.
-- **Default `data_silo_family_name`** in a fresh config is `Program Data Silo Object - Rvt25`, which doesn't match the shipped family. Model Setup and bootstrap set the real one.
+- **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded.
 - **Large files:** `audit_service.py`, `sync_service.py`, `preflight_service.py`, `body_3_parameters.py`, `mcp/pdso_mcp_server.py` (1–1.5k lines each). Navigate with `grep -n "def "`.
 - **The intranet docs predate this code.** Where they disagree, the code wins. Differences are listed at the end of [docs/parameter-reference.md](docs/parameter-reference.md).
 
@@ -108,5 +107,5 @@ families/               Data Silo .rfa (Revit 2026)
 - Caller-fixable errors raise types from `business/errors.py`; the API turns them into `{"ok": false, "error": ...}`.
 - API and MCP units: lengths in decimal feet, areas in square feet.
 - Transactions in the project document are named `PDSO - ...` so they're recognizable in Undo.
-- Ribbon titles differ from folder names: `2.RunScripts.pushbutton` shows as **Sync Data**.
+- Ribbon titles differ from folder names: `2.Setup.pushbutton` shows as **Quick Setup**, `3.RunScripts.pushbutton` as **Sync Data**.
 - User-facing text: short, plain sentences. Name buttons as the ribbon shows them.

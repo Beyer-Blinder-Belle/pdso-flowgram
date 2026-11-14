@@ -1,9 +1,9 @@
 {
-  "_comment": "Which setup steps run, in this order, and whether each is pre-ticked in the Model Setup dialog. See README.md in this folder.",
+  "_comment": "Which setup steps run, in this order, and whether each is pre-ticked in the Quick Setup dialog. Run Project Config and the Parameter Manager before Quick Setup. See README.md in this folder.",
   "steps": [
     {
-      "id": "parameters",
-      "title": "Add PDSO shared parameters to Generic Models",
+      "id": "area_schemes",
+      "title": "Create the area schemes from Project Config",
       "enabled": true
     },
     {

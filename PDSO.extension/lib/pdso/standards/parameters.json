@@ -1,5 +1,5 @@
 {
-  "_comment": "PROPOSED contract for the parameters step (owned by a teammate; see steps/parameters.py). Mirrors standard_pdso_parameters in shared_parameter_constants.py. GUIDs must not change: the PDSO tools look parameters up by GUID.",
+  "_comment": "Not a Quick Setup step: the Parameter Manager creates and binds parameters. This file is only used by Shift+Click Quick Setup > Export PDSO shared parameter file. Mirrors standard_pdso_parameters in shared_parameter_constants.py. GUIDs must not change: the PDSO tools look parameters up by GUID.",
   "categories": ["OST_GenericModel"],
   "binding": "instance",
   "group": "PG_DATA",

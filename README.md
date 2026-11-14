@@ -8,13 +8,13 @@ Built by the DCT team at [Beyer Blinder Belle](https://www.beyerblinderbelle.com
 
 ## What it does
 
-The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four commands:
+The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has five commands. The first three set up a model, in this order:
 
 | Button | What it does |
 | --- | --- |
-| **Model Setup** | Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
-| **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
+| **Project Config** | Sets up the model-level PDSO configuration (area scheme mappings, level mapping, Data Silo family, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
 | **Parameter Manager** | Chooses which parameters PDSO tracks and creates them as shared parameters, bound to Generic Models (and optionally embedded in the Data Silo family). Must be run at least once per model before syncing. |
+| **Quick Setup** | Creates everything else PDSO needs in the model: the area schemes from Project Config, the Data Silo family, view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
 | **Sync Data** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
 
@@ -57,11 +57,11 @@ PDSO needs the **Program Data Silo Object** family loaded in your project. The f
 
 - `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
 
-**Model Setup** loads it and sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+**Quick Setup** loads it and, unless Project Config already names a different loaded family, sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
 
 ## Standards
 
-Model Setup is driven by JSON files in [`PDSO.extension/lib/pdso/standards/`](PDSO.extension/lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Model Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](PDSO.extension/lib/pdso/standards/README.md) for every option.
+Quick Setup is driven by JSON files in [`PDSO.extension/lib/pdso/standards/`](PDSO.extension/lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Quick Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](PDSO.extension/lib/pdso/standards/README.md) for every option.
 
 ## HTTP API and MCP server
 
@@ -196,11 +196,11 @@ PDSO.extension/
 ├── startup.py                        # Registers the HTTP API with pyRevit Routes
 ├── PDSO.tab/
 │   └── Program Data Silo Tools.panel/
-│       ├── 0.Setup.pushbutton/       # Model Setup from JSON standards (Shift+Click: options)
-│       ├── 1.Config.pushbutton/      # Project configuration window
-│       ├── 1b.Parameters.pushbutton/ # Parameter Manager (tracked shared parameters)
-│       ├── 2.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
-│       └── 3.Audit.pushbutton/       # Audit report
+│       ├── 0.Config.pushbutton/      # Project configuration window
+│       ├── 1.Parameters.pushbutton/  # Parameter Manager (tracked shared parameters)
+│       ├── 2.Setup.pushbutton/       # Quick Setup from JSON standards (Shift+Click: options)
+│       ├── 3.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
+│       └── 4.Audit.pushbutton/       # Audit report
 └── lib/
     ├── common/                       # Shared helpers and UI assets
     └── pdso/
@@ -208,9 +208,9 @@ PDSO.extension/
         │   ├── api/                  # HTTP API: request dispatcher and route handlers
         │   ├── business/             # Services: sync, hashing, level mapping, storage, ...
         │   ├── data/                 # Wrappers around Revit elements, schemas, parameter constants
-        │   ├── setup/                # Model Setup: standards loader, runner and steps
+        │   ├── setup/                # Quick Setup: standards loader, runner and steps
         │   └── view_models/          # WPF view models (MVVM)
-        ├── standards/                # Default JSON standards for Model Setup
+        ├── standards/                # Default JSON standards for Quick Setup
         ├── xaml/                     # WPF windows and styles
         └── documentation/            # Developer notes
 ```

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Model Setup step: load families listed in families.json."""
+"""Quick Setup step: load families listed in families.json."""
 
 # Python standard libraries
 import os
@@ -86,9 +86,23 @@ def _load_family(ctx, spec):
 
 
 def _register_data_silo_family(ctx, family_name):
-    """Point the model's PDSO Project Config at the loaded Data Silo family."""
+    """Point the model's PDSO Project Config at the loaded Data Silo family.
+
+    Project Config runs before Quick Setup, so a family the user already chose
+    there wins if it's loaded. Otherwise (a new model, or a name that isn't
+    loaded) Project Config is pointed at the family this step loaded.
+    """
     previous = ctx.pdso_config["data_silo_family"]
     if previous == family_name:
+        return
+    if previous and revit_utils.find_family(ctx.doc, previous) is not None:
+        ctx.add(
+            "Project Config",
+            status.SKIPPED,
+            "Keeping the Data Silo family chosen in Project Config ('{}')".format(
+                previous
+            ),
+        )
         return
 
     if ctx.set_data_silo_family(family_name):

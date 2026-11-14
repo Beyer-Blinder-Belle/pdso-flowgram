@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Statuses for rows in the Model Setup report."""
+"""Statuses for rows in the Quick Setup report."""
 
 CREATED = "Created"
 UPDATED = "Updated"

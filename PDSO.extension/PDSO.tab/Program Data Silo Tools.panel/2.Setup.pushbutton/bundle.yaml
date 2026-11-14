@@ -1,0 +1,15 @@
+# bundle title
+title: "Quick\nSetup"
+
+# bundle tooltip
+tooltip: >-
+  Run this after Project Config and the Parameter Manager. Creates what PDSO needs
+  in the model: the area schemes from Project Config, the Data Silo family, view
+  templates, working views and schedules. Everything it creates is defined in JSON
+  standards files that your company or project can customize.
+  Shift+Click to choose or export a standards folder.
+
+# bundle author
+author: BBB DCT
+
+context: doc-project

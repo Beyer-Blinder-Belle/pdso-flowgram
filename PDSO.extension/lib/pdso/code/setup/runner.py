@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Runs the PDSO Model Setup steps and reports what they did.
+"""Runs the PDSO Quick Setup steps and reports what they did.
 
 Each step reads its own standards file (<step id>.json) and adds rows to the
 report with SetupContext.add(). Steps run inside one TransactionGroup, so the
-whole setup shows up as a single "PDSO Model Setup" undo in Revit. Each item a
+whole setup shows up as a single "PDSO Quick Setup" undo in Revit. Each item a
 step creates gets its own transaction, so one bad item doesn't roll back the rest.
 """
 
@@ -210,7 +210,7 @@ def run_setup(doc, standards, steps):
     """
     ctx = SetupContext(doc, standards)
 
-    group = DB.TransactionGroup(doc, "PDSO Model Setup")
+    group = DB.TransactionGroup(doc, "PDSO Quick Setup")
     group.Start()
     try:
         for step in steps:
@@ -275,7 +275,22 @@ def print_report(ctx, output):
             current_step = step_id
             table = []
         table.append(
-            [item, u"{} {}".format(status.ICONS.get(row_status, ""), row_status), message]
+            [
+                _table_cell(item),
+                u"{} {}".format(status.ICONS.get(row_status, ""), row_status),
+                _table_cell(message),
+            ]
         )
     if table:
         output.print_table(table, columns=["Item", "Status", "Notes"])
+
+
+def _table_cell(text):
+    """Make text safe for one markdown table cell.
+
+    Revit error messages can span several lines ("...\\nParameter name: filter"). A
+    line break or a "|" inside a cell breaks the markdown table, and pyRevit then
+    drops the row from the report.
+    """
+    text = u" ".join(u"{}".format(text or u"").split())
+    return text.replace(u"|", u"\\|")

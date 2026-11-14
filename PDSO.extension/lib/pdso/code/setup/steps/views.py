@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Model Setup step: create working views listed in views.json."""
+"""Quick Setup step: create working views listed in views.json."""
 
 # 3rd Party Modules
 from pyrevit import DB

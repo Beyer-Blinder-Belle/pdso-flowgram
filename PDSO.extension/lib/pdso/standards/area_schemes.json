@@ -1,0 +1,5 @@
+{
+  "_comment": "Area schemes to create. With from_project_config, setup creates every Revit area scheme named in Project Config's area scheme mappings (PDSO - GSF, PDSO - NSF and PDSO - ZFA by default). List more names in 'schemes'. Schemes already in the model are left alone. See README.md in this folder.",
+  "from_project_config": true,
+  "schemes": []
+}
