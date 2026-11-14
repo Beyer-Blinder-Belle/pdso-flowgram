@@ -28,7 +28,7 @@ You can't type these. They're harvested from the Area that contains the Data Sil
 
 | Parameter | Type | Default scheme | Purpose | Example |
 | --- | --- | --- | --- | --- |
-| `PDSO - GSF` | Area | `PDSO - GSF` | Gross square footage. **Also the shape of the Program Volume.** | `1040 SF` |
+| `PDSO - GSF` | Area | `PDSO - GSF` | Gross square footage. **Its Area also gives the Program Volume its shape.** | `1040 SF` |
 | `PDSO - NSF` | Area | `PDSO - NSF` | Net rentable or sellable square footage. | `760 SF` |
 | `PDSO - ZFA` | Area | `PDSO - ZFA` | Zoning floor area. Useful for non-residential program too. | `980 SF` |
 

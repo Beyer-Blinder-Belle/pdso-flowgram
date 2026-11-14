@@ -1,10 +1,52 @@
-# Driving PDSO through the pyRevit MCP
+# Operating PDSO from an agent (MCP)
 
-How an agent (Claude Code, Codex, Cursor, ...) can inspect and edit a PDSO model in a running Revit session through the **pyRevit agent runtime**. Read [AGENTS.md](../../AGENTS.md) and [architecture.md](architecture.md) first for the domain model.
+How an agent (Claude Code, Codex, Cursor, ...) can inspect and change a PDSO model in a running Revit session. Read [AGENTS.md](../../AGENTS.md) and [architecture.md](architecture.md) first for the domain model.
+
+There are two ways in. **Use the PDSO MCP server unless it can't do what you need.**
+
+| | PDSO MCP server (`mcp/pdso_mcp_server.py`) | pyRevit agent runtime (pyRevit 7) |
+| --- | --- | --- |
+| Level | PDSO tasks: programs, Areas, parameters, preflight, sync, audit, images | Raw Revit API scripts |
+| Runs the sync | Yes: `run_sync` | Only by importing `PDSOSyncService` in a `run_modify` script |
+| Safety net | PDSO validation (`PDSOError`), preflight before sync | Approval prompt in Revit, dry runs, one undo entry per run |
+| Transport | stdio → HTTP on `127.0.0.1:48884` (pyRevit Routes), optional SSH forward | stdio → named pipe for the current Windows user |
+| Use it for | Normal PDSO work | Ad-hoc questions the API doesn't answer, debugging |
+
+## Path A: the PDSO MCP server (recommended)
+
+Setup, the full tool table and the route table are in the root [README → HTTP API and MCP server](../../README.md#http-api-and-mcp-server). In short:
+
+1. On the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit.
+2. Add the `pdso` server to `.mcp.json`: `uv run --script <repo>/mcp/pdso_mcp_server.py`. Set `PDSO_SSH_HOST` only when Revit is on another machine.
+3. Check the connection with `get_status`.
+
+### A typical session
+
+| Step | Tools |
+| --- | --- |
+| Orient | `get_status`, `get_config`, `check_config`, `list_levels` |
+| Make a model ready (only if asked) | `setup_model` (bootstrap: creates only what's missing) |
+| Learn the data shape | `get_program_fields` (field names such as `uid`), `list_parameters` |
+| Read the program | `list_programs`, `summarize_programs`, `describe_program`, `list_areas` |
+| See it | `render_plan` (diagram from model data, can preview draft outlines), `export_view_image`, `color_areas` |
+| Change it (only what the user asked) | `update_program(s)`, `create_program(s)`, `draft_area`, `adjust_area` |
+| Push the data through | `run_preflight` → fix ✗ items → `run_sync` → `get_audit_report` |
+| Show the user | `select_programs`, `select_elements`, `show_view`, `show_program_volumes` |
+
+### Rules for Path A
+
+- **Never pass `force=true` to `run_sync`** unless the user explicitly says to skip failed preflight checks. Fix the ✗ items instead, or report them.
+- **Confirm before destructive calls**: `delete_program`, `delete_area`, `delete_parameter` (especially with `purge=true`, which deletes values), `close_project` without saving, and `new_project`/`open_project` when the current model has unsaved changes.
+- `update_config` changes per-project setup: area scheme mappings, the family prefix and level mapping. Wrong values orphan Program Volumes. Only change config when the user asks, and say what it affects.
+- Use field names from `get_program_fields`, not Revit parameter names, in program calls.
+- Units are decimal feet and square feet everywhere.
+- The HTTP API has no authentication. Don't suggest exposing port 48884, and don't enable the dev flag (`/pdso/dev/exec`) on a non-dev machine.
+
+## Path B: the pyRevit agent runtime (low level)
 
 > Status, checked 2026-11-14: the runtime shipped in **pyRevit 7.0** (October 2026) and is **experimental and off by default**. Facts below come from the [pyRevit agent runtime docs](https://docs.pyrevitlabs.io/agent-runtime/). Items marked *unverified* haven't been tested against a PDSO model yet. Confirm them on first use and update this file.
 
-## Setup (once per workstation)
+### Setup (once per workstation)
 
 ```bash
 pyrevit configs agent enable
@@ -24,7 +66,7 @@ pyrevit agent status
 - Approval policy: `pyrevit configs agent policy ask` (the default) asks for approval in Revit for every modify run. `readonly` allows queries and dry runs only. `auto` commits without asking. Use `ask` on real projects.
 - With several Revit sessions open, pass `revit="2026"` (year or process id) on each tool call.
 
-## Tools and what to use them for
+### Tools and what to use them for
 
 | Tool | Use it in PDSO work to |
 | --- | --- |
@@ -37,9 +79,9 @@ pyrevit agent status
 | `lookup_revit_api` | Check Revit API signatures for the running Revit version (for example, `ElementId.Value` vs `IntegerValue`). |
 | `get_run` | Fetch the record of an earlier run. |
 
-There is **no tool to run a pushbutton yet.** `list_commands`/`run_command` and the `agent:` block in `bundle.yaml` are "Phase 3, planned". **Model Setup, Project Config and Sync Data can't be triggered by an agent today**; ask the user to click them. See [Running the sync](#running-the-sync).
+The runtime can't press ribbon buttons yet: `list_commands`/`run_command` and the `agent:` block in `bundle.yaml` are "Phase 3, planned". To run PDSO workflows from Path B, import the services (next sections), or use Path A.
 
-## Script contract
+### Script contract
 
 The runtime injects `doc`, `uidoc`, `app`, `uiapp`, `DB`, `UI` and `inputs` (a dict). Assign `result` to return JSON-serializable data; printed output is returned too.
 
@@ -50,9 +92,9 @@ The runtime injects `doc`, `uidoc`, `app`, `uiapp`, `DB`, `UI` and `inputs` (a d
 - Revit dialogs are closed automatically and listed in the result.
 - Return ids with `ElementId.Value` (Revit 2024+). `IntegerValue` was removed in later versions.
 
-## Using PDSO's own library (optional)
+### Using PDSO's own library (optional)
 
-The recipes below use only the Revit API, so they work without importing PDSO code. That's the reliable default. To reuse PDSO classes instead (`ExtendedDataSiloCollection`, `PDSOCorrelationService`, ...), make its `lib` importable:
+The recipes below use only the Revit API, so they work without importing PDSO code. To reuse PDSO services instead, make its `lib` importable. The services are `PDSOPreflightService`, `PDSOSyncService`, `config_service.get_config`, `program_service` and `get_registry`.
 
 ```python
 import sys
@@ -65,18 +107,20 @@ Or pass `workspace=<repo>/PDSO.extension/lib` to `run_query`.
 
 That one folder covers `pdso`, `common` and the vendored `extensible_storage` library. The most useful import is `from pdso.code.business.parameter_registry_service import get_registry`.
 
+The services already run outside a pyRevit command (the HTTP API uses them), so they should work in agent runs too.
+
 *Unverified:*
 
 - Whether pyRevit puts extension `lib` folders on `sys.path` for agent runs.
-- Whether PDSO classes work outside a command context. They call `script.get_output()` in `__init__`, which assumes a pyRevit output window.
+- Whether `PDSOSyncService` works inside `run_modify`'s transaction group. Phase 2 edits and reloads family documents, which the runtime allows. Test with `dry_run=true` on a test model first.
 
 If any of these fail, fall back to the raw-API recipes.
 
-## Recipes
+### Recipes
 
 Each block is a complete script for `run_query` unless it says otherwise.
 
-### 1. Read Project Config (extensible storage)
+#### 1. Read Project Config (extensible storage)
 
 ```python
 from System import Guid, String, Double, Boolean
@@ -131,7 +175,7 @@ Fields to expect:
 
 The other recipes take `family_name`, `prefix` and `params` (the keys of `tethered_parameters`) from this result, through `inputs`.
 
-### 2. List Data Silos and their data
+#### 2. List Data Silos and their data
 
 `inputs`: `{"family_name": "<data_silo_family_name>", "params": [<tracked names from recipe 1>]}`. If `params` is omitted, the script falls back to the built-in names.
 
@@ -177,7 +221,7 @@ for fi in col:
 result = {"count": len(rows), "data_silos": rows}
 ```
 
-### 3. Health check (no sync needed)
+#### 3. Health check (no sync needed)
 
 Builds on recipe 2. Add this after building `rows`:
 
@@ -200,7 +244,7 @@ result = {
 
 This doesn't replace preflight or Audit Report, which also check Area containment, level mapping and boundaries. It's a quick triage before you ask the user to run them.
 
-### 4. Program Volumes per Data Silo
+#### 4. Program Volumes per Data Silo
 
 `inputs`: `{"prefix": "<program_volume_family_name_prefix>"}`
 
@@ -225,15 +269,15 @@ result = {"uids": dict(by_family), "family_count": len(by_family)}
 
 Compare with recipe 2 to find orphans: a UID here with no Data Silo means a renamed or deleted unit. Compare instance counts with `1 + stacked levels` to find stacking that hasn't been synced.
 
-### 5. Edit Data Silo values (`run_modify`)
+#### 5. Edit Data Silo values (`run_modify`)
 
-`inputs`: `{"family_name": "...", "tracked": [<tracked names>], "area_params": [<area_scheme_mappings keys and values>], "updates": {"00-07-01": {"PDSO - DU Bedroom Count": 2, "PDSO - Unit Layout Type": "2BR - Type A"}}}`
+`inputs`: `{"family_name": "...", "tracked": [<tracked names>], "area_params": [<area_scheme_mappings keys>], "updates": {"00-07-01": {"PDSO - DU Bedroom Count": 2, "PDSO - Unit Layout Type": "2BR - Type A"}}}`
 
 ```python
 fam, updates = inputs["family_name"], inputs["updates"]
 tracked = set(inputs["tracked"])
-# Sync-owned: harvested SF parameters and Last Synced. Pass both sides of
-# area_scheme_mappings, since the code reads that map in both directions.
+# Sync-owned: harvested SF parameters (the keys of area_scheme_mappings)
+# and Last Synced.
 PROTECTED = set(inputs.get("area_params") or []) | {
     "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA", "PDSO - Last Synced"}
 
@@ -282,7 +326,7 @@ result = {"changed": changed, "skipped": missing}
 
 Run it with `dry_run=true` first and show the user the change set. The values only reach Program Volumes after the user runs **Sync Data**.
 
-## Rules for agents
+### Rules for Path B
 
 - **Write only to Data Silos**, and only **tracked**, user-owned parameters. Never write Program Volumes, the harvested SF parameters, `PDSO - Last Synced`, or Area parameters.
 - **Don't change which parameters are tracked** from a script. That's the Parameter Manager's job (`PDSOParameterSetupService.apply`), and untracking deletes values.
@@ -292,18 +336,22 @@ Run it with `dry_run=true` first and show the user the change set. The values on
 - In workshared models, elements owned by someone else fail to edit. Report them; don't retry.
 - Model data is sent to the AI provider, and run records are kept in plaintext under `%APPDATA%\pyRevit\agent\runs` for 14 days. Don't run this on projects whose data can't leave the machine.
 
-## Running the sync
+### Running the sync from Path B
 
-Today an agent **can't** start Sync Data:
+Prefer `run_sync` on the PDSO MCP server. If you must use the runtime, a `run_modify` script (after a `dry_run=true` pass) can do this:
 
-1. There's no `run_command` tool yet.
-2. The sync logic lives in the WPF view model (`view_models/body_2_harvest_areas.py`), not in a callable function.
+```python
+import sys
+sys.path.append(inputs["pdso_lib"])  # <repo>/PDSO.extension/lib
+from pdso.code.business.preflight_service import PDSOPreflightService
+from pdso.code.business.sync_service import PDSOSyncService
 
-Ask the user to click **Sync Data** and then verify with recipes 2–4.
+pre = PDSOPreflightService(doc)
+pre.run_preflight_checks()
+if not pre.can_run_sync:
+    result = {"ran": False, "preflight": pre.results()}
+else:
+    result = {"ran": True, "summary": PDSOSyncService(doc, options=inputs.get("options")).run()}
+```
 
-**Making it callable** is the integration work for the hackathon:
-
-1. Extract `run_preflight(doc) -> dict` and `run_sync(doc, options) -> dict` from the view model into `lib/pdso/code/business/` (for example, `sync_service.py`). They should take an injected `doc`, use no UI properties, and return the check results and per-phase counts. The view model then calls them, so the button behaves the same.
-2. Make the classes they use safe without a pyRevit output window: create `script.get_output()` lazily or let callers inject it.
-3. Call it from `run_modify` with `sys.path` pointing to `PDSO.extension/lib`. Phase 2 opens family documents with `EditFamily` and loads them back, which the runtime allows. *Verify with `dry_run` on a test model first.*
-4. When pyRevit's Phase 3 ships, add an `agent:` block (`expose: true`) to the Sync Data and Audit Report `bundle.yaml` files so agents can call them as commands.
+The services open their own transactions, which nest inside the runtime's `Agent: <title>` group.

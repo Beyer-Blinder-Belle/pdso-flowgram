@@ -77,7 +77,7 @@ In **Area and Volume Computations → Area Schemes**, create:
 - `PDSO - NSF`
 - `PDSO - ZFA`
 
-Don't reuse Revit's built-in **Gross Building** scheme. Model Setup doesn't create area schemes. Use these exact names: Program Volume shapes come from the scheme named `PDSO - GSF`.
+Don't reuse Revit's built-in **Gross Building** scheme. Model Setup doesn't create area schemes. If your model already has its own schemes (for example **Gross Building** and **Rentable**), you can map them instead in Project Config (step 3).
 
 Type the names with a plain hyphen (`-`), not an en dash (`–`).
 
@@ -101,7 +101,7 @@ Click **Project Config**. The settings are saved in the model, so set them once 
 | --- | --- |
 | **Data Silo Family Name** | The family PDSO treats as Data Silos. Model Setup fills this in. |
 | **Program UID Regex Pattern** | Optional rule that every Program UID must match. The default, `^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$`, means `BLDG-FLR-UNIT`, for example `00-07-01` or `NB-02-UD`. Leave it blank to allow any UID. |
-| **Area Scheme to Parameter Mappings** | Which area scheme fills which Data Silo parameter (`PDSO - GSF` → `PDSO - GSF`, and so on). Keep the defaults: today, Program Volume shapes need a scheme named exactly `PDSO - GSF`, and mappings whose two sides differ aren't reliable yet. |
+| **Area Scheme to Parameter Mappings** | Which area scheme fills which Data Silo parameter (`PDSO - GSF` → `PDSO - GSF`, and so on). Program Volume shapes come from the Area in the `PDSO - GSF` scheme. If there's no scheme with that name, they come from the smallest Area that contains the Data Silo. |
 | **Program Volume Family Name Prefix** | PDSO names each Program Volume family `<prefix><Program UID>`, and uses the prefix to find them. Default `PDSO_ProgramVolume-`. |
 | **Program Volume Extrusion Height** | Height of Program Volumes, in feet. Default 8. |
 | **Data Silo / Program Volume / Area Workset** | Optional. If set, Sync Data can move elements to these worksets or warn when they're on the wrong one. |
@@ -176,7 +176,7 @@ Save (and sync with central) first. Then click **Sync Data**.
 
 3. Click **Run Sync Process**. The sync runs in three phases:
    1. **Area Harvest**: finds the Area each Data Silo sits in for each scheme and writes its SF to `PDSO - GSF`/`NSF`/`ZFA`, and stamps `PDSO - Last Synced`.
-   2. **Family Geometry**: creates or updates one Program Volume family per Data Silo, shaped from its GSF Area and extruded to the configured height.
+   2. **Family Geometry**: creates or updates one Program Volume family per Data Silo, shaped from its GSF Area (or its smallest Area if there's no `PDSO - GSF` scheme) and extruded to the configured height.
    3. **Instance Updates**: places a Program Volume instance on the Data Silo's level and each stacked level, removes ones no longer needed, and copies every tracked parameter from the Data Silo onto them.
 
 Keep the console open. It logs each step and any element it skipped.
@@ -218,12 +218,16 @@ Run **Audit Report** first. It lists every problem with a link to the elements.
 | Area has more than one Data Silo | Two units share one Area | Split the Area, or delete the extra Data Silo. |
 | Area reports 0 SF / "not enclosed" | Boundary lines don't close, or two Areas share one enclosure | Close the boundary or delete the duplicate Area. |
 | "Boundary can't be closed" / "self-intersecting" | Boundary lines overlap, cross or have large gaps | Trim and join boundary lines so they meet end to end. |
-| No Program Volume for a Data Silo | No GSF Area, or a bad GSF boundary | Fix the GSF Area. Program Volume shape always comes from GSF. |
+| No Program Volume for a Data Silo | No Area contains it, or the shape Area (GSF, or the smallest Area if there's no `PDSO - GSF` scheme) has a bad boundary | Fix that Area's boundary, or move the Data Silo inside it. |
 | Stacked floors missing | Stacking identifier not in Level Mapping | Add the identifier in Project Config → Level Mapping. Preflight only warns about this, and the sync skips those Data Silos. |
 | Old Program Volumes left behind after renaming a unit | Program Volumes are found by `<prefix><Program UID>`, so a new UID gets a new family | Delete the old `<prefix><old UID>` family, or set UIDs before the first sync. |
 | Program Volume shape is wrong after moving a Data Silo or changing the extrusion height | The geometry cache only notices changes to the GSF Area boundary | Delete that Program Volume family and sync again. |
 | Areas in groups | Areas inside model groups can't be harvested reliably | Ungroup them. |
 | Elements not editable | Another user owns them in a workshared model | Ask them to sync and relinquish. |
+
+## Automating with an AI agent
+
+PDSO has an HTTP API and an MCP server, so an AI agent such as Claude Code can do the work of the windows. It can read and change programs, draw Area outlines, run preflight and sync, and render plans. Setup is in the [README](../README.md#http-api-and-mcp-server). Agents should start at [AGENTS.md](../AGENTS.md).
 
 ## Getting help
 
