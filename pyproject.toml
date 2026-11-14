@@ -13,6 +13,10 @@ ignore = [
     "F405", # may be from star import — affects unicode builtin in IronPython 2.7
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# The docstring of an MCP tool is its description for the agent: one long line.
+"mcp/pdso_mcp_server.py" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

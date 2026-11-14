@@ -281,15 +281,14 @@ class PDSOFamilyManagerService(object):
         app = revit.app
         host_app_version = HOST_APP.version
 
-        # Validate Revit version is supported
-        if host_app_version not in REVIT_VERSION_TEMPLATES:
-            error_msg = "Unsupported Revit version: {}. Supported versions: {}".format(
-                host_app_version, ", ".join(sorted(REVIT_VERSION_TEMPLATES.keys()))
+        # Use the known template path. For a Revit version that is not in the
+        # table, use the family template folder that Revit reports.
+        if host_app_version in REVIT_VERSION_TEMPLATES:
+            template_path = REVIT_VERSION_TEMPLATES[host_app_version]
+        else:
+            template_path = os.path.join(
+                app.FamilyTemplatePath, "English-Imperial", "Generic Model.rft"
             )
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        template_path = REVIT_VERSION_TEMPLATES[host_app_version]
 
         # Validate template file exists
         if not os.path.exists(template_path):
