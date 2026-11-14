@@ -21,7 +21,7 @@
         { "parameter": "Family", "hidden": true }
       ],
       "filters": [
-        { "parameter": "Family", "operator": "equals", "value": "{data_silo_family}" }
+        { "parameter": "Family", "operator": "begins_with", "value": "{data_silo_family}" }
       ],
       "sort": [
         { "parameter": "PDSO - Program UID", "order": "ascending" }

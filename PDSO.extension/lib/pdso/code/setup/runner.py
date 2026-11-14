@@ -275,7 +275,22 @@ def print_report(ctx, output):
             current_step = step_id
             table = []
         table.append(
-            [item, u"{} {}".format(status.ICONS.get(row_status, ""), row_status), message]
+            [
+                _table_cell(item),
+                u"{} {}".format(status.ICONS.get(row_status, ""), row_status),
+                _table_cell(message),
+            ]
         )
     if table:
         output.print_table(table, columns=["Item", "Status", "Notes"])
+
+
+def _table_cell(text):
+    """Make text safe for one markdown table cell.
+
+    Revit error messages can span several lines ("...\\nParameter name: filter"). A
+    line break or a "|" inside a cell breaks the markdown table, and pyRevit then
+    drops the row from the report.
+    """
+    text = u" ".join(u"{}".format(text or u"").split())
+    return text.replace(u"|", u"\\|")

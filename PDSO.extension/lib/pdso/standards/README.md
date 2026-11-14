@@ -173,4 +173,6 @@ Setup doesn't create area schemes. If a scheme is missing, create it in **Area a
 
 Operators: `equals`, `not_equals`, `greater`, `greater_or_equal`, `less`, `less_or_equal`, `contains`, `not_contains`, `begins_with`, `not_begins_with`, `ends_with`, `not_ends_with`, `has_value`, `has_no_value`.
 
+For the `Family` and `Family and Type` fields, use a text operator such as `begins_with` or `contains`. Revit rejects `equals` with a family name on these fields (it expects an element, not text), and the schedule is then created without that filter.
+
 A field whose parameter isn't in the model yet is skipped with a warning. Track it in the Parameter Manager, then run the schedules step again with `on_existing: "replace"` to rebuild the schedule.
