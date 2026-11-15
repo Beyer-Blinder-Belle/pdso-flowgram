@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unit Harvest Preview</title>
+<!-- PDSO unit harvest preview. unit_grouping_service.write_outputs replaces the data token below. -->
+<style>
+:root{--bg:#f6f6f4;--panel:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#d9d9d4;--wall:#2b2b29;--shared:#e4e4df;--entr:#d6402b;--win:#2a7fd4;--door:#8a8a84;--sel:#111;--ok:#2e8b57}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--panel:#1f1f1d;--ink:#ecece8;--muted:#9a9a94;--line:#34342f;--wall:#d8d8d2;--shared:#2e2e2b;--sel:#fff;--ok:#5cc28a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px 24px;align-items:baseline}
+h1{font-size:17px;margin:0}
+.sub{color:var(--muted);font-size:13px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;margin-left:auto}
+.stat b{font-size:18px;font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:12px;margin-left:4px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:calc(100vh - 60px)}
+@media (max-width:860px){main{grid-template-columns:1fr}}
+.canvas{padding:12px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tabs button,.toggles label{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:5px 10px;font:inherit;font-size:13px;cursor:pointer}
+.tabs button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.toggles{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.toggles label{display:flex;gap:6px;align-items:center}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px}
+svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.room{stroke:var(--bg);stroke-width:.25;cursor:pointer}
+.room.shared{fill:var(--shared);cursor:default}
+.room.dim{opacity:.25}
+.wall{stroke:var(--wall);stroke-linecap:square;fill:none}
+.lbl{font-size:1.5px;fill:var(--ink);text-anchor:middle;pointer-events:none;font-weight:600}
+.rl{font-size:.85px;fill:var(--ink);opacity:.7;text-anchor:middle;pointer-events:none}
+.entr{fill:var(--entr)}.door{fill:var(--door)}
+.win{stroke:var(--win);stroke-width:.55}
+.hl{stroke:var(--sel);stroke-width:.35;fill:none;pointer-events:none}
+aside{border-left:1px solid var(--line);background:var(--panel);padding:14px 16px;overflow:auto;max-height:calc(100vh - 60px)}
+@media (max-width:860px){aside{border-left:0;border-top:1px solid var(--line);max-height:none}}
+aside h2{font-size:15px;margin:0 0 8px}
+.muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0 14px}
+td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;font-weight:normal}
+th{color:var(--muted);font-size:12px}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.ulist{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px}
+.ulist button{font:inherit;font-size:12px;padding:6px 0;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer;display:flex;gap:5px;align-items:center;justify-content:center}
+.ulist button[aria-pressed=true]{outline:2px solid var(--sel)}
+.badge{font-size:11px;padding:1px 6px;border-radius:10px;border:1px solid var(--line)}
+.ok{color:var(--ok)}.ng{color:var(--entr)}
+pre{font-size:11px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow:auto;max-height:260px}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Unit harvest preview</h1><div class="sub" id="src"></div></div>
+  <div class="stats" id="stats"></div>
+</header>
+<main>
+  <section class="canvas">
+    <div class="bar">
+      <div class="tabs" id="tabs" role="group" aria-label="Levels"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="tE" checked><span class="sw" style="background:var(--entr)"></span>Entrances</label>
+        <label><input type="checkbox" id="tD" checked><span class="sw" style="background:var(--door)"></span>Interior doors</label>
+        <label><input type="checkbox" id="tW" checked><span class="sw" style="background:var(--win)"></span>Windows</label>
+        <label><input type="checkbox" id="tR"><span>Room names</span></label>
+      </div>
+    </div>
+    <svg id="plan" role="img" aria-label="Floor plan"></svg>
+    <div class="muted" style="font-size:12px">Click a unit to see its details. Gray rooms are shared space and are not part of any unit.</div>
+  </section>
+  <aside id="side"></aside>
+</main>
+<script>
+const DATA = __DATA__;
+const G = DATA.geometry || {rooms:[],walls:[],doors:[],windows:[]};
+const SF2M = 1/10.7639, FT2M = 0.3048;
+const NS = "http://www.w3.org/2000/svg";
+const PAL = ["#7fb3a8","#e0a96d","#9fb6e0","#d99aa8","#b7c97a","#c7a6dd","#e8c96a","#8fc9d9"];
+const roomById = Object.fromEntries(G.rooms.map(r=>[r.id,r]));
+const unitOfRoom = {};
+DATA.units.forEach(u=>u.rooms.forEach(r=>unitOfRoom[r.id]=u));
+const levels = [];
+DATA.units.forEach(u=>{if(!levels.includes(u.level))levels.push(u.level)});
+G.rooms.forEach(r=>{if(!levels.includes(r.level))levels.push(r.level)});
+let level = levels[0], sel = null;
+try{const s=localStorage.getItem("pdso-unit-level"); if(s&&levels.includes(s)) level=s;}catch(e){}
+const m2 = sf => (sf*SF2M).toFixed(2);
+const short = uid => uid.slice(uid.lastIndexOf("-")+1);
+const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const el = (n,a,p)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
+
+document.getElementById("src").textContent = DATA.model + " · harvested " + DATA.harvested;
+const S = DATA.summary;
+document.getElementById("stats").innerHTML =
+  `<div class="stat"><b>${S.units}</b><span>units</span></div><div class="stat"><b>${S.entrances}</b><span>entrances</span></div><div class="stat"><b>${S.windows_in_units}</b><span>windows in units</span></div><div class="stat"><b class="${S.units_to_check?'ng':'ok'}">${S.units_to_check}</b><span>to check</span></div>`;
+
+const tabs = document.getElementById("tabs");
+levels.forEach(l=>{const b=document.createElement("button");b.textContent=l;b.onclick=()=>{level=l;sel=null;try{localStorage.setItem("pdso-unit-level",l)}catch(e){};draw()};tabs.appendChild(b)});
+["tE","tD","tW","tR"].forEach(id=>document.getElementById(id).onchange=draw);
+
+const xs=[],ys=[];
+G.walls.forEach(w=>w.points.forEach(p=>{xs.push(p[0]);ys.push(p[1])}));
+G.rooms.forEach(r=>r.outline.forEach(p=>{xs.push(p[0]);ys.push(p[1])}));
+const B={x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)}, PAD=3;
+const T = p => [p[0]-B.x0+PAD, B.y1-p[1]+PAD];
+const pts = a => a.map(T).map(p=>p.join(",")).join(" ");
+const centroid = a => {let x=0,y=0;a.forEach(q=>{x+=q[0];y+=q[1]});return [x/a.length,y/a.length]};
+
+function draw(){
+  [...tabs.children].forEach(b=>b.setAttribute("aria-pressed", b.textContent===level));
+  const svg=document.getElementById("plan"); svg.innerHTML="";
+  svg.setAttribute("viewBox",`0 0 ${B.x1-B.x0+2*PAD} ${B.y1-B.y0+2*PAD}`);
+  const units = DATA.units.filter(u=>u.level===level);
+  const color = u => PAL[units.indexOf(u)%PAL.length];
+  const gR=el("g",{},svg), gW=el("g",{},svg), gO=el("g",{},svg), gL=el("g",{},svg);
+  G.rooms.filter(r=>r.level===level).forEach(r=>{
+    const u=unitOfRoom[r.id];
+    const pg=el("polygon",{points:pts(r.outline),class:"room"+(u?"":" shared")+(sel&&u!==sel?" dim":"")},gR);
+    const t=el("title",{},pg);
+    if(u){pg.style.fill=color(u); pg.onclick=()=>{sel=(sel===u?null:u);draw()}; t.textContent=`${u.uid} / ${r.name} ${m2(r.area_sf)} m²`;}
+    else t.textContent=`Shared: ${r.name}`;
+    if(document.getElementById("tR").checked){const c=centroid(r.outline.map(T)); el("text",{x:c[0],y:c[1]+2.2,class:"rl"},gL).textContent=r.name;}
+  });
+  G.walls.filter(w=>w.level===level).forEach(w=>el("polyline",{points:pts(w.points),class:"wall","stroke-width":Math.max(w.width_ft,.2)},gW));
+  const entrance={}, inner=new Set();
+  units.forEach(u=>{u.entrances.forEach(e=>entrance[e.id]=u);u.interior_doors.forEach(e=>inner.add(e.id))});
+  G.doors.filter(o=>o.level===level).forEach(o=>{
+    const u=entrance[o.id];
+    if(u ? !document.getElementById("tE").checked : !document.getElementById("tD").checked) return;
+    const [x,y]=T([o.x,o.y]);
+    const c=el("circle",{cx:x,cy:y,r:u?.9:.5,class:u?"entr":"door"},gO);
+    el("title",{},c).textContent=`${u?"Entrance":"Door"} ${o.type} (id ${o.id})`;
+    if(u){const into=u.rooms.some(r=>r.id===o.sides[0])?1:-1;
+      el("line",{x1:x,y1:y,x2:x+o.facing[0]*into*2.2,y2:y-o.facing[1]*into*2.2,stroke:"var(--entr)","stroke-width":.3},gO);}
+  });
+  if(document.getElementById("tW").checked) G.windows.filter(o=>o.level===level).forEach(o=>{
+    const [x,y]=T([o.x,o.y]); const h=(o.width_ft||3)/2, ax=-o.facing[1], ay=-o.facing[0];
+    const ln=el("line",{x1:x-ax*h,y1:y-ay*h,x2:x+ax*h,y2:y+ay*h,class:"win"},gO);
+    el("title",{},ln).textContent=`Window ${o.type} (id ${o.id})`;
+  });
+  units.forEach(u=>{
+    const [x,y]=T(u.center); el("text",{x,y,class:"lbl"},gL).textContent=short(u.uid);
+    if(sel===u) u.rooms.forEach(r=>{const g=roomById[r.id]; if(g) el("polygon",{points:pts(g.outline),class:"hl"},gL)});
+  });
+  side(units, color);
+}
+
+function side(units, color){
+  const a=document.getElementById("side");
+  let h=`<h2>${esc(level)}</h2><div class="ulist">`+units.map(u=>`<button data-u="${esc(u.uid)}" aria-pressed="${sel===u}"><span class="sw" style="background:${color(u)}"></span>${esc(short(u.uid))}</button>`).join("")+`</div>`;
+  if(!sel){
+    h+=`<table><tr><th>Unit</th><th class="n">Rooms</th><th class="n">m²</th><th class="n">Entr.</th><th class="n">Win.</th></tr>`+
+      units.map(u=>`<tr><td>${esc(u.uid)}</td><td class="n">${u.room_count}</td><td class="n">${m2(u.area_sf)}</td><td class="n ${u.entrances.length===1?'':'ng'}">${u.entrances.length}</td><td class="n">${u.windows.length}</td></tr>`).join("")+`</table>`;
+    const shared=DATA.shared_rooms.filter(r=>r.level===level).map(r=>esc(r.name));
+    h+=`<div class="muted" style="font-size:12px">Shared: ${shared.join(", ")||"none"}</div>`;
+  } else {
+    const u=sel;
+    h+=`<h2>${esc(u.uid)} ${u.issues.length?`<span class="badge ng">${esc(u.issues.join(", "))}</span>`:`<span class="badge ok">OK</span>`}</h2>`;
+    h+=`<table><tr><th>Room</th><th class="n">m²</th></tr>`+u.rooms.map(r=>`<tr><td>${esc(r.name)}</td><td class="n">${m2(r.area_sf)}</td></tr>`).join("")+`<tr><td><b>Total</b></td><td class="n"><b>${m2(u.area_sf)}</b></td></tr></table>`;
+    h+=`<table><tr><th>Entrance</th><th>Room → opens to</th></tr>`+u.entrances.map(e=>`<tr><td>${esc(e.type)}</td><td>${esc(e.room)} → ${esc(e.opens_to)}</td></tr>`).join("")+`</table>`;
+    h+=`<table><tr><th>Window</th><th>Room</th><th class="n">Width m</th></tr>`+u.windows.map(w=>`<tr><td>${esc(w.type)}</td><td>${esc(w.room)}</td><td class="n">${w.width_ft?(w.width_ft*FT2M).toFixed(2):"-"}</td></tr>`).join("")+`</table>`;
+    h+=`<div class="muted" style="font-size:12px">Unit record (JSON)</div><pre>${esc(JSON.stringify(u,null,1))}</pre>`;
+  }
+  a.innerHTML=h;
+  a.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>{const u=DATA.units.find(x=>x.uid===b.dataset.u);sel=(sel===u?null:u);draw()});
+}
+draw();
+</script>
+</body>
+</html>
