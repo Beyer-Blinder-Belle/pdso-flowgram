@@ -62,13 +62,15 @@ def _create_views(ctx, spec, on_existing):
         if vft is None:
             raise ValueError("This model has no {} view type".format(view_family))
 
+    selector = spec.get("levels", "all")
     exclude = spec.get("exclude_levels") or []
-    levels, missing = revit_utils.get_levels(
-        ctx.doc, spec.get("levels", "all"), exclude
-    )
+    if ctx.options.get("levels") is not None:
+        # The caller chose the levels (the API's bootstrap): use them as given
+        selector, exclude = ctx.options["levels"], []
+    levels, missing = revit_utils.get_levels(ctx.doc, selector, exclude)
     excluded = [
         level.Name
-        for level in revit_utils.get_levels(ctx.doc, spec.get("levels", "all"))[0]
+        for level in revit_utils.get_levels(ctx.doc, selector)[0]
         if revit_utils.level_name_matches(level.Name, exclude)
     ]
     if excluded:
@@ -99,6 +101,69 @@ def _create_views(ctx, spec, on_existing):
         _create_view(
             ctx, spec, name, view_type, on_existing, template, template_name, factory
         )
+
+
+def default_area_plan_levels(ctx, data):
+    """The levels the enabled area plan entries of views.json give plans to.
+
+    Uses each entry's "levels" and "exclude_levels". With no enabled area plan
+    entry, every level.
+
+    Returns:
+        list[DB.Level]: Sorted by elevation.
+    """
+    by_id = {}
+    found_spec = False
+    for spec in data.get("views", []):
+        if spec.get("view_type") != "AreaPlan" or not spec.get("enabled", True):
+            continue
+        found_spec = True
+        levels, _ = revit_utils.get_levels(
+            ctx.doc, spec.get("levels", "all"), spec.get("exclude_levels") or []
+        )
+        for level in levels:
+            by_id[level.Id] = level
+    if not found_spec:
+        return revit_utils.get_levels(ctx.doc)[0]
+    return sorted(by_id.values(), key=lambda level: level.Elevation)
+
+
+def create_area_plan(ctx, data, scheme_name, level):
+    """Create the area plan of one scheme on one level, as views.json names it.
+
+    Uses the area plan entry of views.json whose area_scheme maps to scheme_name
+    (enabled or not), so the view gets that entry's name and template. An
+    existing view with the name is left alone.
+
+    Returns:
+        bool: False if views.json has no area plan entry for the scheme.
+    """
+    for spec in data.get("views", []):
+        if spec.get("view_type") != "AreaPlan":
+            continue
+        if ctx.area_scheme_name(spec.get("area_scheme", "")) != scheme_name:
+            continue
+        scheme = revit_utils.find_area_scheme(ctx.doc, scheme_name)
+        if scheme is None:
+            return False
+        template = None
+        template_name = spec.get("template")
+        if template_name:
+            template_name = ctx.expand(template_name)
+            template = revit_utils.find_view_template(ctx.doc, template_name)
+        name = ctx.expand(spec["name"], level=level.Name, area_scheme=scheme_name)
+        _create_view(
+            ctx,
+            spec,
+            name,
+            DB.ViewType.AreaPlan,
+            "skip",
+            template,
+            template_name,
+            lambda: DB.ViewPlan.CreateAreaPlan(ctx.doc, scheme.Id, level.Id),
+        )
+        return True
+    return False
 
 
 def _new_3d_view(doc, view_family):

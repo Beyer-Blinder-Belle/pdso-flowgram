@@ -1,0 +1,13 @@
+title: "Find\nRooms"
+
+tooltip: >-
+  Choose a catalogue layout and see the Rooms of this model that are similar
+  to it, ranked, with a plan preview of the layout in each Room. Place the
+  layout in the Room you choose.
+
+author: BBB DCT + hackathon team
+
+context: doc-project
+
+engine:
+  clean: true

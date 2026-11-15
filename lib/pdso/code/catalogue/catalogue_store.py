@@ -14,6 +14,7 @@ chooses) so that project data is not committed to a public repository.
 
 import codecs
 import json
+import re
 import math
 import os
 
@@ -41,6 +42,32 @@ def default_local_folder():
     return os.path.join(repo_root(), "catalogue", "local")
 
 
+_NON_ASCII = re.compile(u"[^\\x00-\\x7f]")
+_ESCAPE_TOKEN = re.compile(r"@@u([0-9a-f]{4})@@")
+
+
+def _mark_non_ascii(value):
+    """Replace each non-ASCII character in the strings of a JSON value by a token."""
+    if isinstance(value, dict):
+        return dict((_mark_non_ascii(k), _mark_non_ascii(v)) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return [_mark_non_ascii(item) for item in value]
+    if isinstance(value, basestring):  # noqa: F821 (IronPython 2.7)
+        return _NON_ASCII.sub(lambda m: "@@u{:04x}@@".format(ord(m.group(0))), value)
+    return value
+
+
+def to_json(data):
+    """Serialize to JSON text that is pure ASCII.
+
+    json.dumps of IronPython 2.7 fails on a string with a non-ASCII character
+    (for example a Room with the name "Caf\u00e9"): it tries to decode the text
+    as UTF-8 bytes. Thus each such character is written as a \\uXXXX escape.
+    """
+    text = json.dumps(_mark_non_ascii(data), indent=2, sort_keys=True)
+    return _ESCAPE_TOKEN.sub(lambda m: "\\u" + m.group(1), text)
+
+
 def save_entry(entry, folder):
     """Write an entry (and its plan sketch) into a folder.
 
@@ -52,7 +79,7 @@ def save_entry(entry, folder):
 
     json_path = os.path.join(folder, entry.id + ENTRY_EXTENSION)
     with codecs.open(json_path, "w", encoding="utf-8") as stream:
-        stream.write(json.dumps(entry.to_dict(), indent=2, sort_keys=True))
+        stream.write(to_json(entry.to_dict()))
 
     sketch_path = os.path.join(folder, entry.id + SKETCH_EXTENSION)
     with codecs.open(sketch_path, "w", encoding="utf-8") as stream:

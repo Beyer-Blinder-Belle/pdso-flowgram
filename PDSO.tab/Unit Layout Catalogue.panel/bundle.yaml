@@ -1,3 +1,5 @@
 layout:
   - 1.Harvest
-  - 2.Place
+  - 2.HarvestPlan
+  - 2.FindRooms
+  - 3.Place

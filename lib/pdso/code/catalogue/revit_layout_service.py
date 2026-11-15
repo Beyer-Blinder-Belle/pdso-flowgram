@@ -198,6 +198,18 @@ def _instance_level_id(instance):
         return instance.LevelId
     if isinstance(instance.Host, DB.Level):
         return instance.Host.Id
+    # An instance that was mirrored in place can have no level id and no host.
+    # Its level is then in one of these parameters.
+    for built_in in (
+        DB.BuiltInParameter.FAMILY_LEVEL_PARAM,
+        DB.BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM,
+        DB.BuiltInParameter.INSTANCE_REFERENCE_LEVEL_PARAM,
+    ):
+        parameter = instance.get_Parameter(built_in)
+        if parameter is not None and parameter.HasValue:
+            level_id = parameter.AsElementId()
+            if level_id != DB.ElementId.InvalidElementId:
+                return level_id
     return DB.ElementId.InvalidElementId
 
 
@@ -206,6 +218,62 @@ def _z_offset(instance, point, level):
     if parameter is not None and parameter.HasValue:
         return parameter.AsDouble()
     return point.Z - level.ProjectElevation
+
+
+def instance_parameters(instance):
+    """The instance parameters that the family defines, as name -> number.
+
+    These give an instance its own size, for example the length of a counter
+    top or the position of a sink hole. Built-in parameters (level, height,
+    phase), shared parameters, text and element references are not included.
+
+    Returns:
+        dict: {parameter name: float (internal units) or int}
+    """
+    values = {}
+    for parameter in instance.Parameters:
+        try:
+            definition = parameter.Definition
+            if definition is None or parameter.IsReadOnly or not parameter.HasValue:
+                continue
+            if parameter.IsShared:
+                continue
+            if definition.BuiltInParameter != DB.BuiltInParameter.INVALID:
+                continue
+            if parameter.StorageType == DB.StorageType.Double:
+                values[definition.Name] = round(parameter.AsDouble(), 9)
+            elif parameter.StorageType == DB.StorageType.Integer:
+                values[definition.Name] = int(parameter.AsInteger())
+        except Exception:
+            continue
+    return values
+
+
+def apply_instance_parameters(instance, values):
+    """Set stored instance parameters on a new instance.
+
+    Returns:
+        list: Names of the parameters that could not be set.
+    """
+    failed = []
+    for name in sorted(values):
+        value = values[name]
+        parameter = instance.LookupParameter(name)
+        if parameter is None or parameter.IsReadOnly:
+            failed.append(name)
+            continue
+        try:
+            if parameter.StorageType == DB.StorageType.Double:
+                if abs(parameter.AsDouble() - float(value)) > 1e-9:
+                    parameter.Set(float(value))
+            elif parameter.StorageType == DB.StorageType.Integer:
+                if parameter.AsInteger() != int(value):
+                    parameter.Set(int(value))
+            else:
+                failed.append(name)
+        except Exception:
+            failed.append(name)
+    return failed
 
 
 def harvest(spatial_element, name, program, project_type, notes=""):
@@ -313,6 +381,7 @@ def harvest(spatial_element, name, program, project_type, notes=""):
                 bool(instance.HandFlipped),
                 bool(instance.FacingFlipped),
                 bool(instance.Mirrored),
+                instance_parameters(instance),
             )
         )
 
@@ -379,6 +448,36 @@ def _symbol_lookup(doc):
     return lookup
 
 
+def _flip(doc, instance, hand):
+    """Flip an instance along its hand or its facing direction.
+
+    A family with a flip control is flipped with that control. A family with
+    no flip control (its source instance was mirrored) is mirrored in place,
+    about the plane through its location point.
+
+    Returns:
+        bool: True if the instance is flipped.
+    """
+    if hand and instance.CanFlipHand:
+        instance.flipHand()
+        return True
+    if not hand and instance.CanFlipFacing:
+        instance.flipFacing()
+        return True
+    try:
+        doc.Regenerate()
+        direction = instance.HandOrientation if hand else instance.FacingOrientation
+        plane = DB.Plane.CreateByNormalAndOrigin(direction, instance.Location.Point)
+        ids = List[DB.ElementId]()
+        ids.Add(instance.Id)
+        DB.ElementTransformUtils.MirrorElements(doc, ids, plane, False)
+        doc.Regenerate()
+    except Exception:
+        return False
+    flipped = instance.HandFlipped if hand else instance.FacingFlipped
+    return bool(flipped)
+
+
 def create(spatial_element, entry, placement):
     """Place an entry's families into a target Room or Area.
 
@@ -425,12 +524,23 @@ def create(spatial_element, entry, placement):
             )
             continue
 
-        if abs(item.z_offset) > 1e-6:
-            parameter = instance.get_Parameter(
-                DB.BuiltInParameter.INSTANCE_ELEVATION_PARAM
+        # Always set the height above the level. NewFamilyInstance with a level
+        # adds the Z of the point to the level elevation, so that an item with
+        # no offset would be at two times the level elevation.
+        parameter = instance.get_Parameter(
+            DB.BuiltInParameter.INSTANCE_ELEVATION_PARAM
+        )
+        if parameter is not None and not parameter.IsReadOnly:
+            parameter.Set(item.z_offset)
+
+        # The size of the instance (for example the length of a counter top)
+        failed = apply_instance_parameters(instance, item.parameters)
+        if failed:
+            result.warnings.append(
+                "{} : {}: these parameters were not set: {}".format(
+                    item.family, item.type, ", ".join(failed)
+                )
             )
-            if parameter is not None and not parameter.IsReadOnly:
-                parameter.Set(item.z_offset)
 
         angle = frame.angle + orient_angle(item.rotation, placement.turns, placement.mirror)
         if abs(angle) > 1e-9:
@@ -439,17 +549,14 @@ def create(spatial_element, entry, placement):
 
         # A mirrored placement flips each item's handedness
         want_hand = item.hand_flipped != placement.mirror
-        if bool(instance.HandFlipped) != want_hand:
-            if instance.CanFlipHand:
-                instance.flipHand()
-            elif placement.mirror:
+        for hand, wanted in ((True, want_hand), (False, item.facing_flipped)):
+            flipped = instance.HandFlipped if hand else instance.FacingFlipped
+            if bool(flipped) != wanted and not _flip(doc, instance, hand):
                 result.warnings.append(
-                    "{} : {} cannot be flipped; it keeps its original hand".format(
-                        item.family, item.type
+                    "{} : {} could not be flipped; it keeps its original {}".format(
+                        item.family, item.type, "hand" if hand else "facing"
                     )
                 )
-        if bool(instance.FacingFlipped) != item.facing_flipped and instance.CanFlipFacing:
-            instance.flipFacing()
 
         result.placed.append(instance.Id)
 

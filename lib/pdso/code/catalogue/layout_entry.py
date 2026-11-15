@@ -30,6 +30,8 @@ class LayoutItem(object):
         rotation (float): Rotation in the room frame (radians).
         hand_flipped, facing_flipped (bool): Flip state of the instance.
         mirrored (bool): True if the instance was mirrored in the source model.
+        parameters (dict): Instance parameters of the family (name -> number),
+            for example the length of a counter top. A new instance gets them.
     """
 
     def __init__(
@@ -44,7 +46,9 @@ class LayoutItem(object):
         hand_flipped=False,
         facing_flipped=False,
         mirrored=False,
+        parameters=None,
     ):
+        self.parameters = dict(parameters or {})
         self.category = category
         self.family = family
         self.type = type_name
@@ -73,6 +77,7 @@ class LayoutItem(object):
             "hand_flipped": self.hand_flipped,
             "facing_flipped": self.facing_flipped,
             "mirrored": self.mirrored,
+            "parameters": self.parameters,
         }
 
     @classmethod
@@ -88,6 +93,7 @@ class LayoutItem(object):
             bool(data.get("hand_flipped", False)),
             bool(data.get("facing_flipped", False)),
             bool(data.get("mirrored", False)),
+            data.get("parameters") or {},
         )
 
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 import atexit
 import base64
 import json
+import math
 import os
 import socket
 import subprocess
@@ -65,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.2"
+EXPECTED_API_VERSION = "1.5"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -79,14 +80,27 @@ mcp = MCPServer(
         "types, stored as Data Silos), Area outlines, Program Volumes, sync and "
         "audit. All lengths are decimal feet and all areas are square feet.\n"
         "The user does not need to know PDSO. Work from the user's intent and "
-        "decide the PDSO steps yourself.\n"
+        "decide the PDSO steps yourself, but keep the user in the loop for "
+        "setup: it adds items to their model.\n"
         "How PDSO works: a program is a point object (Data Silo) in a 2D Area. "
         "Each program needs one Area in each configured area scheme (default: "
         "PDSO - GSF gross, PDSO - ZFA zoning, PDSO - NSF net). The sync copies the "
         "area of each Area to its program and builds one 3D Program Volume for "
         "the program on each level of its stacking.\n"
+        "Setting up a model: call get_setup_status, then tell the user in plain "
+        "words what a setup would add and what the model has already, and agree "
+        "the scope before you call setup_model, unless they already said what "
+        "they want. The full package (the default) is what the PDSO ribbon's "
+        "setup buttons make: the configuration, the 20 built-in parameters, "
+        "area schemes, the Data Silo family, view templates, area plans for "
+        "each scheme and level, a 3D view and two schedules. The minimum to "
+        "place programs and run the sync is parts=[\"area_schemes\", "
+        "\"families\"] with parameters=\"required\". Offer both, or a scope in "
+        "between; the user may not want views or schedules added to a working "
+        "model. A smaller scope is fine: setup_model can add parts later.\n"
         "Order of work for a model that is new to PDSO: (1) get_status. (2) "
-        "setup_model one time. (3) update_config with levels_mapping: one "
+        "get_setup_status, agree the scope, then setup_model one time. (3) "
+        "update_config with levels_mapping: one "
         "two-digit stacking key for each occupied level, lowest first (01, 02, "
         "...). (4) list_rooms(level, include_outline=false) to see the Rooms. (5) "
         "draft_areas_from_rooms for the Rooms that fit the user's intent, with "
@@ -169,12 +183,26 @@ def _open_tunnel() -> None:
             time.sleep(0.25)
 
 
+# Title of the open Revit document that the tools work on. None: the active document.
+_target_document: str | None = None
+
 # Requests that change nothing in the model. It is safe to send them again.
-_READ_ONLY_POSTS = ("views/export", "views/activate")
+_READ_ONLY_POSTS = (
+    "views/export",
+    "views/activate",
+    "catalogue/recommend",
+    "catalogue/similar-rooms",
+)
 
 
 def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> Any:
     """Send one request. Send it again if the reply belongs to a different request."""
+    if (
+        _target_document
+        and query.get("document") is None
+        and not path.startswith("documents")
+    ):
+        query = dict(query, document=_target_document)
     read_only = method == "GET" or path in _READ_ONLY_POSTS
     for attempt in range(3):
         payload, request_id = _send(method, path, body, query, timeout)
@@ -410,15 +438,25 @@ def create_level(name: str, elevation: float) -> dict:
 
 
 @mcp.tool()
+def get_setup_status() -> dict:
+    """Read-only. What each part of a PDSO setup makes, whether the sync needs it, and what the model has already ("state": present, partial or missing, with details). Also "full_package" and "minimum": setup_model arguments. Call it before setup_model and use it to agree the scope with the user."""
+    return api("GET", "setup")
+
+
+@mcp.tool()
 def setup_model(
     levels: list[str] | None = None,
     area_scheme_mappings: dict[str, str] | None = None,
+    parts: list[str] | None = None,
+    parameters: str = "all",
 ) -> dict:
-    """Make the model ready for PDSO. Creates only the items that are missing: the PDSO configuration, the 20 shared parameters, the Data Silo family, the configured area schemes, and one area plan for each scheme and level. It is safe to call again.
+    """Make the model ready for PDSO, the same way as the ribbon's three setup buttons: the PDSO configuration, the parameters, then the chosen Quick Setup parts from the model's standards files. This adds items to the user's model: agree the scope with the user first (see get_setup_status), unless they already said what they want. Items that are there are left alone. It is safe to call again, for example to add parts later. The reply has "setup": the Quick Setup report rows (step, item, status, message); look at rows with status "Failed" or "Warning".
 
     Args:
         levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
+        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": one area plan for each scheme and level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
+        parameters: Used only if the model tracks no parameters yet. "all": the 20 built-in parameters (unit data such as bedroom, bathroom and kitchen counts, use group, load factor). "required": only Program UID, Program Stacking, Last Synced and the area parameters; add others later with create_parameter.
     """
     if not levels:
         with_rooms = {room["level"] for room in api("GET", "rooms", outline="false")}
@@ -427,7 +465,14 @@ def setup_model(
             for level in api("GET", "levels")
             if level["name"] in with_rooms
         ] or None
-    body = _clean({"levels": levels, "area_scheme_mappings": area_scheme_mappings})
+    body = _clean(
+        {
+            "levels": levels,
+            "area_scheme_mappings": area_scheme_mappings,
+            "parts": parts,
+            "parameters": parameters,
+        }
+    )
     return api("POST", "bootstrap", body, timeout=LONG_TIMEOUT)
 
 
@@ -565,7 +610,9 @@ def delete_parameter(parameter: str, purge: bool = False) -> dict:
         parameter: Field name or parameter name.
         purge: False: PDSO stops using the parameter, but the Revit parameter and its values stay, and create_parameter with the same name gets them back. True: also remove the parameter from Generic Models. This deletes its values on all programs and Program Volumes.
     """
-    return api("DELETE", f"parameters/{urllib.parse.quote(parameter, safe='')}", purge=purge)
+    return api(
+        "DELETE", f"parameters/{urllib.parse.quote(parameter, safe='')}", purge=purge
+    )
 
 
 @mcp.tool()
@@ -1199,6 +1246,223 @@ def show_program_volumes(
     return [json.dumps(summary), Image(data=data, format="png")]
 
 
+# =============================================================================
+# Open documents
+# =============================================================================
+
+
+@mcp.tool()
+def list_open_documents() -> dict:
+    """List the project documents that are open in Revit, which one is active, and which one these tools work on now."""
+    return {"target_document": _target_document, "documents": api("GET", "documents")}
+
+
+@mcp.tool()
+def open_document_in_background(path: str, detach: bool = False) -> dict:
+    """Open a Revit project file without a change of the active document or the Revit window. Use it when a person or a different agent works in the same Revit. Then call set_target_document with the title.
+
+    Args:
+        path: File path on the Revit computer.
+        detach: Detach a workshared file from its central model.
+    """
+    return api(
+        "POST", "documents/open", {"path": path, "detach": detach}, timeout=LONG_TIMEOUT
+    )
+
+
+@mcp.tool()
+def set_target_document(document: str | None = None) -> dict:
+    """Select the open Revit document that all the tools of this server work on. Without an argument, the tools work on the active document again. Tools that use the Revit window (selection, show_view) always use the active document.
+
+    Args:
+        document: Title of an open document (see list_open_documents), for example "snowdon_catalogue_sim".
+    """
+    global _target_document
+    if document:
+        titles = [item["title"] for item in api("GET", "documents")]
+        if document not in titles and document.removesuffix(".rvt") not in titles:
+            raise ToolError(
+                f"Document '{document}' is not open. Open documents: {', '.join(titles)}"
+            )
+    _target_document = document or None
+    return {"target_document": _target_document}
+
+
+@mcp.tool()
+def save_document(document: str | None = None) -> dict:
+    """Save an open document to its file. It does not have to be the active document.
+
+    Args:
+        document: Title of the document. Default: the target document.
+    """
+    return api(
+        "POST",
+        "documents/save",
+        {"document": document or _target_document},
+        timeout=LONG_TIMEOUT,
+    )
+
+
+@mcp.tool()
+def close_background_document(document: str, save: bool = False) -> dict:
+    """Close an open document that is not the active document. Use close_project for the active document.
+
+    Args:
+        document: Title of the document.
+        save: Save the document before it closes. Without it, changes that are not saved are lost.
+    """
+    global _target_document
+    result = api("POST", "documents/close", {"document": document, "save": save}, timeout=LONG_TIMEOUT)
+    if _target_document == document:
+        _target_document = None
+    return result
+
+
+# =============================================================================
+# Unit Layout Catalogue
+# =============================================================================
+
+
+@mcp.tool()
+def list_layouts(program: str | None = None, project_type: str | None = None) -> dict:
+    """List the layouts in the Unit Layout Catalogue: id, name, program, size, number of items, families, and the source room. A layout is the furniture, casework and equipment of one room, stored as a JSON file.
+
+    Args:
+        program: Only layouts for this program, for example "Studio Unit".
+        project_type: Only layouts of this project type, for example "Residential".
+    """
+    return api("GET", "catalogue/layouts", program=program, project_type=project_type)
+
+
+@mcp.tool()
+def get_layout(layout_id: str) -> dict:
+    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame) and its SVG plan sketch.
+
+    Args:
+        layout_id: Id of the layout (see list_layouts).
+    """
+    return api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+
+
+@mcp.tool()
+def harvest_layout(
+    room: str,
+    name: str | None = None,
+    program: str | None = None,
+    project_type: str = "Other",
+    notes: str = "",
+) -> dict:
+    """Save the layout of a Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. Returns the JSON entry and its file path.
+
+    Args:
+        room: Room number (for example "304"), or the element id of a Room or Area.
+        name: Name of the layout. Use a unique name; a layout with the same program and name replaces the earlier one. Default: "<program> - <area> sf".
+        program: Program that the layout serves. Default: the Room name.
+        project_type: For example "Residential", "Office" or "K-12".
+        notes: Free text.
+    """
+    body = _clean(
+        {
+            "room": room,
+            "name": name,
+            "program": program,
+            "project_type": project_type,
+            "notes": notes,
+        }
+    )
+    return api("POST", "catalogue/harvest", body, timeout=LONG_TIMEOUT)
+
+
+@mcp.tool()
+def recommend_layouts(room: str, program: str | None = None, limit: int = 10) -> dict:
+    """Rank the catalogue layouts for one target Room or Area. A layout is in the list only if all its items are inside the target in one of 8 orientations. score is 60% area match and 40% size fit. shape_match (0 to 1) is how well the two outlines cover each other. Layouts for the same program come first.
+
+    Args:
+        room: Room number, or the element id of a Room or Area.
+        program: Program of the target. Default: the Room name.
+        limit: Largest number of layouts in the reply.
+    """
+    body = _clean({"room": room, "program": program, "limit": limit})
+    return api("POST", "catalogue/recommend", body, timeout=LONG_TIMEOUT)
+
+
+@mcp.tool()
+def find_similar_rooms(
+    layout_id: str,
+    kind: str = "rooms",
+    level: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Find the Rooms (or Areas) of the model that are similar to a catalogue layout, ranked. Use it to find all rooms that can get the same layout. similarity is the average of area_match (the areas agree) and shape_match (the outlines cover each other); 1.0 is the same room shape and size. fits says if all items of the layout land in the room, and score is the recommender's score for that.
+
+    Args:
+        layout_id: Id of the layout (see list_layouts).
+        kind: "rooms" or "areas".
+        level: Only Rooms on this level.
+        limit: Largest number of Rooms in the reply.
+    """
+    body = _clean(
+        {"layout_id": layout_id, "kind": kind, "level": level, "limit": limit}
+    )
+    return api("POST", "catalogue/similar-rooms", body, timeout=LONG_TIMEOUT)
+
+
+@mcp.tool()
+def place_layout(room: str, layout_id: str) -> dict:
+    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field. If the layout does not fit, nothing is placed.
+
+    Args:
+        room: Room number, or the element id of a Room or Area.
+        layout_id: Id of the layout.
+    """
+    return api(
+        "POST",
+        "catalogue/place",
+        {"room": room, "layout_id": layout_id},
+        timeout=LONG_TIMEOUT,
+    )
+
+
+@mcp.tool()
+def list_room_items(room: str) -> dict:
+    """List the free-standing families in a Room or Area (the items that harvest_layout takes): id, category, family, type, x, y, z (project elevation), z_offset (height above the level), rotation.
+
+    Args:
+        room: Room number, or the element id of a Room or Area.
+    """
+    return api("GET", "catalogue/room-items", room=room)
+
+
+@mcp.tool()
+def describe_item(element_id: int) -> dict:
+    """Describe one family instance (read-only): family, type, position, rotation, flips, its plan box in project coordinates, and the instance parameters that the family defines (for example the length of a counter top). Use it to compare a placed item with the original item.
+
+    Args:
+        element_id: Element id of the family instance (see list_room_items or the "placed" list of place_layout).
+    """
+    return api("GET", "catalogue/item", id=element_id)
+
+
+@mcp.tool()
+def clear_room_items(room: str) -> dict:
+    """Delete the free-standing families in a Room or Area. Use it to make a furnished room empty before place_layout. This deletes elements from the model.
+
+    Args:
+        room: Room number, or the element id of a Room or Area.
+    """
+    return api("DELETE", "catalogue/room-items", room=room)
+
+
+@mcp.tool()
+def delete_layout(layout_id: str) -> dict:
+    """Delete one layout file from the catalogue. A sample layout cannot be deleted.
+
+    Args:
+        layout_id: Id of the layout.
+    """
+    return api("DELETE", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+
+
 PALETTE = [
     (66, 133, 244),
     (234, 67, 53),
@@ -1216,17 +1480,25 @@ PALETTE = [
 NO_PROGRAM = "(no program)"
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     windows_fonts = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
-    for name in (
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        str(windows_fonts / "arial.ttf"),
-        str(windows_fonts / "segoeui.ttf"),
-    ):
+    regular = [
+        ("/System/Library/Fonts/Helvetica.ttc", 0),
+        ("/System/Library/Fonts/Supplemental/Arial.ttf", 0),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+        (str(windows_fonts / "arial.ttf"), 0),
+        (str(windows_fonts / "segoeui.ttf"), 0),
+    ]
+    heavy = [
+        ("/System/Library/Fonts/Helvetica.ttc", 1),
+        ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 0),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0),
+        (str(windows_fonts / "arialbd.ttf"), 0),
+        (str(windows_fonts / "segoeuib.ttf"), 0),
+    ]
+    for name, index in (heavy + regular) if bold else regular:
         try:
-            return ImageFont.truetype(name, size)
+            return ImageFont.truetype(name, size, index=index)
         except OSError:
             continue
     # Scalable font that is in Pillow 10.1 and later. Like the fonts above it
@@ -1515,6 +1787,641 @@ def render_plan(
         ],
     }
     return [json.dumps(summary), Image(data=path.read_bytes(), format="png")]
+
+
+# =============================================================================
+# Unit Layout Catalogue: previews of the suggested Rooms
+# =============================================================================
+
+# Colors of the preview images. The list window follows the suggestion list of
+# a layout recommendation dialog: a thumbnail, the data of the Room, and the
+# match in percent for each row, with the best row highlighted.
+UI_WINDOW = (255, 255, 255)
+UI_BORDER = (63, 169, 216)
+UI_ROW = (233, 233, 233)
+UI_ROW_SELECTED = (63, 169, 216)
+UI_TEXT = (40, 40, 40)
+UI_MUTED = (105, 105, 105)
+UI_CHIP = (238, 238, 238)
+UI_GOOD = (22, 130, 60)
+UI_BAD = (196, 40, 40)
+ROOM_FILL = (250, 250, 247, 255)
+ROOM_LINE = (35, 35, 35, 255)
+CURRENT_FILL = (214, 214, 214, 255)
+CURRENT_LINE = (165, 165, 165, 255)
+ITEM_FILL = (33, 111, 219, 95)
+ITEM_LINE = (20, 84, 180, 255)
+OUTSIDE_FILL = (220, 50, 40, 90)
+OUTSIDE_LINE = (200, 30, 30, 255)
+CROSS_FILL = (245, 150, 20, 115)
+CROSS_LINE = (200, 105, 0, 255)
+UI_WARN = (176, 96, 0)
+# A footprint corner this far outside the Room outline counts as a crossing (ft)
+CROSS_TOLERANCE = 0.5
+LAYOUT_OUTLINE = (150, 60, 190, 255)
+
+
+def _dashed_line(draw, start, end, fill, width, dash=9, gap=6) -> None:
+    length = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
+    if length < 1:
+        return
+    position = 0.0
+    while position < length:
+        a = position / length
+        b = min(position + dash, length) / length
+        draw.line(
+            (
+                start[0] + (end[0] - start[0]) * a,
+                start[1] + (end[1] - start[1]) * a,
+                start[0] + (end[0] - start[0]) * b,
+                start[1] + (end[1] - start[1]) * b,
+            ),
+            fill=fill,
+            width=width,
+        )
+        position += dash + gap
+
+
+def _edge_distance(point, polygon) -> float:
+    """Shortest distance from a point to the edges of a polygon."""
+    best = float("inf")
+    for i in range(len(polygon)):
+        ax, ay = polygon[i]
+        bx, by = polygon[(i + 1) % len(polygon)]
+        dx, dy = bx - ax, by - ay
+        squared = dx * dx + dy * dy
+        t = 0.0
+        if squared > 1e-12:
+            t = max(0.0, min(1.0, ((point[0] - ax) * dx + (point[1] - ay) * dy) / squared))
+        best = min(best, math.hypot(point[0] - ax - t * dx, point[1] - ay - t * dy))
+    return best
+
+
+def _crossing_items(preview: dict) -> set[int]:
+    """Indexes of the items whose footprint goes across the Room outline.
+
+    place_layout only checks the insertion point of each item. An item can be
+    in the Room by that check while its body is in a wall.
+    """
+    outline = preview["room"]["outline"]
+    crossing = set()
+    for index, item in enumerate(preview["items"]):
+        if not item["inside"] or not item["footprint"]:
+            continue
+        for corner in item["footprint"]:
+            if (
+                not _inside(corner[0], corner[1], outline)
+                and _edge_distance(corner, outline) > CROSS_TOLERANCE
+            ):
+                crossing.add(index)
+                break
+    return crossing
+
+
+def _turned(point, turn: bool) -> tuple[float, float]:
+    """Plan point for the drawing. turn: the plan is turned 90 degrees clockwise."""
+    return (point[1], -point[0]) if turn else (point[0], point[1])
+
+
+def _plan_extent(preview: dict, turn: bool, room: bool = True) -> tuple:
+    points = list(preview["layout_outline"])
+    if room:
+        points += preview["room"]["outline"]
+    points = [_turned(p, turn) for p in points]
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _fit_text(draw, text: str, font, width: float) -> str:
+    if draw.textlength(text, font=font) <= width:
+        return text
+    while len(text) > 1 and draw.textlength(text + "...", font=font) > width:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
+def _draw_plan(
+    draw,
+    preview: dict,
+    box: tuple,
+    scale: float,
+    turn: bool,
+    room: bool = True,
+    numbers: bool = False,
+) -> None:
+    """Draw one Room with the items of the layout in it.
+
+    Args:
+        draw: ImageDraw with RGBA mode.
+        preview: Reply of GET catalogue/preview.
+        box: (left, top, right, bottom) in pixels. The plan is in its middle.
+        scale: Pixels for each foot.
+        turn: Turn the plan 90 degrees clockwise.
+        room: Draw the Room and its current items. False: only the layout.
+        numbers: Write the item numbers and the family names.
+    """
+    min_x, min_y, max_x, max_y = _plan_extent(preview, turn, room)
+    left = (box[0] + box[2]) / 2 - (max_x - min_x) * scale / 2
+    top = (box[1] + box[3]) / 2 - (max_y - min_y) * scale / 2
+
+    def px(point) -> tuple[float, float]:
+        x, y = _turned(point, turn)
+        return (left + (x - min_x) * scale, top + (max_y - y) * scale)
+
+    line = max(2, int(round(scale / 5)))
+    thin = max(1, int(round(scale / 9)))
+    if room:
+        outline = [px(p) for p in preview["room"]["outline"]]
+        draw.polygon(outline, fill=ROOM_FILL)
+        for item in preview["current_items"]:
+            if item["footprint"]:
+                draw.polygon(
+                    [px(p) for p in item["footprint"]],
+                    fill=CURRENT_FILL,
+                    outline=CURRENT_LINE,
+                )
+            else:
+                x, y = px((item["x"], item["y"]))
+                r = 0.4 * scale
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=CURRENT_FILL)
+        draw.line(outline + [outline[0]], fill=ROOM_LINE, width=line, joint="curve")
+    layout_outline = [px(p) for p in preview["layout_outline"]]
+    if room:
+        loop = layout_outline + [layout_outline[0]]
+        for start, end in zip(loop, loop[1:]):
+            _dashed_line(draw, start, end, LAYOUT_OUTLINE, thin + 1)
+    else:
+        draw.polygon(layout_outline, fill=ROOM_FILL)
+        draw.line(
+            layout_outline + [layout_outline[0]],
+            fill=ROOM_LINE,
+            width=line,
+            joint="curve",
+        )
+
+    label_font = _font(max(11, min(17, int(scale * 0.62))))
+    number_font = _font(max(11, min(18, int(scale * 0.7))), bold=True)
+    crossing = _crossing_items(preview) if room else set()
+    taken: list[tuple] = []
+    for number, item in enumerate(preview["items"], start=1):
+        x, y = px((item["x"], item["y"]))
+        edge, fill = ITEM_LINE, ITEM_FILL
+        if number - 1 in crossing:
+            edge, fill = CROSS_LINE, CROSS_FILL
+        if not item["inside"] or not item["loaded"]:
+            edge, fill = OUTSIDE_LINE, OUTSIDE_FILL
+        polygon = [px(p) for p in item["footprint"]] if item["footprint"] else None
+        if polygon:
+            draw.polygon(polygon, fill=fill)
+            draw.line(polygon + [polygon[0]], fill=edge, width=thin + 1)
+        else:
+            r = 0.55 * scale
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=fill, outline=edge, width=thin + 1)
+        # Direction tick: from the insertion point, along the rotation of the item
+        dx, dy = _turned(
+            (math.cos(item["rotation"]), math.sin(item["rotation"])), turn
+        )
+        tick = max(1.3 * scale, 7)
+        draw.line((x, y, x + dx * tick, y - dy * tick), fill=edge, width=thin + 1)
+        r = max(2.5, 0.2 * scale)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=edge)
+        if not numbers:
+            continue
+        if polygon:
+            cx = sum(p[0] for p in polygon) / 4
+            cy = sum(p[1] for p in polygon) / 4
+            wide = max(p[0] for p in polygon) - min(p[0] for p in polygon)
+            high = max(p[1] for p in polygon) - min(p[1] for p in polygon)
+        else:
+            cx, cy, wide, high = x, y - scale, 0, 0
+        text = str(number)
+        text_width = draw.textlength(text, font=number_font)
+        name = item["family"]
+        name_width = draw.textlength(name, font=label_font)
+        if name_width + 10 <= wide and high >= number_font.size + label_font.size + 8:
+            top_text = cy - (number_font.size + label_font.size + 2) / 2
+            draw.text((cx - text_width / 2, top_text), text, fill=(10, 40, 110, 255), font=number_font)
+            draw.text(
+                (cx - name_width / 2, top_text + number_font.size + 2),
+                name,
+                fill=(10, 40, 110, 255),
+                font=label_font,
+            )
+        else:
+            pad = 3
+            half_w = text_width / 2 + pad
+            half_h = number_font.size / 2 + pad
+            # Move the number if it is on top of an earlier number
+            for shift_x, shift_y in ((0, 0), (0, 2.2), (0, -2.2), (2.2, 0), (-2.2, 0), (2.2, 2.2), (-2.2, -2.2)):
+                tx, ty = cx + shift_x * half_w, cy + shift_y * half_h
+                if not any(abs(tx - ox) < 2 * half_w and abs(ty - oy) < 2 * half_h for ox, oy in taken):
+                    cx, cy = tx, ty
+                    break
+            taken.append((cx, cy))
+            draw.rectangle(
+                (cx - half_w, cy - half_h, cx + half_w, cy + half_h),
+                fill=(255, 255, 255, 225),
+            )
+            draw.text(
+                (cx - text_width / 2, cy - number_font.size / 2 - 1),
+                text,
+                fill=(10, 40, 110, 255),
+                font=number_font,
+            )
+
+
+def _fit_text_line(preview: dict) -> tuple[str, str]:
+    """One line that says if the layout fits the Room, and "good", "warn" or "bad"."""
+    match = preview["match"]
+    count = len(preview["items"])
+    if match["fits"]:
+        text = f"Fits: all {count} insertion points are in the Room ({match['placement']['description']})"
+        state = "good"
+        crossing = len(_crossing_items(preview))
+        if crossing:
+            text += f", but {crossing} item{' goes' if crossing == 1 else 's go'} across the Room outline"
+            state = "warn"
+        if match["items_not_loaded"]:
+            text += f"; {match['items_not_loaded']} items: family not loaded"
+            state = "warn"
+        return text, state
+    if match["items_outside"]:
+        return (
+            f"Does not fit: {match['items_outside']} of {count} items are outside the Room",
+            "bad",
+        )
+    layout = preview["layout"]
+    room = preview["room"]
+    return (
+        f"Does not fit: the layout ({layout['width']:.1f} x {layout['depth']:.1f} ft) is larger"
+        f" than the Room ({room['width']:.1f} x {room['depth']:.1f} ft)",
+        "bad",
+    )
+
+
+UI_STATE = {"good": UI_GOOD, "warn": UI_WARN, "bad": UI_BAD}
+
+
+def _percent(value: float) -> str:
+    text = f"{value * 100:.1f}"
+    return (text[:-2] if text.endswith(".0") else text) + "%"
+
+
+def _window(width: int, height: int, title: str):
+    image = PILImage.new("RGB", (width, height), UI_WINDOW)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rectangle((0, 0, width - 1, height - 1), outline=UI_BORDER, width=3)
+    draw.rectangle((22, 20, 34, 32), fill=UI_BORDER)
+    draw.rectangle((38, 20, 50, 32), fill=(120, 196, 228))
+    draw.rectangle((22, 36, 34, 48), fill=(120, 196, 228))
+    draw.rectangle((38, 36, 50, 48), fill=UI_BORDER)
+    draw.text((62, 19), title, fill=UI_TEXT, font=_font(26))
+    return image, draw
+
+
+def _legend(draw, x: float, y: float, font, room: bool = True) -> float:
+    """Draw the legend of the plan symbols in one row. Returns the right end."""
+    entries = [("box", ITEM_FILL, ITEM_LINE, "item of the layout (tick: direction)")]
+    if room:
+        entries += [
+            ("box", CURRENT_FILL, CURRENT_LINE, "furniture in the Room now"),
+            ("dash", None, LAYOUT_OUTLINE, "source room outline"),
+            ("box", CROSS_FILL, CROSS_LINE, "item across the Room outline"),
+            ("box", OUTSIDE_FILL, OUTSIDE_LINE, "item outside, or family not loaded"),
+        ]
+    for kind, fill, edge, text in entries:
+        if kind == "box":
+            draw.rectangle((x, y + 2, x + 26, y + 18), fill=fill, outline=edge, width=2)
+        else:
+            _dashed_line(draw, (x, y + 10), (x + 26, y + 10), edge, 3, 7, 4)
+        draw.text((x + 34, y), text, fill=UI_MUTED, font=font)
+        x += 34 + draw.textlength(text, font=font) + 30
+    return x
+
+
+def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, width: int):
+    """The list window: one row for each suggested Room, ranked."""
+    extents = [_plan_extent(p, False) for p in previews]
+    span_x = max(e[2] - e[0] for e in extents)
+    span_y = max(e[3] - e[1] for e in extents)
+    turn = span_y > span_x  # show the long side of the Rooms horizontal
+    if turn:
+        span_x, span_y = span_y, span_x
+    pad = 12
+    scale = min((width * 0.25 - 2 * pad) / span_x, 205.0 / span_y)
+    thumb_width = int(span_x * scale + 2 * pad + 36)
+    row_height = int(max(span_y * scale + 2 * pad, 150))
+    gap = 4
+    header = 262
+    footer = 58
+    height = header + len(previews) * (row_height + gap) + footer
+    image, draw = _window(width, height, "PDSO Unit Layout Catalogue")
+
+    label = _font(21)
+    value = _font(21)
+    source = layout.get("source") or {}
+    chips = [
+        ("Layout", layout["name"], 0.27),
+        ("Program", layout["program"], 0.12),
+        ("Project type", layout["project_type"], 0.11),
+        ("Size", f"{layout['area']:,.0f} SF, {layout['width']:.1f} x {layout['depth']:.1f} ft", 0.17),
+        ("Items", str(layout["item_count"]), 0.06),
+    ]
+    stored_width = int(span_x * scale * 0.62) + 2 * pad
+    chip_area = width - 60 - stored_width - 30
+    x = 30
+    for name, text, share in chips:
+        chip_width = chip_area * share / sum(c[2] for c in chips)
+        draw.text((x, 72), name, fill=UI_MUTED, font=label)
+        draw.rectangle((x, 102, x + chip_width - 12, 140), fill=UI_CHIP)
+        draw.rectangle((x + 10, 112, x + 28, 130), fill="white", outline=UI_TEXT)
+        draw.line((x + 13, 121, x + 18, 126, x + 25, 115), fill=UI_TEXT, width=2)
+        draw.text(
+            (x + 38, 108),
+            _fit_text(draw, text, value, chip_width - 62),
+            fill=UI_TEXT,
+            font=value,
+        )
+        x += chip_width
+    project = source.get("project") or "?"
+    draw.text(
+        (30, 158),
+        f"Source: Room '{source.get('room_name', '')}' on {source.get('level', '?')} of {project}"
+        f", harvested {source.get('harvested', '?')}",
+        fill=UI_MUTED,
+        font=label,
+    )
+    draw.text(
+        (30, 212),
+        f"Suggested Rooms  (best {len(previews)} of {rooms_checked} Rooms; no change to the model."
+        f" All plans: same scale{', turned 90 deg clockwise' if turn else ''})",
+        fill=UI_TEXT,
+        font=_font(23),
+    )
+    # The stored layout, at 62 % of the scale of the rows
+    stored_left = width - 30 - stored_width
+    draw.text((stored_left, 62), "Stored layout", fill=UI_MUTED, font=label)
+    draw.rectangle(
+        (stored_left, 90, stored_left + stored_width, header - 14),
+        fill="white",
+        outline=(200, 200, 200),
+    )
+    _draw_plan(
+        draw,
+        previews[0],
+        (stored_left, 90, stored_left + stored_width, header - 14),
+        min(scale * 0.62, (header - 104 - 2 * pad) / span_y),
+        turn,
+        room=False,
+    )
+
+    title_font = _font(27)
+    text_font = _font(22)
+    match_font = _font(27)
+    for index, preview in enumerate(previews):
+        top = header + index * (row_height + gap)
+        selected = index == 0
+        room = preview["room"]
+        match = preview["match"]
+        draw.rectangle(
+            (30, top, width - 30, top + row_height),
+            fill=UI_ROW_SELECTED if selected else UI_ROW,
+        )
+        thumb = (32, top + 2, 30 + thumb_width, top + row_height - 2)
+        draw.rectangle(thumb, fill="white")
+        _draw_plan(draw, preview, thumb, scale, turn)
+        ink = (255, 255, 255) if selected else UI_TEXT
+        soft = (255, 255, 255) if selected else UI_MUTED
+        x = 30 + thumb_width + 26
+        y = top + max(14, (row_height - 150) // 2)
+        draw.text(
+            (x, y),
+            f"{index + 1}.  Room {room['number']}: {room['name']}",
+            fill=ink,
+            font=title_font,
+        )
+        draw.text((x, y + 38), f"Level {room['level']}", fill=soft, font=text_font)
+        fit, state = _fit_text_line(preview)
+        draw.text(
+            (x, y + 68),
+            fit,
+            fill=ink if selected else UI_STATE[state],
+            font=text_font,
+        )
+        draw.text(
+            (x, y + 106),
+            f"Area: {room['area']:,.0f} SF   ({room['width']:.1f} x {room['depth']:.1f} ft)",
+            fill=ink,
+            font=text_font,
+        )
+        right = width - 30 - 26
+        lines = [
+            (f"Area match: {_percent(match['area_match'])}", text_font, soft),
+            (f"Shape match: {_percent(match['shape_match'])}", text_font, soft),
+            (f"similarity {match['similarity']:.3f}", text_font, soft),
+            (f"Match: {_percent(match['similarity'])}", match_font, ink),
+        ]
+        line_y = y
+        for text, font, color in lines:
+            if font is match_font:
+                line_y += 8
+            draw.text(
+                (right - draw.textlength(text, font=font), line_y),
+                text,
+                fill=color,
+                font=font,
+            )
+            line_y += font.size + 8
+    footer_y = height - footer + 16
+    _legend(draw, 30, footer_y, _font(19))
+    return image
+
+
+def _draw_room_panel(layout: dict, preview: dict, rank: int, count: int, width: int):
+    """The large picture of one suggested Room, north up, with the item list."""
+    height = int(width * 0.62)
+    room = preview["room"]
+    match = preview["match"]
+    image, draw = _window(
+        width,
+        height,
+        f"PDSO Unit Layout Catalogue  -  suggestion {rank} of {count}",
+    )
+    side = int(width * 0.36)
+    plan_box = (30, 70, width - side - 20, height - 62)
+    draw.rectangle(plan_box, fill=(246, 246, 246))
+    full_box = plan_box
+    plan_box = (plan_box[0], plan_box[1], plan_box[2], plan_box[3] - 40)  # scale bar below
+    min_x, min_y, max_x, max_y = _plan_extent(preview, False)
+    scale = min(
+        (plan_box[2] - plan_box[0] - 60) / (max_x - min_x),
+        (plan_box[3] - plan_box[1] - 50) / (max_y - min_y),
+    )
+    _draw_plan(draw, preview, plan_box, scale, False, numbers=True)
+    small = _font(19)
+    bar_feet = next((b for b in (20, 10, 5, 2, 1) if b * scale <= 220), 1)
+    plan_box = full_box
+    bar_y = plan_box[3] - 22
+    draw.line((plan_box[0] + 20, bar_y, plan_box[0] + 20 + bar_feet * scale, bar_y), fill="black", width=4)
+    draw.text((plan_box[0] + 30 + bar_feet * scale, bar_y - 12), f"{bar_feet} ft", fill="black", font=small)
+    arrow_x, arrow_y = plan_box[2] - 34, plan_box[1] + 62
+    draw.line((arrow_x, arrow_y, arrow_x, arrow_y - 36), fill="black", width=3)
+    draw.polygon(
+        [(arrow_x, arrow_y - 46), (arrow_x - 8, arrow_y - 30), (arrow_x + 8, arrow_y - 30)],
+        fill="black",
+    )
+    draw.text((arrow_x - 7, arrow_y + 2), "N", fill="black", font=small)
+
+    x = width - side + 6
+    wide = side - 40
+    draw.rectangle((x - 10, 70, width - 30, 70 + 196), fill=UI_ROW_SELECTED)
+    draw.text((x + 6, 82), f"Room {room['number']}: {room['name']}", fill="white", font=_font(31))
+    draw.text(
+        (x + 6, 124),
+        f"Level {room['level']}   |   {room['area']:,.0f} SF   |   {room['width']:.1f} x {room['depth']:.1f} ft",
+        fill="white",
+        font=_font(22),
+    )
+    draw.text((x + 6, 160), f"Match: {_percent(match['similarity'])}", fill="white", font=_font(40))
+    text = f"similarity {match['similarity']:.3f}"
+    draw.text(
+        (width - 46 - draw.textlength(text, font=_font(22)), 176),
+        text,
+        fill="white",
+        font=_font(22),
+    )
+    draw.text(
+        (x + 6, 216),
+        f"Area match {_percent(match['area_match'])}   |   Shape match {_percent(match['shape_match'])}",
+        fill="white",
+        font=_font(22),
+    )
+    y = 282
+    fit, state = _fit_text_line(preview)
+    for part in _wrap(draw, fit, _font(23), wide):
+        draw.text((x, y), part, fill=UI_STATE[state], font=_font(23))
+        y += 30
+    y += 4
+    for part in _wrap(
+        draw,
+        f"Layout: {layout['name']} ({layout['area']:,.0f} SF). Orientation from: {match['orientation_from']}."
+        f" Furniture in the Room now: {len(preview['current_items'])} items.",
+        small,
+        wide,
+    ):
+        draw.text((x, y), part, fill=UI_MUTED, font=small)
+        y += 25
+    y += 12
+    draw.text((x, y), "Items of the layout", fill=UI_TEXT, font=_font(22, bold=True))
+    y += 32
+    crossing = _crossing_items(preview)
+    rows = len(preview["items"])
+    step = min(27, max(17, (height - 70 - y) // max(rows, 1)))
+    item_font = _font(min(20, step - 5))
+    for number, item in enumerate(preview["items"], start=1):
+        note = "" if item["loaded"] else "  (family not loaded)"
+        note += "" if item["inside"] else "  (outside)"
+        color = UI_TEXT if item["inside"] and item["loaded"] else UI_BAD
+        if number - 1 in crossing:
+            note, color = "  (across the outline)", UI_WARN
+        draw.text((x, y), f"{number}", fill=color, font=item_font)
+        draw.text(
+            (x + 34, y),
+            _fit_text(draw, f"{item['family']} : {item['type']}{note}", item_font, wide - 34),
+            fill=color,
+            font=item_font,
+        )
+        y += step
+    _legend(draw, 30, height - 44, _font(19))
+    return image
+
+
+def _wrap(draw, text: str, font, width: float) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        if current and draw.textlength(trial, font=font) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    return lines + ([current] if current else [])
+
+
+@mcp.tool()
+def preview_similar_rooms(
+    layout_id: str,
+    limit: int = 5,
+    kind: str = "rooms",
+    level: str | None = None,
+    include_source_room: bool = False,
+    pixel_width: int = 1920,
+) -> list:
+    """Show pictures of the Rooms that find_similar_rooms suggests for a layout, before anything is placed. This tool does not change the model. The first image is a ranked list: one row for each Room with a plan thumbnail, the Room number, name, level and area, the area match, the shape match, the match in percent (the similarity), and if the layout fits. Then there is one large image for each Room (north up) with the item numbers and the family names. Each plan shows the Room outline, the items of the layout at the positions and rotations that place_layout would use (blue, with a direction tick), the furniture that is in the Room now (grey), and the outline of the source room (dashed). All thumbnails have the same scale.
+
+    Args:
+        layout_id: Id of the layout (see list_layouts).
+        limit: Number of Rooms (1 to 12). Default: the best 5.
+        kind: "rooms" or "areas".
+        level: Only Rooms on this level.
+        include_source_room: Keep the Room that the layout came from in the list.
+        pixel_width: Width of each image in pixels (1200 to 4000).
+    """
+    limit = max(1, min(int(limit), 12))
+    pixel_width = max(1200, min(int(pixel_width), 4000))
+    body = _clean({"layout_id": layout_id, "kind": kind, "level": level, "limit": limit + 1})
+    similar = api("POST", "catalogue/similar-rooms", body, timeout=LONG_TIMEOUT)
+    rooms = [
+        room
+        for room in similar["rooms"]
+        if include_source_room or not room.get("is_source")
+    ][:limit]
+    if not rooms:
+        raise ToolError("The model has no Room to compare with this layout.")
+    previews = [
+        api("GET", "catalogue/preview", room=room["id"], layout_id=layout_id, timeout=LONG_TIMEOUT)
+        for room in rooms
+    ]
+    layout = similar["layout"]
+    stem = f"preview_{layout_id[:40]}"
+    images = []
+    sheet = _draw_room_list(layout, previews, similar["rooms_checked"], pixel_width)
+    sheet_path = _image_path(f"{stem}_list")
+    sheet.save(sheet_path)
+    images.append(Image(data=sheet_path.read_bytes(), format="png"))
+    summary = {"layout_id": layout_id, "rooms_checked": similar["rooms_checked"], "list_image": str(sheet_path), "rooms": []}
+    for rank, preview in enumerate(previews, start=1):
+        panel = _draw_room_panel(layout, preview, rank, len(previews), pixel_width)
+        path = _image_path(f"{stem}_{rank}_room_{preview['room']['number']}")
+        panel.save(path)
+        images.append(Image(data=path.read_bytes(), format="png"))
+        match = preview["match"]
+        summary["rooms"].append(
+            {
+                "rank": rank,
+                "id": preview["room"]["id"],
+                "number": preview["room"]["number"],
+                "name": preview["room"]["name"],
+                "level": preview["room"]["level"],
+                "area": preview["room"]["area"],
+                "similarity": match["similarity"],
+                "area_match": match["area_match"],
+                "shape_match": match["shape_match"],
+                "fits": match["fits"],
+                "fit_text": _fit_text_line(preview)[0],
+                "reason": match["reason"],
+                "items_across_outline": len(_crossing_items(preview)),
+                "placement": match["placement"]["description"],
+                "items": len(preview["items"]),
+                "items_outside": match["items_outside"],
+                "items_not_loaded": match["items_not_loaded"],
+                "current_items": len(preview["current_items"]),
+                "image": str(path),
+            }
+        )
+    return [json.dumps(summary), *images]
 
 
 if __name__ == "__main__":
