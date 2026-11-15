@@ -16,9 +16,12 @@ There are two ways in. **Use the PDSO MCP server unless it can't do what you nee
 
 Setup, the full tool table and the route table are in the root [README → HTTP API and MCP server](../../README.md#http-api-and-mcp-server). In short:
 
-1. On the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit.
-2. Add the `pdso` server to `.mcp.json`: `uv run --script <repo>/mcp/pdso_mcp_server.py`. Set `PDSO_SSH_HOST` only when Revit is on another machine.
-3. Check the connection with `get_status`.
+1. On the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit (no Revit restart needed). `http://127.0.0.1:48884/pdso/status` should answer `"ok": true`.
+2. Install [uv](https://docs.astral.sh/uv/) where the agent runs; it runs the server and its dependencies.
+3. Add the `pdso` server to `.mcp.json`: `uv run --script <repo>/mcp/pdso_mcp_server.py`. Set `PDSO_SSH_HOST` only when Revit is on another machine.
+4. Restart the agent session (Claude Code loads MCP servers only at start), then check the connection with `get_status`.
+
+Verified 2026-11-14 on Windows 11 x64, Revit 2026, uv 0.13.8: the server registered with `claude mcp add -s local`, and an MCP client over stdio listed the 61 tools and called `get_status`, `get_setup_status` and `setup_model` (a bad part gives a tool error; `parts=[]` changes nothing). Over HTTP, a minimum-scope bootstrap followed by the remaining parts set up the sample project.
 
 ### A typical session
 

@@ -120,7 +120,7 @@ All lengths are decimal feet. All areas are square feet.
 pyrevit configs routes enable
 ```
 
-Then reload pyRevit. The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication and listens only on `127.0.0.1`. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
+Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). To check it, open `http://127.0.0.1:48884/pdso/status` in a browser on the Revit computer: it shows `"ok": true`, the open model and `api_version`. `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication and listens only on `127.0.0.1`. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
 
 ### Routes
 
@@ -184,14 +184,28 @@ Use this setup when the agent and Revit are on the same Windows computer. The se
 }
 ```
 
-Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`). Thus the first start can be slow. The next starts use the uv cache.
+Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`, `shapely`). Thus the first start can be slow. The next starts use the uv cache.
+
+Or register the server with the `claude` command instead of editing `.mcp.json`. Run it in **Command Prompt** or **Git Bash**, in the repository folder. PowerShell drops the `--`, and `claude` then rejects `--script`. `-s local` keeps the entry private to you and this project:
+
+```bash
+claude mcp add pdso -s local -- "C:\Users\<you>\.local\bin\uv.exe" run --script "C:\path\to\pdso-flowgram\mcp\pdso_mcp_server.py"
+```
+
+```bash
+claude mcp get pdso
+```
+
+`claude mcp get pdso` starts the server once and should show `Status: ✔ Connected`.
+
+The uv installer adds `%USERPROFILE%\.local\bin` to your PATH, but programs that were already running don't see it until they restart. That includes the Claude Code app. The full path to `uv.exe` (as above, or as `"command"` in `.mcp.json`) works either way. Restart the Claude Code session afterwards: it loads MCP servers only when a session starts.
 
 Proxy:
 
 - The server does not use a proxy for the API calls. It ignores `HTTP_PROXY`, `HTTPS_PROXY` and the Windows system proxy for these calls. You do not have to set `NO_PROXY`.
 - uv uses the Windows system proxy to download the dependencies (tested with uv 0.12.1). If your computer gets to the internet only through a different proxy, add `"env": { "HTTPS_PROXY": "http://<proxy host>:<port>" }` to the `pdso` entry.
 
-The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, set `PDSO_OUTPUT_DIR`. This setup was tested on Windows 11 ARM64 with Revit 2027 and uv 0.12.1.
+The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, set `PDSO_OUTPUT_DIR`. This setup was tested on Windows 11 ARM64 with Revit 2027 and uv 0.12.1, and on Windows 11 x64 with Revit 2026 and uv 0.13.8 (registered with `claude mcp add`, checked over MCP with `get_status`, `get_setup_status` and `setup_model`).
 
 | Task | Tools |
 | --- | --- |
