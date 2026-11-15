@@ -218,7 +218,7 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `draft_areas_from_rooms`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 | Open documents | `list_open_documents`, `open_document_in_background`, `set_target_document`, `save_document`, `close_background_document` |
-| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `recommend_layouts`, `find_similar_rooms`, `preview_similar_rooms`, `place_layout`, `list_room_items`, `describe_item`, `clear_room_items`, `delete_layout` |
+| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `recommend_layouts`, `find_similar_rooms`, `preview_pull_from_catalogue`, `pull_from_catalogue`, `preview_similar_rooms`, `place_layout`, `list_room_items`, `describe_item`, `clear_room_items`, `delete_layout` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
 
