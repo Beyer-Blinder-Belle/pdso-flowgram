@@ -42,13 +42,14 @@ def default_standards_dir():
 
 
 def extension_dir():
-    """The PDSO.extension folder."""
+    """The extension folder: the root of the cloned repository (it holds PDSO.tab)."""
     return os.path.normpath(os.path.join(_HERE, "..", "..", "..", ".."))
 
 
 def repo_dir():
-    """The folder that contains PDSO.extension (the cloned repository)."""
-    return os.path.dirname(extension_dir())
+    """The cloned repository. The extension is the repository root, so this is
+    the same folder as extension_dir(). Kept for the {repo_dir} token."""
+    return extension_dir()
 
 
 def get_user_standards_dir():

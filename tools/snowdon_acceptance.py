@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Acceptance and regression runner for the PDSO HTTP API.
 
-The runner drives the API in a real Revit (see PDSO.extension/startup.py). Each
+The runner drives the API in a real Revit (see startup.py at the repository root). Each
 step prints one line: ``STEP <id> PASS|FAIL <evidence>``. The exit code is 1 if
 a step fails.
 

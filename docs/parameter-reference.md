@@ -4,7 +4,7 @@ These are the **built-in** PDSO parameters. They're options, not requirements: e
 
 **Locked** parameters are always tracked: `PDSO - Program UID`, `PDSO - Program Stacking`, `PDSO - Last Synced`, and any parameter an area scheme mapping writes into (by default GSF, NSF and ZFA).
 
-All parameters are **instance** parameters on **Generic Models**, in the `PDSO` shared parameter group. The PDSO tools find built-ins by **GUID**, so don't recreate them under a new GUID. The definitions live in [`shared_parameter_constants.py`](../PDSO.extension/lib/pdso/code/data/shared_parameter_constants.py).
+All parameters are **instance** parameters on **Generic Models**, in the `PDSO` shared parameter group. The PDSO tools find built-ins by **GUID**, so don't recreate them under a new GUID. The definitions live in [`shared_parameter_constants.py`](../lib/pdso/code/data/shared_parameter_constants.py).
 
 **Who writes each value**
 

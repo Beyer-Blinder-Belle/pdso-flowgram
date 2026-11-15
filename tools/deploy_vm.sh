@@ -2,9 +2,12 @@
 # Copy the PDSO extension code to the Revit computer and load the new code.
 #
 # Usage: PDSO_SSH_HOST=user@host PDSO_REMOTE_EXT=C:/path/PDSO.extension tools/deploy_vm.sh
+#
+# PDSO_REMOTE_EXT is the extension folder on the Revit computer: the clone of
+# this repository (named *.extension, for example PDSO.extension).
 # Environment:
 #   PDSO_SSH_HOST   SSH target of the Revit computer (user@host). Necessary.
-#   PDSO_REMOTE_EXT PDSO.extension folder on the Revit computer. Necessary.
+#   PDSO_REMOTE_EXT Extension folder (the clone) on the Revit computer. Necessary.
 #   PDSO_RELOAD     How to load the new code. Default: auto.
 #                   dev     POST /pdso/dev/reload (fast: drops the cached pdso
 #                           modules). It needs the dev flag file
@@ -17,7 +20,7 @@
 set -eu
 
 HOST="${PDSO_SSH_HOST:?Set PDSO_SSH_HOST to the SSH target of the Revit computer}"
-REMOTE="${PDSO_REMOTE_EXT:?Set PDSO_REMOTE_EXT to the PDSO.extension folder there}"
+REMOTE="${PDSO_REMOTE_EXT:?Set PDSO_REMOTE_EXT to the extension folder there}"
 MODE="${PDSO_RELOAD:-auto}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="http://127.0.0.1:48884"
@@ -29,11 +32,11 @@ remote() { ssh "$HOST" "$1" </dev/null; }
 # denied"). That is not an error: the check below makes sure that the code is
 # there.
 REMOTE_WIN="$(printf '%s' "$REMOTE" | tr '/' '\\')"
-COPYFILE_DISABLE=1 tar -C "$ROOT/PDSO.extension" --exclude='__pycache__' --exclude='*.pyc' -czf - lib startup.py \
+COPYFILE_DISABLE=1 tar -C "$ROOT" --exclude='__pycache__' --exclude='*.pyc' -czf - lib startup.py \
   | ssh "$HOST" "tar -xzf - -C \"$REMOTE_WIN\"" 2>/dev/null || true
 
 CHECK="lib/pdso/code/api/handlers.py"
-LOCAL_SUM="$(shasum -a 256 "$ROOT/PDSO.extension/$CHECK" | cut -d' ' -f1)"
+LOCAL_SUM="$(shasum -a 256 "$ROOT/$CHECK" | cut -d' ' -f1)"
 REMOTE_SUM="$(remote "type \"$REMOTE_WIN\\$(printf '%s' "$CHECK" | tr '/' '\\')\"" | shasum -a 256 | cut -d' ' -f1)"
 if [ "$LOCAL_SUM" != "$REMOTE_SUM" ]; then
   echo "copy failed: $CHECK on the Revit computer is not the same as the local file" >&2

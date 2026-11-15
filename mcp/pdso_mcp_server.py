@@ -5,7 +5,7 @@
 """MCP server for PDSO Flowgram.
 
 This server runs on your computer (macOS, Windows or Linux). It sends each tool
-call to the PDSO HTTP API in Revit (see PDSO.extension/startup.py). Revit can be
+call to the PDSO HTTP API in Revit (see startup.py at the repository root). Revit can be
 on the same computer, or on a different computer: then set PDSO_SSH_HOST and
 the server opens an SSH port forward to it.
 
@@ -63,7 +63,7 @@ DEFAULT_TIMEOUT = 120
 LONG_TIMEOUT = 1800  # sync and bootstrap can take minutes
 TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
-# Version of the HTTP API (API_VERSION in PDSO.extension/.../api/handlers.py)
+# Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
 EXPECTED_API_VERSION = "1.2"
 

@@ -24,11 +24,11 @@ SKETCH_EXTENSION = ".svg"
 
 
 def repo_root():
-    """The folder that holds PDSO.extension (the repository root)."""
+    """The repository root, which is also the extension folder."""
     here = os.path.abspath(__file__)
-    # catalogue -> code -> pdso -> lib -> PDSO.extension -> repo root
+    # catalogue_store.py -> catalogue -> code -> pdso -> lib -> repo root
     path = here
-    for _ in range(6):
+    for _ in range(5):
         path = os.path.dirname(path)
     return path
 
