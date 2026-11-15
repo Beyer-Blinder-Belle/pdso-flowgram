@@ -9,7 +9,13 @@ All lengths are feet and all angles radians, in the room's own frame
 import re
 from datetime import datetime
 
-SCHEMA_VERSION = 1
+# 2 added "features": what surrounds the layout (walls, doors, windows, shape).
+# Version 1 files still load; they simply have no features.
+SCHEMA_VERSION = 2
+
+# Every number in an entry is in these units (Revit's internal ones). They are
+# written into each file so a reader never has to guess feet or metres.
+UNITS = {"length": "ft", "area": "ft2", "angle": "rad"}
 
 
 class LayoutItem(object):
@@ -96,15 +102,48 @@ class LayoutEntry(object):
 
     Attributes:
         id (str): File-safe identifier, also the JSON file name.
-        name (str): Human name, e.g. "Classroom - 28 seats, teaching wall north".
-        program (str): Program the layout serves, e.g. "Classroom". Used to filter.
-        project_type (str): e.g. "K-12", "Residential". Used to filter.
+        name (str): Human name, e.g. "1 Bedroom - 650 sf, corner".
+        program (str): Program the layout serves, e.g. "1 Bedroom". Used to filter.
+        project_type (str): e.g. "Multifamily", "K-12". Used to filter.
         width, depth (float): Room frame size (ft).
         area (float): Room area (ft2).
         boundary (list): Room outline in the room frame, [(x, y), ...].
         items (list[LayoutItem]): Placed families.
         source (dict): Where it was harvested from (project name, element id, date).
         notes (str): Free text.
+        features (dict): What the room is like around the layout, used to match
+            it to a target room. Empty for entries harvested before schema 2.
+            All points are in the room frame.
+                perimeter (float)
+                edges (list): one per boundary segment, in boundary order:
+                    start, end ([x, y]), length,
+                    kind: "exterior" | "corridor" | "party" | "unroomed",
+                    beyond: name of the room on the other side, if any,
+                    wall_type, glazed (True for a curtain wall)
+                edge_lengths (dict): total length per kind
+                window_wall_length (float): length of exterior boundary
+                glazed_length (float): window widths plus curtain wall length
+                openings (list): doors and windows in the boundary walls:
+                    kind: "door" | "window", family, type, x, y, u, v,
+                    width, sill_height, edge (index into edges)
+                entry (dict or None): the entrance door: x, y, u, v, edge,
+                    direction ([dx, dy], pointing into the room)
+                shape_matrix (list): see layout_geometry.shape_matrix
+                shape (dict): category ("rectangle", "L", "T", "Z", "U",
+                    "other"), corners, reflex_corners, turns, orthogonal.
+                    The same for a unit however it is turned, mirrored or
+                    stretched; see layout_geometry.shape_category
+                unit (dict): bedrooms, bathrooms, kitchens, room_count, and
+                    pdso: every "PDSO - ..." parameter of the unit's data silo,
+                    as a list of {key, value, display}; value is None when the
+                    parameter is empty, display is the value with its unit
+                rooms (list): rooms inside the unit: name, area, x, y, boundary
+                internal_walls (list): partitions: start, end, width, wall_type
+                internal_doors (list): family, type, x, y, width, rotation,
+                    hand_flipped, facing_flipped, wall (index into internal_walls)
+                hosted_items (list): wall- and face-hosted families, recorded
+                    but not placed by Create: category, family, type, x, y,
+                    z_offset, rotation, host, edge, edge_distance
     """
 
     def __init__(
@@ -120,6 +159,7 @@ class LayoutEntry(object):
         source=None,
         notes="",
         entry_id=None,
+        features=None,
     ):
         self.name = name
         self.program = program
@@ -131,11 +171,13 @@ class LayoutEntry(object):
         self.items = items
         self.source = source or {}
         self.notes = notes
+        self.features = features or {}
         self.id = entry_id or make_entry_id(program, name)
 
     def to_dict(self):
         return {
             "schema_version": SCHEMA_VERSION,
+            "units": UNITS,
             "id": self.id,
             "name": self.name,
             "program": self.program,
@@ -147,6 +189,7 @@ class LayoutEntry(object):
             "items": [item.to_dict() for item in self.items],
             "source": self.source,
             "notes": self.notes,
+            "features": self.features,
         }
 
     @classmethod
@@ -170,6 +213,7 @@ class LayoutEntry(object):
             data.get("source", {}),
             data.get("notes", ""),
             data.get("id"),
+            data.get("features", {}),
         )
 
 

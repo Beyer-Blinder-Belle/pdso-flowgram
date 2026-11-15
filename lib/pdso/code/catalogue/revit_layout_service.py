@@ -6,19 +6,31 @@ into a LayoutEntry in the room's own frame. Create does the reverse: it places
 an entry's families into a target Room or Area through a Placement chosen by
 the recommender.
 
-Version 1 limits, reported to the user rather than hidden:
-    - Only free-standing (level-based) families are harvested. Wall-, face- and
-      ceiling-hosted families (doors, wall cabinets, whiteboards, lights) are
-      listed as skipped: they need a host and do not move cleanly.
+Harvest also reads what surrounds the layout (which walls are exterior or face
+the corridor, the doors and windows, the room's shape); see harvest_features.
+
+Limits, reported to the user rather than hidden:
+    - Only free-standing (level-based) families are placed by Create. Wall- and
+      face-hosted families (wall cabinets, whiteboards) are recorded in the
+      entry's features, with the wall they sit on, but not placed yet.
     - A family that is not loaded in the target model is listed as missing.
     - Only a room's outer boundary is used; holes (columns, shafts) are ignored.
 """
 
+import os
 from datetime import datetime
 
 from rpw import DB
 from rpw.utils.dotnet import List
 
+from pdso.code.catalogue.harvest_features import (
+    DATA_SILO_PARAMETER,
+    boundary_edges,
+    build_features,
+    id_value,
+    nearest_edge,
+    type_name,
+)
 from pdso.code.catalogue.layout_entry import LayoutEntry, LayoutItem
 from pdso.code.catalogue.layout_geometry import (
     RoomFrame,
@@ -120,6 +132,46 @@ def describe_target(spatial_element):
 # ---------------------------------------------------------------------------
 
 
+def is_area_plan(view):
+    return isinstance(view, DB.ViewPlan) and view.ViewType == DB.ViewType.AreaPlan
+
+
+def areas_with_data_silo(doc, view):
+    """The placed Areas shown in a view that have a PDSO data silo inside.
+
+    Returns:
+        tuple: (areas, without). without is the placed Areas with no silo.
+    """
+    silos = []
+    for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
+        if instance.LookupParameter(DATA_SILO_PARAMETER) is None:
+            continue
+        location = instance.Location
+        if isinstance(location, DB.LocationPoint):
+            silos.append((id_value(instance.LevelId), location.Point.X, location.Point.Y))
+
+    areas, without = [], []
+    collector = (
+        DB.FilteredElementCollector(doc, view.Id)
+        .OfCategory(DB.BuiltInCategory.OST_Areas)
+        .WhereElementIsNotElementType()
+    )
+    for area in collector:
+        if not isinstance(area, DB.Area) or area.Area <= 0:
+            continue
+        outline = [start for start, _, _ in boundary_edges(area)]
+        if len(outline) < 3:
+            continue
+        level_id = id_value(area.LevelId)
+        inside = [
+            1
+            for silo_level, x, y in silos
+            if silo_level == level_id and point_in_polygon((x, y), outline)
+        ]
+        (areas if inside else without).append(area)
+    return areas, without
+
+
 class HarvestResult(object):
     """A harvested entry plus what was left out and why."""
 
@@ -128,12 +180,8 @@ class HarvestResult(object):
         self.skipped = skipped  # list of (element id, "Family : Type", reason)
 
 
-def get_type_name(symbol):
-    """Type name of a FamilySymbol, read through its parameter for safety."""
-    parameter = symbol.get_Parameter(DB.BuiltInParameter.SYMBOL_NAME_PARAM)
-    if parameter is not None and parameter.HasValue:
-        return parameter.AsString()
-    return DB.Element.Name.GetValue(symbol)
+# Kept under its old name for callers outside this module
+get_type_name = type_name
 
 
 def _label(instance):
@@ -235,12 +283,14 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         HarvestResult, or None if the element has no usable boundary.
     """
     doc = spatial_element.Document
-    outline = get_outline(spatial_element)
+    edges = boundary_edges(spatial_element)
+    outline = [start for start, _, _ in edges]
     if len(outline) < 3:
         return None
 
     level = get_level(spatial_element)
     frame = RoomFrame.from_polygon(outline)
+    features = build_features(spatial_element, edges, frame, level)
 
     categories = List[DB.BuiltInCategory]()
     for category in HARVEST_CATEGORIES:
@@ -253,7 +303,7 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         .WhereElementIsNotElementType()
     )
 
-    items, skipped = [], []
+    items, skipped, hosted_items, nested_items = [], [], [], []
     for instance in candidates:
         location = instance.Location
         if not isinstance(location, DB.LocationPoint):
@@ -264,25 +314,61 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         if _instance_level_id(instance) != level.Id:
             continue
 
-        # Parts of a nested family come along with their parent
-        if instance.SuperComponent is not None:
-            continue
-
-        host = instance.Host
-        if host is not None and not isinstance(host, DB.Level):
-            skipped.append(
-                (
-                    instance.Id,
-                    _label(instance),
-                    "hosted by {}".format(host.Category.Name if host.Category else "an element"),
-                )
-            )
-            continue
-        if instance.HostFace is not None:
-            skipped.append((instance.Id, _label(instance), "face-based"))
+        # The PDSO data silo is the unit's label, not part of its layout
+        if instance.LookupParameter(DATA_SILO_PARAMETER) is not None:
             continue
 
         local_x, local_y = frame.to_local((point.X, point.Y))
+
+        # Parts of a nested family come along with their parent when it is
+        # placed, so they are not items. They are still recorded: a whole
+        # furniture layout is often one family, and its desks and chairs are
+        # what the layout is made of. (Only shared nested families are seen.)
+        if instance.SuperComponent is not None:
+            parent = instance.SuperComponent
+            while getattr(parent, "SuperComponent", None) is not None:
+                parent = parent.SuperComponent
+            nested_items.append(
+                {
+                    "category": instance.Category.Name,
+                    "family": instance.Symbol.Family.Name,
+                    "type": get_type_name(instance.Symbol),
+                    "x": round(local_x, 4),
+                    "y": round(local_y, 4),
+                    "z_offset": round(_z_offset(instance, point, level), 4),
+                    "rotation": round(location.Rotation - frame.angle, 6),
+                    "parent_family": parent.Symbol.Family.Name,
+                    "parent_type": get_type_name(parent.Symbol),
+                }
+            )
+            continue
+
+        # Hosted families are recorded with the wall they sit on, not placed
+        host = instance.Host
+        host_name = None
+        if host is not None and not isinstance(host, DB.Level):
+            host_name = host.Category.Name if host.Category else "an element"
+        elif instance.HostFace is not None:
+            host_name = "a face"
+        if host_name is not None:
+            edge_index, edge_distance = nearest_edge((point.X, point.Y), edges)
+            hosted_items.append(
+                {
+                    "category": instance.Category.Name,
+                    "family": instance.Symbol.Family.Name,
+                    "type": get_type_name(instance.Symbol),
+                    "x": round(local_x, 4),
+                    "y": round(local_y, 4),
+                    "z_offset": round(_z_offset(instance, point, level), 4),
+                    "rotation": round(location.Rotation - frame.angle, 6),
+                    "host": host_name,
+                    "edge": edge_index,
+                    "edge_distance": round(edge_distance, 4),
+                }
+            )
+            skipped.append((instance.Id, _label(instance), "hosted by " + host_name))
+            continue
+
         items.append(
             LayoutItem(
                 instance.Category.Name,
@@ -299,16 +385,24 @@ def harvest(spatial_element, name, program, project_type, notes=""):
             )
         )
 
+    features["hosted_items"] = hosted_items
+    features["nested_items"] = nested_items
+
     local_outline = [frame.to_local(p) for p in outline]
     # Store the outline counter-clockwise so every entry reads the same way
     if polygon_area(local_outline) < 0:
         local_outline.reverse()
 
     source = {
+        "model": doc.Title,
+        # The file's name only: a full path carries the user's name and folders
+        "model_path": os.path.basename(doc.PathName or ""),
         "project": doc.Title,
-        "element_id": str(_id_value(spatial_element.Id)),
+        "element_id": str(id_value(spatial_element.Id)),
         "element_kind": "Area" if isinstance(spatial_element, DB.Area) else "Room",
         "room_name": get_room_name(spatial_element),
+        "room_number": get_text_parameter(spatial_element, DB.BuiltInParameter.ROOM_NUMBER),
+        "department": get_room_department(spatial_element),
         "level": level.Name,
         "harvested": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
@@ -324,16 +418,9 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         items,
         source,
         notes,
+        features=features,
     )
     return HarvestResult(entry, skipped)
-
-
-def _id_value(element_id):
-    """ElementId as a number, on Revit versions before and after 2024."""
-    try:
-        return element_id.Value
-    except AttributeError:
-        return element_id.IntegerValue
 
 
 # ---------------------------------------------------------------------------

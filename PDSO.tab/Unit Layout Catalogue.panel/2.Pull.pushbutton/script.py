@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Place: show the catalogue layouts for a Room, ranked, and place the chosen one."""
+"""Pull from Catalogue: put a catalogue layout into the selected Room.
+
+The button needs a Room to compare the layouts with: select a Room, an Area,
+or objects that are in one Room. It is not available with no selection. The
+window shows the Room as it is now and the layouts that fit it, ranked. The
+Room does not have to be harvested.
+"""
 
 import sys
 
-from pyrevit import revit, script
+from pyrevit import revit
 
 # pyRevit keeps imported library modules in memory. Drop the catalogue modules,
 # so that this button uses the code that is on disk now (no pyRevit reload).
@@ -16,22 +22,10 @@ from pdso.code.catalogue import catalogue_windows as windows  # noqa: E402
 
 LAYOUTS = 5
 
-if __name__ == "__main__":
-    doc = revit.doc
-    rooms = commands.RoomIndex()
-    picked = windows.PickerWindow(
-        "Place Layout",
-        "Choose the Room that gets a layout. A selection in the model selects its Room here.",
-        [("Number", 0.8), ("Name", 2.6), ("Level", 1.6), ("Area", 1.0), ("Items now", 0.8)],
-        rooms.picker_rows(),
-        "Show layouts",
-        rooms.number_of_selection(),
-        commands.owner(),
-    ).show()
-    if picked is None:
-        script.exit()
-    number = picked["id"]
-    recommended = catalogue.recommend_layouts(doc, number, limit=LAYOUTS)
+
+def pull_into_room(doc, room_id):
+    """Show the layouts that fit a Room, ranked, and place the chosen one."""
+    recommended = catalogue.recommend_layouts(doc, room_id, limit=LAYOUTS)
     target = recommended["target"]
     rows = []
     for rank, item in enumerate(recommended["recommendations"], start=1):
@@ -79,7 +73,7 @@ if __name__ == "__main__":
             ],
             commands.owner(),
         )
-        script.exit()
+        return
 
     current = len(rows[0]["preview"]["current_items"])
     window = windows.SuggestionWindow(
@@ -93,7 +87,7 @@ if __name__ == "__main__":
             ("Items in the Room now", str(current)),
         ],
         rows,
-        "Place this layout",
+        "Pull this layout into the Room",
         "Delete the furniture that is in the Room now" if current else None,
         {
             "preview": dict(
@@ -120,3 +114,33 @@ if __name__ == "__main__":
     layout_id = window.show()
     if layout_id is not None:
         commands.place(target, layout_id, window.option)
+
+
+if __name__ == "__main__":
+    document = revit.doc
+    # A selected Room or Area is the target. It does not have to be harvested:
+    # the target only receives a layout.
+    target_id = commands.selected_target_id()
+    if target_id is None:
+        index = commands.RoomIndex()
+        number = index.number_of_selection()
+        if number:
+            target_id = index.by_number[number]["id"]
+
+    if target_id is None:
+        windows.show_message(
+            "Select a Room first",
+            [
+                ("The selection is not in one Room.", "bad"),
+                ("Select a Room, an Area, or objects that are in one Room.", None),
+            ],
+            commands.owner(),
+        )
+    elif not catalogue.list_layouts()["layouts"]:
+        windows.show_message(
+            "The catalogue is empty",
+            [("Harvest a layout first: Harvest Layout or Harvest All Units.", None)],
+            commands.owner(),
+        )
+    else:
+        pull_into_room(document, target_id)

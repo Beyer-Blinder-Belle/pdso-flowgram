@@ -120,14 +120,14 @@ All lengths are decimal feet. All areas are square feet.
 pyrevit configs routes enable
 ```
 
-Then reload pyRevit. The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication and listens only on `127.0.0.1`. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
+Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). To check it, open `http://127.0.0.1:48884/pdso/status` in a browser on the Revit computer: it shows `"ok": true`, the open model and `api_version`. `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication and listens only on `127.0.0.1`. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
 
 ### Routes
 
 | Group | Routes |
 | --- | --- |
 | Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `POST document/close`, `POST document/save`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
-| Setup | `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
+| Setup | `GET setup`, `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
 | Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
 | Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `POST programs/batch`, `GET/PUT/DELETE programs/<uid or id>` |
@@ -144,6 +144,8 @@ Requests are safe to send at the same time. The API runs them one at a time on R
 A reply is `{"ok": true, "data": ...}` or `{"ok": false, "error": {"type", "message", "traceback"}}`.
 
 `POST bootstrap` makes a model ready for PDSO the same way as the ribbon's three setup buttons. It writes the configuration (and `area_scheme_mappings`, if given), sets up the 20 built-in parameters if the model tracks none, then runs **Quick Setup** from the model's standards files: area schemes, the Data Silo family, view templates, working views and schedules. It also makes sure every mapped area scheme has an area plan on each level, named and templated as `views.json` says (for example `PDSO - GSF - L1`). `levels` (names or ids) chooses the levels; without it, the levels `views.json` gives plans to (all but Roof and Parapet). If no Data Silo family file can be loaded (a Revit version without a shipped family), it builds a placeholder family. The reply lists what it made and, under `setup`, the Quick Setup report rows. Items that are there are left alone.
+
+The body can narrow the scope. `parts` lists the Quick Setup steps to run (`area_schemes`, `families`, `view_templates`, `views`, `schedules`; default: the ones `setup.json` turns on). `parameters` is `"all"` (the 20 built-in parameters, the default) or `"required"` (only Program UID, Program Stacking, Last Synced and the area parameters); it only matters for a model that tracks no parameters yet. `GET setup` (read-only) describes each part and says what the model has already.
 
 ### MCP server (on the agent's computer)
 
@@ -182,19 +184,33 @@ Use this setup when the agent and Revit are on the same Windows computer. The se
 }
 ```
 
-Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`). Thus the first start can be slow. The next starts use the uv cache.
+Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`, `shapely`). Thus the first start can be slow. The next starts use the uv cache.
+
+Or register the server with the `claude` command instead of editing `.mcp.json`. Run it in **Command Prompt** or **Git Bash**, in the repository folder. PowerShell drops the `--`, and `claude` then rejects `--script`. `-s local` keeps the entry private to you and this project:
+
+```bash
+claude mcp add pdso -s local -- "C:\Users\<you>\.local\bin\uv.exe" run --script "C:\path\to\pdso-flowgram\mcp\pdso_mcp_server.py"
+```
+
+```bash
+claude mcp get pdso
+```
+
+`claude mcp get pdso` starts the server once and should show `Status: ✔ Connected`.
+
+The uv installer adds `%USERPROFILE%\.local\bin` to your PATH, but programs that were already running don't see it until they restart. That includes the Claude Code app. The full path to `uv.exe` (as above, or as `"command"` in `.mcp.json`) works either way. Restart the Claude Code session afterwards: it loads MCP servers only when a session starts.
 
 Proxy:
 
 - The server does not use a proxy for the API calls. It ignores `HTTP_PROXY`, `HTTPS_PROXY` and the Windows system proxy for these calls. You do not have to set `NO_PROXY`.
 - uv uses the Windows system proxy to download the dependencies (tested with uv 0.12.1). If your computer gets to the internet only through a different proxy, add `"env": { "HTTPS_PROXY": "http://<proxy host>:<port>" }` to the `pdso` entry.
 
-The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, set `PDSO_OUTPUT_DIR`. This setup was tested on Windows 11 ARM64 with Revit 2027 and uv 0.12.1.
+The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, set `PDSO_OUTPUT_DIR`. This setup was tested on Windows 11 ARM64 with Revit 2027 and uv 0.12.1, and on Windows 11 x64 with Revit 2026 and uv 0.13.8 (registered with `claude mcp add`, checked over MCP with `get_status`, `get_setup_status` and `setup_model`).
 
 | Task | Tools |
 | --- | --- |
 | Model | `get_status`, `open_project`, `close_project`, `new_project`, `save_project`, `list_levels`, `create_level`, `list_rooms` |
-| Setup | `setup_model`, `get_config`, `update_config`, `check_config` |
+| Setup | `get_setup_status`, `setup_model`, `get_config`, `update_config`, `check_config` |
 | Parameters | `list_parameters`, `create_parameter`, `delete_parameter` |
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
 | Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
@@ -210,6 +226,7 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 
 The server instructions give an agent the PDSO workflow, so that a user can ask in plain language ("map out the program of the second floor of this school") and does not need to know PDSO. The tools that make this short:
 
+- Setup keeps the user in the loop. The agent calls `get_setup_status` (what each part makes and what the model has), agrees the scope with the user, then calls `setup_model`. `parts` and `parameters` choose between the full package (the default: what the ribbon's setup buttons make) and the minimum the sync needs (`parts=["area_schemes", "families"]`, `parameters="required"`). `setup_model` can add parts later.
 - `setup_model()` with no levels makes area plans for the levels that have Rooms.
 - `list_rooms(level, include_outline=false)` gives number, name, area and bounding box of each Room.
 - `draft_areas_from_rooms(level, room_numbers, insets)` drafts one Area for each Room in each scheme, for example `insets = {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}`. A Room that fails does not stop the other Rooms. If an inset splits a Room outline, a larger simplify tolerance or the largest piece is used, and `warnings` says so.

@@ -5,9 +5,13 @@ No Revit imports, so this module can be read, reused and tested outside Revit.
 Points are (x, y) tuples in feet. Angles are radians, counter-clockwise.
 
 The idea that makes a layout reusable: every layout is stored in its room's
-own frame, not in project coordinates. The frame is the room's minimum-area
-bounding rectangle, origin at its corner, X along its longer side. A classroom
-harvested from one building can then be placed into a room in another.
+own frame, not in project coordinates. The frame is the bounding rectangle
+aligned to the direction most of the room's boundary runs in (the "most popular
+vector"), origin at its corner, X along its longer side. An apartment harvested
+from one building can then be placed into a space in another.
+
+The frame, the shape matrix and the eight orientations follow Oliver Green,
+"An Introspective Approach to Apartment Design" (AHMM, 2020).
 """
 
 import math
@@ -143,7 +147,7 @@ def normalize_angle(angle):
 
 
 class RoomFrame(object):
-    """A room's own coordinate frame: its minimum-area bounding rectangle.
+    """A room's own coordinate frame: a bounding rectangle lined up with its walls.
 
     Attributes:
         angle (float): Direction of the frame's X axis in project coordinates.
@@ -170,43 +174,243 @@ class RoomFrame(object):
 
     @classmethod
     def from_polygon(cls, polygon):
-        """Fit the minimum-area bounding rectangle, trying every edge direction.
+        """Fit the bounding rectangle aligned to the room's dominant direction.
 
-        Rooms are mostly rectilinear, so one of the edge directions gives the
-        tight rectangle. A brute-force search is fine for a few dozen edges.
+        The X axis follows the direction that the greatest length of boundary
+        runs in (see dominant_direction). For a rectangular room this is the
+        same rectangle as before; for an irregular room it stays lined up with
+        the walls furniture is set out against, where a minimum-area rectangle
+        can end up on a diagonal.
         """
-        best = None
-        count = len(polygon)
-        for i in range(count):
-            x1, y1 = polygon[i]
-            x2, y2 = polygon[(i + 1) % count]
-            if abs(x2 - x1) < TOLERANCE and abs(y2 - y1) < TOLERANCE:
-                continue
-            angle = math.atan2(y2 - y1, x2 - x1)
-            rotated = [rotate(p, -angle) for p in polygon]
-            xs = [p[0] for p in rotated]
-            ys = [p[1] for p in rotated]
-            width = max(xs) - min(xs)
-            depth = max(ys) - min(ys)
-            area = width * depth
-            if best is None or area < best[0] - TOLERANCE:
-                best = (area, angle, (min(xs), min(ys)), width, depth)
-
-        if best is None:
+        angle = dominant_direction(polygon)
+        if angle is None:
             raise ValueError("polygon has no edges")
 
-        _, angle, offset, width, depth = best
+        offset, width, depth = _bounds_at(polygon, angle)
 
         # Keep X along the longer side, so "width" means the same thing everywhere
         if depth > width + TOLERANCE:
             angle += math.pi / 2.0
-            rotated = [rotate(p, -angle) for p in polygon]
-            xs = [p[0] for p in rotated]
-            ys = [p[1] for p in rotated]
-            offset = (min(xs), min(ys))
-            width, depth = depth, width
+            offset, width, depth = _bounds_at(polygon, angle)
 
         return cls(normalize_angle(angle), offset, width, depth)
+
+
+def _bounds_at(polygon, angle):
+    """Min corner and size of the polygon's bounding box turned to an angle."""
+    rotated = [rotate(p, -angle) for p in polygon]
+    xs = [p[0] for p in rotated]
+    ys = [p[1] for p in rotated]
+    return (min(xs), min(ys)), max(xs) - min(xs), max(ys) - min(ys)
+
+
+# Edges within this angle of each other count as running the same way
+DIRECTION_TOLERANCE = math.radians(1.0)
+
+
+def dominant_direction(polygon):
+    """The direction most of a polygon's boundary runs in: the "most popular vector".
+
+    Edges are grouped by direction, ignoring which way they point and treating
+    perpendicular edges as one group (a room's walls mostly sit on one
+    orthogonal grid). The group with the greatest total length wins.
+
+    Returns:
+        float: Angle in [0, pi/2), or None for a polygon with no edges.
+    """
+    quarter = math.pi / 2.0
+    groups = []  # [angle of first edge, total length]
+    count = len(polygon)
+    for i in range(count):
+        x1, y1 = polygon[i]
+        x2, y2 = polygon[(i + 1) % count]
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < TOLERANCE:
+            continue
+        angle = math.atan2(y2 - y1, x2 - x1) % quarter
+        for group in groups:
+            difference = abs(angle - group[0])
+            if min(difference, quarter - difference) < DIRECTION_TOLERANCE:
+                group[1] += length
+                break
+        else:
+            groups.append([angle, length])
+
+    if not groups:
+        return None
+    return max(groups, key=lambda group: group[1])[0]
+
+
+def point_segment_distance(point, start, end):
+    """Distance from a point to a segment, and where along it the closest point is.
+
+    Returns:
+        tuple: (distance, t), t from 0 at start to 1 at end.
+    """
+    px, py = point
+    x1, y1 = start
+    x2, y2 = end
+    dx, dy = x2 - x1, y2 - y1
+    length_squared = dx * dx + dy * dy
+    if length_squared < TOLERANCE:
+        return math.hypot(px - x1, py - y1), 0.0
+    t = ((px - x1) * dx + (py - y1) * dy) / length_squared
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)), t
+
+
+# ---------------------------------------------------------------------------
+# Shape matrix
+# ---------------------------------------------------------------------------
+
+MATRIX_SIZE = 10
+
+
+def shape_matrix(polygon, width, depth, size=MATRIX_SIZE):
+    """A room's shape as a size x size grid over its frame rectangle.
+
+    Each cell is 1 when its centre is inside the room, else 0. A rectangular
+    room is all ones; an L-shaped room has a block of zeros in one corner.
+    Two rooms' shapes are compared cell by cell (see matrix_difference).
+
+    Args:
+        polygon (list): Room outline in the room frame.
+    Returns:
+        list: Rows from y = 0 upward, each a list of 0/1 from x = 0 upward.
+    """
+    rows = []
+    for row in range(size):
+        y = (row + 0.5) * depth / size
+        cells = []
+        for column in range(size):
+            x = (column + 0.5) * width / size
+            cells.append(1 if point_in_polygon((x, y), polygon) else 0)
+        rows.append(cells)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Shape category
+# ---------------------------------------------------------------------------
+
+# Corners closer together than this are one corner: a pilaster or a small jog
+# in a wall does not change what shape a unit is
+SHAPE_TOLERANCE = 1.0
+
+# Corner sequences, in their canonical form, that have a name.
+# C is a convex corner (the outline turns toward the inside), R a reflex one.
+SHAPE_NAMES = {
+    "CCCC": "rectangle",
+    "CCCCCR": "L",
+    "CCCCRCCR": "T",
+    "CCCRCCCR": "Z",
+    "CCCCCCRR": "U",
+}
+
+
+def _simplify(polygon, tolerance):
+    """Snap corners to a grid, then drop repeated and in-line points."""
+    snapped = []
+    for x, y in polygon:
+        point = (round(x / tolerance) * tolerance, round(y / tolerance) * tolerance)
+        if not snapped or point != snapped[-1]:
+            snapped.append(point)
+    if len(snapped) > 1 and snapped[0] == snapped[-1]:
+        snapped.pop()
+
+    changed = True
+    while changed and len(snapped) > 3:
+        changed = False
+        count = len(snapped)
+        for i in range(count):
+            ax, ay = snapped[i - 1]
+            bx, by = snapped[i]
+            cx, cy = snapped[(i + 1) % count]
+            cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx)
+            if abs(cross) < TOLERANCE:
+                del snapped[i]
+                changed = True
+                break
+    return snapped
+
+
+def shape_category(polygon, tolerance=SHAPE_TOLERANCE):
+    """Name a unit's shape so that turned, mirrored and stretched copies match.
+
+    The outline is walked counter-clockwise and each corner is written down as
+    C (convex) or R (reflex). The sequence does not depend on how long the
+    sides are, so a long L and a short L give the same one. Turning the unit
+    only changes where the sequence starts, and mirroring only reverses it, so
+    the sequence is put in one canonical form: the alphabetically first of all
+    its rotations, forward and reversed. An L-shaped unit is "CCCCCR" however
+    it is turned, mirrored or proportioned.
+
+    Args:
+        polygon (list): Outline in the room frame.
+    Returns:
+        dict: category (a name from SHAPE_NAMES, else "other"), corners,
+            reflex_corners, turns (the canonical sequence), and orthogonal
+            (False when a corner is more than 5 degrees off a right angle).
+    """
+    points = _simplify(polygon, tolerance)
+    if len(points) < 3:
+        return {"category": "other", "corners": len(points), "reflex_corners": 0,
+                "turns": "", "orthogonal": False}
+    if polygon_area(points) < 0:
+        points.reverse()
+
+    letters, orthogonal = [], True
+    count = len(points)
+    for i in range(count):
+        ax, ay = points[i - 1]
+        bx, by = points[i]
+        cx, cy = points[(i + 1) % count]
+        ux, uy = bx - ax, by - ay
+        vx, vy = cx - bx, cy - by
+        cross = ux * vy - uy * vx
+        dot = ux * vx + uy * vy
+        letters.append("C" if cross > 0 else "R")
+        # sine of 5 degrees: how far off square a corner may be
+        if abs(dot) > 0.087 * math.hypot(ux, uy) * math.hypot(vx, vy):
+            orthogonal = False
+
+    sequence = "".join(letters)
+    candidates = []
+    for text in (sequence, sequence[::-1]):
+        for start in range(count):
+            candidates.append(text[start:] + text[:start])
+    turns = min(candidates)
+
+    category = SHAPE_NAMES.get(turns, "other") if orthogonal else "other"
+    return {
+        "category": category,
+        "corners": count,
+        "reflex_corners": letters.count("R"),
+        "turns": turns,
+        "orthogonal": orthogonal,
+    }
+
+
+def orient_matrix(matrix, turns, mirror):
+    """Map a square shape matrix through one orientation, as orient_point does."""
+    size = len(matrix)
+    result = [[0] * size for _ in range(size)]
+    for row in range(size):
+        for column in range(size):
+            x, y = orient_point((column + 0.5, row + 0.5), size, size, turns, mirror)
+            result[int(y)][int(x)] = matrix[row][column]
+    return result
+
+
+def matrix_difference(first, second):
+    """Share of cells that differ between two matrices of the same size, 0-1."""
+    total, different = 0, 0
+    for row_a, row_b in zip(first, second):
+        for a, b in zip(row_a, row_b):
+            total += 1
+            if a != b:
+                different += 1
+    return float(different) / total if total else 0.0
 
 
 # The eight ways a rectangle maps onto itself: four turns, each with or without
@@ -248,3 +452,37 @@ def orient_angle(angle, turns, mirror):
     if mirror:
         angle = -angle
     return normalize_angle(angle + turns * math.pi / 2.0)
+
+
+def extent_along(size_x, size_y, direction):
+    """Length of a thin box along its own direction, from its upright bounds.
+
+    A window's bounding box is given square to the model axes. When the wall
+    is turned, that box is larger than the window; this takes the turn back
+    out. direction is the wall's direction, (dx, dy).
+
+    Returns:
+        float: The length along direction, or None when it can't be told
+            (a wall at 45 degrees gives a square box for any window).
+    """
+    length = math.hypot(direction[0], direction[1])
+    if length < 1e-9:
+        return None
+    dx, dy = abs(direction[0]) / length, abs(direction[1]) / length
+    spread = dx * dx - dy * dy
+    if abs(spread) < 0.2:
+        return None
+    return max(0.0, (size_x * dx - size_y * dy) / spread)
+
+
+def overlap_along(start, end, a, b):
+    """How much of the edge start-end the segment a-b covers, laid onto it (ft)."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return 0.0
+    ux, uy = dx / length, dy / length
+    first = (a[0] - start[0]) * ux + (a[1] - start[1]) * uy
+    second = (b[0] - start[0]) * ux + (b[1] - start[1]) * uy
+    low, high = min(first, second), max(first, second)
+    return max(0.0, min(high, length) - max(low, 0.0))

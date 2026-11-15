@@ -235,9 +235,14 @@ There are two MCP servers. Set up the one you need, or both.
 
 **PDSO MCP server** (PDSO tasks: programs, Areas, preflight, sync):
 
-1. In a terminal on the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit.
-2. Add the `pdso` server to Claude Code's `.mcp.json`. The [README](../README.md#mcp-server-on-the-agents-computer) has the exact entry.
-3. Restart the Claude Code session.
+1. In a terminal on the Revit computer, run `pyrevit configs routes enable`. Then reload pyRevit (**pyRevit → Reload**). You don't need to restart Revit.
+2. Check that the API answers: on the Revit computer, open `http://127.0.0.1:48884/pdso/status` in a browser. It should show `"ok": true` and the open model. If the page doesn't load, pyRevit hasn't reloaded yet, or Routes is still off (`pyrevit configs routes` shows its state).
+3. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) on the computer where Claude Code runs, once. It runs the MCP server and installs its dependencies. The [README](../README.md#windows-same-computer-as-revit) has the Windows steps.
+4. Register the `pdso` server with Claude Code: run `claude mcp add` in Command Prompt or Git Bash (not PowerShell), or add an entry to `.mcp.json`. The [README](../README.md#windows-same-computer-as-revit) has both. Use the full path to `uv.exe` if Claude Code was already open when you installed uv.
+5. Restart the Claude Code session.
+6. Try it: ask Claude Code to "set up this model for PDSO". It should tell you what a setup would add and ask how much you want before it changes the model.
+
+After updating PDSO, reload pyRevit and restart the Claude Code session, so that Revit and the MCP server both use the new version.
 
 **pyRevit MCP server** (any Revit API script, with an approval prompt in Revit):
 

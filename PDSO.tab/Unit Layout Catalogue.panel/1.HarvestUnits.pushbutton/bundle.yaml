@@ -1,0 +1,15 @@
+title: "Harvest\nAll Units"
+
+tooltip: >-
+  Save the layout of every unit in the active area plan into the Unit Layout
+  Catalogue. A unit is an Area with a PDSO data silo inside; nothing is picked.
+  Select Rooms or Areas first to harvest those instead. Running again replaces
+  the earlier harvest of the same unit. Shift-click to choose the catalogue
+  folder.
+
+author: BBB DCT + hackathon team
+
+context: doc-project
+
+engine:
+  clean: true

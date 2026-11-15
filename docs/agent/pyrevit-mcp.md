@@ -16,16 +16,19 @@ There are two ways in. **Use the PDSO MCP server unless it can't do what you nee
 
 Setup, the full tool table and the route table are in the root [README → HTTP API and MCP server](../../README.md#http-api-and-mcp-server). In short:
 
-1. On the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit.
-2. Add the `pdso` server to `.mcp.json`: `uv run --script <repo>/mcp/pdso_mcp_server.py`. Set `PDSO_SSH_HOST` only when Revit is on another machine.
-3. Check the connection with `get_status`.
+1. On the Revit computer, run `pyrevit configs routes enable`, then reload pyRevit (no Revit restart needed). `http://127.0.0.1:48884/pdso/status` should answer `"ok": true`.
+2. Install [uv](https://docs.astral.sh/uv/) where the agent runs; it runs the server and its dependencies.
+3. Add the `pdso` server to `.mcp.json`: `uv run --script <repo>/mcp/pdso_mcp_server.py`. Set `PDSO_SSH_HOST` only when Revit is on another machine.
+4. Restart the agent session (Claude Code loads MCP servers only at start), then check the connection with `get_status`.
+
+Verified 2026-11-14 on Windows 11 x64, Revit 2026, uv 0.13.8: the server registered with `claude mcp add -s local`, and an MCP client over stdio listed the 61 tools and called `get_status`, `get_setup_status` and `setup_model` (a bad part gives a tool error; `parts=[]` changes nothing). Over HTTP, a minimum-scope bootstrap followed by the remaining parts set up the sample project.
 
 ### A typical session
 
 | Step | Tools |
 | --- | --- |
 | Orient | `get_status`, `get_config`, `check_config`, `list_levels` |
-| Make a model ready (only if asked) | `setup_model` (config, parameters, then Quick Setup; leaves existing items alone) |
+| Make a model ready (only if asked) | `get_setup_status`, agree the scope with the user, then `setup_model` (config, parameters, then the chosen Quick Setup parts; leaves existing items alone) |
 | Learn the data shape | `get_program_fields` (field names such as `uid`), `list_parameters` |
 | Read the program | `list_programs`, `summarize_programs`, `describe_program`, `list_areas` |
 | See it | `render_plan` (diagram from model data, can preview draft outlines), `export_view_image`, `color_areas` |
@@ -34,6 +37,8 @@ Setup, the full tool table and the route table are in the root [README → HTTP 
 | Show the user | `select_programs`, `select_elements`, `show_view`, `show_program_volumes` |
 
 ### Rules for Path A
+
+- **Agree the setup scope with the user before `setup_model`**, unless they already said what they want. Use `get_setup_status` to tell them, in plain words, what a setup adds and what the model has. Describe the full package (configuration, the 20 built-in parameters, area schemes, the Data Silo family, view templates, area plans, a 3D view, schedules) and the minimum for programs and sync (`parts=["area_schemes", "families"]`, `parameters="required"`). Don't push the full package: views and schedules are conveniences, and some users don't want them in a working model. Parts can be added later.
 
 - **Never pass `force=true` to `run_sync`** unless the user explicitly says to skip failed preflight checks. Fix the ✗ items instead, or report them.
 - **Confirm before destructive calls**: `delete_program`, `delete_area`, `delete_parameter` (especially with `purge=true`, which deletes values), `close_project` without saving, and `new_project`/`open_project` when the current model has unsaved changes.

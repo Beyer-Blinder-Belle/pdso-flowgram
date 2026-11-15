@@ -48,9 +48,9 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
     3.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
     4.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
   PDSO.tab/Unit Layout Catalogue.panel/
+    1.HarvestUnits.pushbutton/ → every Area with a data silo in the active area plan ("Harvest All Units")
     1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout")
-    2.FindRooms.pushbutton/  → PickerWindow + SuggestionWindow ("Find Rooms")
-    3.Place.pushbutton/      → PickerWindow + SuggestionWindow ("Place Layout")
+    2.Pull.pushbutton/       → SuggestionWindow ("Pull from Catalogue": needs a selection; layouts for the selected Room)
   lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     api/        dispatcher.py (routing, {"ok","data"|"error"} envelope), handlers.py (route table)
@@ -106,7 +106,7 @@ families/               Data Silo .rfa (Revit 2026)
 - **Change `API_VERSION` (`api/handlers.py`) and `EXPECTED_API_VERSION` (`mcp/pdso_mcp_server.py`) together** when a route or a reply changes. `get_status` warns when they differ.
 - **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that. The Project Config screen shows each row as Area Scheme → Parameter and swaps on load and save; it also reads configs saved the old way (`{scheme: parameter}`) and rewrites them correctly on the next save.
 - **Program Volumes are found by family name `{prefix}{UID}`.** After a UID or prefix change, phase 2 finds the old family through `parent_data_silo_id` on its instances and renames it. Families last synced before that field was written are still left behind (see architecture.md).
-- **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded, and adds the tracked parameters to the Data Silo family. The API's bootstrap does the same three steps and calls Quick Setup's `run_setup`, so change setup behavior in `setup/` (and the JSON standards), not in `bootstrap_service`.
+- **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded, and adds the tracked parameters to the Data Silo family. The API's bootstrap does the same three steps and calls Quick Setup's `run_setup`, so change setup behavior in `setup/` (and the JSON standards), not in `bootstrap_service`. Its `parts` and `parameters` arguments narrow the scope; agents agree that scope with the user first (`get_setup_status`, see docs/agent/pyrevit-mcp.md).
 - **The shipped Data Silo family carries only Program UID, Program Stacking and Last Synced.** Every other parameter reaches Data Silos through the Generic Models binding. Never assume a built-in parameter is in the family or on an element: check the registry.
 - **Large files:** `audit_service.py`, `sync_service.py`, `preflight_service.py`, `body_3_parameters.py`, `mcp/pdso_mcp_server.py` (1–1.5k lines each). Navigate with `grep -n "def "`.
 - **The intranet docs predate this code.** Where they disagree, the code wins. Differences are listed at the end of [docs/parameter-reference.md](docs/parameter-reference.md).
