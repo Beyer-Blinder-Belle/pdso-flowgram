@@ -1,8 +1,27 @@
 # -*- coding: utf-8 -*-
 """Revit API helpers shared by the Quick Setup steps."""
 
+# Python standard libraries
+import fnmatch
+
+import System
+
 # 3rd Party Modules
 from pyrevit import DB
+from rpw.utils.dotnet import List
+
+# Filter rule operator (view_templates.json) -> ParameterFilterRuleFactory method.
+# Rules compare text, so the value is always a string.
+FILTER_RULE_OPERATORS = {
+    "equals": "CreateEqualsRule",
+    "not_equals": "CreateNotEqualsRule",
+    "contains": "CreateContainsRule",
+    "not_contains": "CreateNotContainsRule",
+    "begins_with": "CreateBeginsWithRule",
+    "not_begins_with": "CreateNotBeginsWithRule",
+    "ends_with": "CreateEndsWithRule",
+    "not_ends_with": "CreateNotEndsWithRule",
+}
 
 # View types the setup steps can create: name -> (DB.ViewType, DB.ViewFamily)
 VIEW_TYPES = {
@@ -206,11 +225,23 @@ def find_area_scheme(doc, name):
     return None
 
 
-def get_levels(doc, selector="all"):
+def level_name_matches(name, patterns):
+    """Whether a level name matches any pattern (case-insensitive, * and ? wildcards)."""
+    if isinstance(patterns, basestring):  # noqa: F821 - IronPython 2.7 builtin
+        patterns = [patterns]
+    lowered = name.lower()
+    return any(
+        fnmatch.fnmatchcase(lowered, pattern.lower()) for pattern in patterns or []
+    )
+
+
+def get_levels(doc, selector="all", exclude=None):
     """Levels sorted by elevation.
 
     Args:
         selector: "all", or a list of level names.
+        exclude: Level name patterns to leave out, e.g. ["*Roof*", "Parapet"].
+            Case-insensitive; * matches any text and ? one character.
     Returns:
         tuple[list[DB.Level], list[str]]: The levels found and any names that weren't.
     """
@@ -218,16 +249,20 @@ def get_levels(doc, selector="all"):
         DB.FilteredElementCollector(doc).OfClass(DB.Level),
         key=lambda level: level.Elevation,
     )
-    if selector in (None, "all"):
-        return levels, []
-    if isinstance(selector, basestring):  # noqa: F821 - IronPython 2.7 builtin
-        selector = [selector]
+    missing = []
+    if selector not in (None, "all"):
+        if isinstance(selector, basestring):  # noqa: F821 - IronPython 2.7 builtin
+            selector = [selector]
+        by_name = dict((level.Name, level) for level in levels)
+        levels = [by_name[name] for name in selector if name in by_name]
+        missing = [name for name in selector if name not in by_name]
+        levels.sort(key=lambda level: level.Elevation)
 
-    by_name = dict((level.Name, level) for level in levels)
-    found = [by_name[name] for name in selector if name in by_name]
-    missing = [name for name in selector if name not in by_name]
-    found.sort(key=lambda level: level.Elevation)
-    return found, missing
+    if exclude:
+        levels = [
+            level for level in levels if not level_name_matches(level.Name, exclude)
+        ]
+    return levels, missing
 
 
 def set_parameter_value(element, name, value):
@@ -267,3 +302,115 @@ class SwallowWarnings(DB.IFailuresPreprocessor):
             if failure.GetSeverity() == DB.FailureSeverity.Warning:
                 failures_accessor.DeleteWarning(failure)
         return DB.FailureProcessingResult.Continue
+
+
+# ----- View filters -----
+
+
+def find_parameter_filter(doc, name):
+    """A rule-based view filter by name, or None."""
+    for element in DB.FilteredElementCollector(doc).OfClass(DB.ParameterFilterElement):
+        if element.Name == name:
+            return element
+    return None
+
+
+def _parameter_label(doc, parameter_id):
+    """The name Revit shows for a filterable parameter id."""
+    value = parameter_id.Value
+    if value < 0:
+        try:
+            bip = System.Enum.ToObject(DB.BuiltInParameter, value)
+            return DB.LabelUtils.GetLabelFor(bip)
+        except Exception:
+            return None
+    element = doc.GetElement(parameter_id)
+    return element.Name if element is not None else None
+
+
+def resolve_filter_parameter(doc, category_ids, name):
+    """The ElementId of a parameter a view filter on these categories can use.
+
+    Args:
+        name: A BuiltInParameter name ("ALL_MODEL_FAMILY_NAME", the same in every
+            language) or the parameter name as Revit shows it ("PDSO - Program UID").
+    Raises:
+        ValueError: If no filterable parameter has the name.
+    """
+    if not name:
+        raise ValueError("a rule has no parameter")
+    filterable = list(
+        DB.ParameterFilterUtilities.GetFilterableParametersInCommon(doc, category_ids)
+    )
+
+    bip = getattr(DB.BuiltInParameter, str(name), None)
+    if bip is not None:
+        parameter_id = DB.ElementId(bip)
+        if any(item == parameter_id for item in filterable):
+            return parameter_id
+        raise ValueError(
+            "'{}' can't be used in a filter on these categories".format(name)
+        )
+
+    for parameter_id in filterable:
+        if _parameter_label(doc, parameter_id) == name:
+            return parameter_id
+    raise ValueError(
+        "'{}' is not a parameter a filter on these categories can use".format(name)
+    )
+
+
+def build_filter_rule(doc, category_ids, spec):
+    """A FilterRule from a {parameter, operator, value} spec."""
+    operator = spec.get("operator", "equals")
+    if operator not in FILTER_RULE_OPERATORS:
+        raise ValueError(
+            "unknown operator '{}'. Use one of: {}".format(
+                operator, ", ".join(sorted(FILTER_RULE_OPERATORS))
+            )
+        )
+    parameter_id = resolve_filter_parameter(doc, category_ids, spec.get("parameter"))
+    value = u"{}".format(spec.get("value", ""))
+    method = getattr(DB.ParameterFilterRuleFactory, FILTER_RULE_OPERATORS[operator])
+    try:
+        return method(parameter_id, value)
+    except TypeError:
+        # Revit 2022 and earlier also take a caseSensitive flag
+        return method(parameter_id, value, False)
+
+
+def create_or_update_parameter_filter(doc, spec):
+    """Create a rule-based view filter, or update the one with the same name.
+
+    Must be called inside a transaction. All rules must match (AND).
+
+    Args:
+        spec: {"name", "categories": [...],
+            "rules": [{"parameter", "operator", "value"}]}
+    Returns:
+        DB.ParameterFilterElement
+    """
+    category_ids = List[DB.ElementId]()
+    for category_name in spec.get("categories", []):
+        category = resolve_category(doc, category_name)
+        if category is None:
+            raise ValueError("category '{}' is not in this model".format(category_name))
+        category_ids.Add(category.Id)
+    if category_ids.Count == 0:
+        raise ValueError("list at least one category")
+
+    rules = List[DB.FilterRule]()
+    for rule_spec in spec.get("rules", []):
+        rules.Add(build_filter_rule(doc, category_ids, rule_spec))
+    if rules.Count == 0:
+        raise ValueError("list at least one rule")
+    element_filter = DB.ElementParameterFilter(rules)
+
+    existing = find_parameter_filter(doc, spec["name"])
+    if existing is None:
+        return DB.ParameterFilterElement.Create(
+            doc, spec["name"], category_ids, element_filter
+        )
+    existing.SetCategories(category_ids)
+    existing.SetElementFilter(element_filter)
+    return existing

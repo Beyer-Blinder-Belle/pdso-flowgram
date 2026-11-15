@@ -3,7 +3,7 @@
 # System Modules
 
 # 3rd Party Modules
-from rpw import revit, db, DB
+from rpw import db, DB
 from pyrevit import script
 
 # Custom Modules
@@ -32,18 +32,27 @@ class ExtendedProgramVolumeInstance(object):
         should_be_deleted (bool): True if instance is orphaned
     """
 
-    def __init__(self, rpw_element):
+    def __init__(self, rpw_element, doc=None):
         """Initialize extended program volume instance wrapper.
 
         Args:
-            rpw_element: rpw.Element instance to wrap (Program Volume family instance)
+            rpw_element: rpw.Element instance to wrap (Program Volume family instance),
+                or None for an instance the sync will create
+            doc: Revit Document. Required when rpw_element is None; otherwise
+                taken from the element.
         """
         # Output
         self.logger = script.get_logger()
         self.output = script.get_output()
 
-        # Document (if needed)
-        # Not needed
+        # Document
+        if doc is None and rpw_element is not None:
+            doc = rpw_element.unwrap().Document
+        if doc is None:
+            raise ValueError(
+                "ExtendedProgramVolumeInstance needs a doc for a new instance"
+            )
+        self.doc = doc
 
         # Identity/ Lookup Properties
         # Not needed
@@ -82,7 +91,7 @@ class ExtendedProgramVolumeInstance(object):
         """
 
         # Every tracked parameter is reset, then refilled from the Data Silo
-        pdso_params_to_clear = get_registry(revit.doc).parameters
+        pdso_params_to_clear = get_registry(self.doc).parameters
 
         for parameter in pdso_params_to_clear:
             if not parameter.has_default_value():
@@ -150,7 +159,7 @@ class ExtendedProgramVolumeInstance(object):
                 )
                 return
 
-            family_symbol = revit.doc.GetElement(list(family_symbol_ids)[0])
+            family_symbol = self.doc.GetElement(list(family_symbol_ids)[0])
 
             # Ensure the FamilySymbol is activated
             if not family_symbol.IsActive:
@@ -185,7 +194,7 @@ class ExtendedProgramVolumeInstance(object):
             )
 
             try:
-                instance = revit.doc.Create.NewFamilyInstance(
+                instance = self.doc.Create.NewFamilyInstance(
                     target_point,
                     family_symbol,
                     target_level,
@@ -232,6 +241,16 @@ class ExtendedProgramVolumeInstance(object):
                 )
 
         self.params_to_update.clear()
+
+        # Record which Data Silo this instance belongs to. The sync uses it to
+        # find a Data Silo's family again after its UID or the prefix changes.
+        if self.parent_data_silo is not None:
+            self.entity_fields_to_update.setdefault(
+                "parent_data_silo_id", self.parent_data_silo.rpw_element.unwrap().Id
+            )
+            self.entity_fields_to_update.setdefault(
+                "is_primary_instance", bool(self.is_primary_instance)
+            )
 
         # Update the attached extensible storage schema entity
         with PdsoProgramVolumeInstanceSchema(self.rpw_element.unwrap()) as entity:
@@ -409,7 +428,7 @@ class ExtendedProgramVolumeInstance(object):
             Parameters cleared: tracked Area parameters and Last Synced.
             Continues on error if individual parameter update fails.
         """
-        registry = get_registry(revit.doc)
+        registry = get_registry(self.doc)
         pdso_params_to_clear = registry.by_role(ROLE_AREA)
         last_synced = registry.get(LAST_SYNCED)
         if last_synced is not None:

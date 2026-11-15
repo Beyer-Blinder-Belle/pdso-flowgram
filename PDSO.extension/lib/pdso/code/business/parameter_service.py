@@ -206,7 +206,7 @@ def list_parameters(doc):
 # =============================================================================
 
 
-def _shared_parameter_file(doc):
+def shared_parameter_file_for_writes(doc):
     """Path of the shared parameter file for new definitions.
 
     The file that Revit is set to use, then the fallback of the Parameter
@@ -225,7 +225,10 @@ def _shared_parameter_file(doc):
 def _apply(doc, desired, removed, unbind_removed=False):
     """Run the Parameter Manager apply step. Raise PDSOError if it fails."""
     report = registry_service.PDSOParameterSetupService(doc).apply(
-        desired, removed, _shared_parameter_file(doc), unbind_removed=unbind_removed
+        desired,
+        removed,
+        shared_parameter_file_for_writes(doc),
+        unbind_removed=unbind_removed,
     )
     if not report.success:
         errors = [text for level, text in report.messages if level == "error"]
@@ -286,15 +289,34 @@ def _type_of(shared_parameter_element):
         return None
 
 
+def with_prefix(doc, name):
+    """The Revit name for a new parameter: PREFIX is added, as in the Parameter Manager.
+
+    "Tenant Type" gives "PDSO - Tenant Type". A name that starts with PREFIX is
+    kept. So is a name the model has a shared parameter for already, so that
+    parameter and its values are used again.
+    """
+    name = (name or "").strip()
+    if not name or name.startswith(PREFIX) or name in standard_pdso_parameters:
+        return name
+    if _shared_parameters_named(doc, name):
+        return name
+    return PREFIX + name
+
+
 def create_parameter(doc, name, parameter_type="string"):
     """Track a new parameter: a custom parameter, or a built-in one by its name.
+
+    A custom name gets the PREFIX ("PDSO - "), like a parameter added in the
+    Parameter Manager, unless the model has a shared parameter with the name as
+    given (see with_prefix). The field name is the same either way.
 
     If the model has one shared parameter with the name already (for example
     after a delete without purge), that parameter is used, and its values stay.
 
     Args:
         doc: Revit Document (a project, with no open transaction)
-        name (str): Parameter name, as Revit shows it
+        name (str): Parameter name, with or without PREFIX
         parameter_type (str): "string", "multilineText", "number", "integer",
             "area", "length" or "yesno". Not used for a built-in parameter.
 
@@ -303,7 +325,7 @@ def create_parameter(doc, name, parameter_type="string"):
             model had the shared parameter already) and "warnings"
     """
     registry = _require_configured(doc)
-    name = (name or "").strip()
+    name = with_prefix(doc, name)
     error = registry_service.validate_parameter_name(name)
     if error:
         raise PDSOError(error)

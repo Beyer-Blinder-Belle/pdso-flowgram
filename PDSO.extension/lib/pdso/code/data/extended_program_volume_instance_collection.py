@@ -105,7 +105,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
 
                     # Wrap the instance
                     extended_volume = ExtendedProgramVolumeInstance(
-                        generic_model_instance
+                        generic_model_instance, doc=self.doc
                     )
                     extended_program_volume_instances.append(extended_volume)
 

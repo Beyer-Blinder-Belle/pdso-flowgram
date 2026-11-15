@@ -29,6 +29,17 @@
           "visible": true
         },
         { "category": "OST_RvtLinks", "visible": false }
+      ],
+      "filters": [
+        {
+          "_comment": "Program Volumes are Generic Models too. Hide them in plans so only the Data Silos show.",
+          "name": "PDSO - Program Volumes",
+          "categories": ["OST_GenericModel"],
+          "rules": [
+            { "parameter": "ALL_MODEL_FAMILY_NAME", "operator": "begins_with", "value": "{program_volume_prefix}" }
+          ],
+          "visible": false
+        }
       ]
     },
     {

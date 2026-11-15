@@ -156,6 +156,13 @@
                                         TextWrapping="Wrap" VerticalAlignment="Center" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,2">
+                                    <Image x:Name="CheckUidPatternIcon" Width="16" Height="16"
+                                        Margin="0,0,4,0" />
+                                    <TextBlock x:Name="CheckUidPatternText"
+                                        Text="{Binding check_uid_pattern_status}"
+                                        TextWrapping="Wrap" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,2">
                                     <Image x:Name="CheckGenericModelParamsIcon" Width="16"
                                         Height="16" Margin="0,0,4,0" />
                                     <TextBlock x:Name="CheckGenericModelParamsText"

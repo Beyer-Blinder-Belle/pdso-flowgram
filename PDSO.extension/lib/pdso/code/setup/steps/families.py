@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Quick Setup step: load families listed in families.json."""
+"""Quick Setup step: load families listed in families.json.
+
+The Data Silo family ships with only the required PDSO parameters (Program UID,
+Program Stacking, Last Synced). After loading it, this step adds the parameters
+the model tracks (chosen in the Parameter Manager, which runs before Quick Setup).
+"""
 
 # Python standard libraries
 import os
@@ -83,6 +88,60 @@ def _load_family(ctx, spec):
 
     if family is not None and spec.get("use_as_data_silo_family"):
         _register_data_silo_family(ctx, family.Name)
+        if (
+            spec.get("add_tracked_parameters", True)
+            and ctx.pdso_config["data_silo_family"] == family.Name
+        ):
+            _add_tracked_parameters(ctx, family.Name)
+
+
+def _add_tracked_parameters(ctx, family_name):
+    """Embed the model's tracked parameters in the Data Silo family.
+
+    Data Silos get the tracked parameters through the project binding either way,
+    so a problem here is a warning, not a failure.
+    """
+    # Imported here: these services read Project Config, which Quick Setup can
+    # run without (see SetupContext._storage_service)
+    from pdso.code.business import parameter_registry_service, parameter_service
+
+    item = "{} parameters".format(family_name)
+    try:
+        service = parameter_registry_service.PDSOParameterSetupService(ctx.doc)
+        report = service.add_tracked_parameters_to_family(
+            family_name, parameter_service.shared_parameter_file_for_writes(ctx.doc)
+        )
+    except Exception as error:
+        ctx.add(
+            item, status.WARNING, "Couldn't add tracked parameters: {}".format(error)
+        )
+        return
+
+    added = [
+        text
+        for level, text in report.messages
+        if level == "ok" and text.endswith("added to the Data Silo family.")
+    ]
+    problems = [
+        text for level, text in report.messages if level in ("warning", "error")
+    ]
+    if problems:
+        ctx.add(item, status.WARNING, " ".join(problems))
+    elif added:
+        ctx.add(
+            item,
+            status.UPDATED,
+            "Added {} tracked parameter{} to the family".format(
+                len(added), "s" if len(added) != 1 else ""
+            ),
+        )
+    else:
+        notes = [text for level, text in report.messages if level == "info"]
+        ctx.add(
+            item,
+            status.SKIPPED,
+            notes[-1] if notes else "The family has every tracked parameter",
+        )
 
 
 def _register_data_silo_family(ctx, family_name):

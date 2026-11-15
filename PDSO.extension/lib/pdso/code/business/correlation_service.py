@@ -2,12 +2,12 @@
 import math
 
 # 3rd Party Modules
-from rpw import DB
+from rpw import db
 from pyrevit import script, DB
 
 # Custom Modules
-# from ..data import model_document_collections as pdso_models
 from pdso.code.data.extended_program_volume_family import ExtendedProgramVolumeFamily
+from pdso.code.data.extensible_storage_schemas import PdsoProgramVolumeInstanceSchema
 from pdso.code.data.extended_program_volume_instance import (
     ExtendedProgramVolumeInstance,
 )
@@ -116,6 +116,18 @@ class PDSOCorrelationService(object):
             ext_program_volume_family_collection.program_volume_family_name_prefix
         )
 
+        # Every family name the Data Silos expect. A family with one of these
+        # names belongs to that Data Silo and is never renamed for another one.
+        expected_family_names = set(
+            "{}{}".format(
+                program_volume_family_name_prefix,
+                str(ext_data_silo.parameters["PDSO - Program UID"].value),
+            )
+            for ext_data_silo in ext_data_silo_collection.extended_data_silos
+        )
+        # {Data Silo id: Family}, read from the Program Volume instances on first use
+        previous_families = None
+
         # Correlate each Data Silo to Program Volume Families on the same level
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
             # Find Program Volume Families by matching family name. Family name is prefix + data silo UID
@@ -133,6 +145,22 @@ class PDSOCorrelationService(object):
                 ),
                 None,
             )
+
+            # No family has the expected name: if the Data Silo's UID or the prefix
+            # changed, its old family is renamed instead of a new one being built
+            if matching_ext_program_volume_family is None:
+                if previous_families is None:
+                    previous_families = self._previous_families_by_data_silo(
+                        ext_program_volume_family_collection.doc
+                    )
+                matching_ext_program_volume_family = self._adopt_previous_family(
+                    ext_data_silo,
+                    previous_families,
+                    expected_family_name,
+                    expected_family_names,
+                    ext_program_volume_family_collection,
+                    new_extended_program_volume_families,
+                )
 
             # If there is no matching program volume family, create an extended object, which will faciliate Family creation later
             if matching_ext_program_volume_family is None:
@@ -178,6 +206,93 @@ class PDSOCorrelationService(object):
         ext_program_volume_family_collection.extended_program_volume_families.extend(
             new_extended_program_volume_families
         )
+
+    def _previous_families_by_data_silo(self, doc):
+        """Find the Program Volume family each Data Silo had, from its instances.
+
+        The sync stores the Data Silo's ElementId on each Program Volume instance
+        (parent_data_silo_id). Families are found whatever their name or prefix.
+
+        Args:
+            doc: Revit Document
+        Returns:
+            dict: {Data Silo ElementId value: DB.Family}
+        """
+        families = {}
+        schema = PdsoProgramVolumeInstanceSchema.schema
+        instances = (
+            DB.FilteredElementCollector(doc)
+            .OfCategory(DB.BuiltInCategory.OST_GenericModel)
+            .OfClass(DB.FamilyInstance)
+        )
+        for instance in instances:
+            try:
+                entity = instance.GetEntity(schema)
+                if not entity.IsValid():
+                    continue
+                data_silo_id = entity.Get[DB.ElementId]("parent_data_silo_id")
+                if data_silo_id is None or (
+                    data_silo_id == DB.ElementId.InvalidElementId
+                ):
+                    continue
+                families.setdefault(data_silo_id.Value, instance.Symbol.Family)
+            except Exception as error:
+                self.logger.debug(
+                    "Could not read the Data Silo of instance {}: {}".format(
+                        instance.Id, error
+                    )
+                )
+        return families
+
+    def _adopt_previous_family(
+        self,
+        ext_data_silo,
+        previous_families,
+        expected_family_name,
+        expected_family_names,
+        ext_program_volume_family_collection,
+        new_extended_program_volume_families,
+    ):
+        """Use a Data Silo's old Program Volume family, renamed to the expected name.
+
+        Returns:
+            ExtendedProgramVolumeFamily: The old family, queued for renaming, or
+                None if the Data Silo has no old family that is free to take.
+        """
+        family = previous_families.get(ext_data_silo.Id.Value)
+        if family is None or family.Name == expected_family_name:
+            return None
+        if family.Name in expected_family_names:
+            # Another Data Silo's UID now gives this name: that Data Silo keeps it
+            return None
+
+        candidates = (
+            ext_program_volume_family_collection.extended_program_volume_families
+            + new_extended_program_volume_families
+        )
+        wrapper = next(
+            (
+                pvf
+                for pvf in candidates
+                if pvf.rpw_element is not None and pvf.rpw_element.Id == family.Id
+            ),
+            None,
+        )
+        if wrapper is None:
+            # A family with a different prefix isn't in the collection yet
+            wrapper = ExtendedProgramVolumeFamily(db.Family(family))
+            new_extended_program_volume_families.append(wrapper)
+        elif wrapper.parent_data_silo is not None:
+            return None
+
+        self.logger.info(
+            "Program Volume family '{}' belongs to Data Silo {}. Its UID or the "
+            "prefix changed, so the sync renames it to '{}'".format(
+                family.Name, ext_data_silo.Id.Value, expected_family_name
+            )
+        )
+        wrapper.desired_family_name = expected_family_name
+        return wrapper
 
     # TO DO - Look deeper in the level mapping service, make sure this is the right place for this logic
     def correlate_data_silos_to_program_volume_instances(
@@ -342,7 +457,7 @@ class PDSOCorrelationService(object):
                 if len(matching_instances_on_level) == 0:
                     # Create new ExtendedProgramVolumeInstance (Instance will be created within a transaction later)
                     new_ext_program_volume_instance = ExtendedProgramVolumeInstance(
-                        None
+                        None, doc=ext_program_volume_instance_collection.doc
                     )
 
                     # Set initial location to Data Silo location (family geometry reference point)

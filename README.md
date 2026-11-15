@@ -41,15 +41,19 @@ The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.p
 
 ## Installation
 
-Using the pyRevit CLI:
+Clone this repo, then add the repo folder (the one that contains `PDSO.extension`) to pyRevit's custom extension directories, and reload pyRevit:
 
 ```bash
-pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
+git clone https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
 ```
 
-Then reload pyRevit.
+```bash
+pyrevit extensions paths add <path-to-pdso-flowgram>
+```
 
-For development, clone this repo and add its folder to pyRevit's custom extension directories (pyRevit → Settings → Custom Extension Directories), or run `pyrevit extensions paths add <path-to-repo>`.
+Or add the folder in pyRevit → Settings → Custom Extension Directories. pyRevit's **Update** button pulls new versions of the clone.
+
+pyRevit's Extensions window and `pyrevit extend ui` can't install PDSO yet. They clone the whole repo into one `<name>.extension` folder, and pyRevit doesn't look for the `PDSO.extension` folder inside it, so no ribbon tab appears. Supporting them needs the extension moved to the repo root.
 
 ## Revit family
 
@@ -57,7 +61,11 @@ PDSO needs the **Program Data Silo Object** family loaded in your project. The f
 
 - `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
 
-**Quick Setup** loads it and, unless Project Config already names a different loaded family, sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+The family only carries the three required parameters: `PDSO - Program UID`, `PDSO - Program Stacking` and `PDSO - Last Synced`. Each project adds the parameters it needs in the **Parameter Manager**, which binds them to Generic Models. So a residential and an office project can use the same family.
+
+**Quick Setup** loads it, adds the model's tracked parameters to it, and, unless Project Config already names a different loaded family, sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+
+Before reloading this family into a project that used an older copy, track every parameter you use in the Parameter Manager: values of untracked parameters live only in the old family and are lost on reload.
 
 ## Standards
 
@@ -182,8 +190,8 @@ The API uses the tracked parameters of the model (see [Tracked parameters](#trac
 
 - `POST bootstrap` sets up the parameters of a model that tracks no parameter: all built-in parameters (the *Default* preset). It does not change a model that tracks parameters.
 - `GET parameters` lists the tracked parameters, and the built-in parameters that the model does not track.
-- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. If the model has one shared parameter with the name, that parameter is used and its values stay.
-- Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name (`Rent per SF` is `rent_per_sf`).
+- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. A custom name gets the `PDSO - ` prefix, as in the Parameter Manager (`Room Finish` becomes `PDSO - Room Finish`). If the model has one shared parameter with the name as given, that parameter is used and its values stay.
+- Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name without the prefix (`PDSO - Rent per SF` is `rent_per_sf`).
 - `DELETE parameters/<field or name>` stops the tracking. The Revit parameter and its values stay. With `purge=true`, the parameter is also removed from Generic Models, and its values are deleted. The required parameters cannot be deleted.
 - New shared parameter definitions go into the shared parameter file that Revit is set to use, then the fallback file of the Parameter Manager. If there is none, the API uses a file in the temporary folder.
 

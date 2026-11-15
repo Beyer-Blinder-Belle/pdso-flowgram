@@ -103,6 +103,7 @@ python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
 | `on_existing` | `skip` (default) leaves a loaded family alone. `reload` loads it again over the existing one. |
 | `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`) |
 | `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config, unless Project Config already names a different family that is loaded |
+| `add_tracked_parameters` | For the Data Silo family: add the parameters the model tracks (chosen in the Parameter Manager) to the family (default `true`). The shipped family only has Program UID, Program Stacking and Last Synced. |
 
 ## view_templates.json
 
@@ -119,6 +120,7 @@ python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
 | `visibility.annotation_categories` | Same, for annotation categories |
 | `visibility.import_categories` | `hidden`, `visible` or `unchanged` |
 | `categories` | Per-category settings, applied after `visibility` (see below) |
+| `filters` | Rule-based view filters to create (or update) and add to the template, applied after `categories` (see below) |
 | `uncontrolled_parameters` | `BuiltInParameter` names the template should not control, e.g. `["VIEW_PHASE"]` |
 
 Each `categories` entry:
@@ -140,6 +142,26 @@ Each `categories` entry:
 
 A new template copies its starting settings from an existing view of the same type, if the model has one. Anything the file doesn't set keeps those settings. To control a category, list it.
 
+Each `filters` entry creates a view filter with that name in the model, or updates the one that's there, and adds it to the template:
+
+```json
+{
+  "name": "PDSO - Program Volumes",
+  "categories": ["OST_GenericModel"],
+  "rules": [
+    { "parameter": "ALL_MODEL_FAMILY_NAME", "operator": "begins_with", "value": "{program_volume_prefix}" }
+  ],
+  "visible": false
+}
+```
+
+- `categories`: as in `categories` entries above. `rules` must all match.
+- `parameter`: a `BuiltInParameter` name (`ALL_MODEL_FAMILY_NAME` is **Family Name**, the same in every language) or the parameter name as Revit shows it (`PDSO - Program Type`). It must be a parameter Revit allows in a filter on those categories.
+- `operator`: `equals`, `not_equals`, `contains`, `not_contains`, `begins_with`, `not_begins_with`, `ends_with`, `not_ends_with`. Values are compared as text.
+- `visible`, and the graphic keys of a `categories` entry (`halftone`, `projection_lines`, `surface`, ...), set the filter's visibility and overrides in the template.
+
+The shipped area plan template uses the filter above to hide Program Volumes, which are Generic Models like the Data Silos. The filter's rule holds the prefix from Project Config at the time Quick Setup ran. After changing the prefix, run the view_templates step again. To hide Program Volumes in your own floor plan templates, add the **PDSO - Program Volumes** filter to them in Visibility/Graphics.
+
 Useful categories: `OST_AreaSchemeLines` (area boundaries), `OST_Areas`, `OST_AreaReferenceVisibility` (Areas → Reference), `OST_AreaInteriorFillVisibility` (Areas → Interior Fill), `OST_AreaTags`, `OST_GenericModel` (Data Silos and Program Volumes), `OST_RvtLinks` (Revit links).
 
 ## views.json
@@ -152,6 +174,7 @@ Useful categories: `OST_AreaSchemeLines` (area boundaries), `OST_Areas`, `OST_Ar
 | `view_type` | `AreaPlan`, `FloorPlan`, `CeilingPlan` or `ThreeD` |
 | `area_scheme` | For area plans: the PDSO scheme key (`PDSO - GSF`). It's looked up in Project Config's area scheme mapping, so renamed schemes still work. |
 | `levels` | `"all"` or a list of level names. Plans get one view per level. |
+| `exclude_levels` | Level names to leave out, e.g. `["*Roof*", "*Parapet*"]` (the default for area plans). Case-insensitive; `*` matches any text and `?` one character. The report lists the levels it left out. |
 | `template` | View template name to apply |
 | `parameters` | View parameters to set, e.g. `{ "View Subdiscipline": "PDSO" }` for browser organization. Parameters the template controls can't be set. |
 

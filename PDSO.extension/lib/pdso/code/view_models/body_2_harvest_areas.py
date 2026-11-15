@@ -54,6 +54,7 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
         self._check_data_silo_family_loaded_status = "[ - ] Not checked"
         self._check_data_silo_instances_status = "[ - ] Not checked"
         self._check_uid_uniqueness_status = "[ - ] Not checked"
+        self._check_uid_pattern_status = "[ - ] Not checked"
         self._check_areas_multiple_data_silos_status = "[ - ] Not checked"
         self._check_areas_no_data_silos_status = "[ - ] Not checked"
         self._check_data_silos_partial_containment_status = "[ - ] Not checked"
@@ -223,6 +224,10 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
             "uid_uniqueness": {
                 "icon": self.find_element_by_name(content, "CheckUidUniquenessIcon"),
                 "text": self.find_element_by_name(content, "CheckUidUniquenessText"),
+            },
+            "uid_pattern": {
+                "icon": self.find_element_by_name(content, "CheckUidPatternIcon"),
+                "text": self.find_element_by_name(content, "CheckUidPatternText"),
             },
             "areas_multiple_silos": {
                 "icon": self.find_element_by_name(
@@ -454,6 +459,7 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
         self.check_data_silo_family_loaded_status = running_status
         self.check_data_silo_instances_status = running_status
         self.check_uid_uniqueness_status = running_status
+        self.check_uid_pattern_status = running_status
         self.check_areas_multiple_data_silos_status = running_status
         self.check_areas_no_data_silos_status = running_status
         self.check_data_silos_partial_containment_status = running_status
@@ -706,6 +712,18 @@ class PDSO_View_Model_2_Harvest_Areas(PDSO_Base_View_Model):
         if self._check_uid_uniqueness_status != value:
             self._check_uid_uniqueness_status = value
             self.on_property_changed("check_uid_uniqueness_status")
+
+    @property
+    def check_uid_pattern_status(self):
+        """Get UID pattern status."""
+        return self._check_uid_pattern_status
+
+    @check_uid_pattern_status.setter
+    def check_uid_pattern_status(self, value):
+        """Set UID pattern status and notify UI."""
+        if self._check_uid_pattern_status != value:
+            self._check_uid_pattern_status = value
+            self.on_property_changed("check_uid_pattern_status")
 
     @property
     def check_areas_multiple_data_silos_status(self):
