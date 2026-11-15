@@ -143,7 +143,7 @@ Requests are safe to send at the same time. The API runs them one at a time on R
 
 A reply is `{"ok": true, "data": ...}` or `{"ok": false, "error": {"type", "message", "traceback"}}`.
 
-`POST bootstrap` makes a model ready for PDSO. It creates only the items that are missing: the configuration, the 20 shared parameters (bound to Generic Models), a Data Silo family, the configured area schemes, and the area plans.
+`POST bootstrap` makes a model ready for PDSO the same way as the ribbon's three setup buttons. It writes the configuration (and `area_scheme_mappings`, if given), sets up the 20 built-in parameters if the model tracks none, then runs **Quick Setup** from the model's standards files: area schemes, the Data Silo family, view templates, working views and schedules. It also makes sure every mapped area scheme has an area plan on each level, named and templated as `views.json` says (for example `PDSO - GSF - L1`). `levels` (names or ids) chooses the levels; without it, the levels `views.json` gives plans to (all but Roof and Parapet). If no Data Silo family file can be loaded (a Revit version without a shipped family), it builds a placeholder family. The reply lists what it made and, under `setup`, the Quick Setup report rows. Items that are there are left alone.
 
 ### MCP server (on the agent's computer)
 

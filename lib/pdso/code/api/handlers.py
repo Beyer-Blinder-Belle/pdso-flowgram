@@ -190,7 +190,7 @@ def activate_view(ctx):
 
 @route("POST", "bootstrap")
 def bootstrap(ctx):
-    """Create the PDSO items that are missing. Body: levels?, area_scheme_mappings?"""
+    """Config, parameters, then Quick Setup. Body: levels?, area_scheme_mappings?"""
     return bootstrap_service.bootstrap(
         ctx.require_doc(),
         levels=ctx.arg("levels"),

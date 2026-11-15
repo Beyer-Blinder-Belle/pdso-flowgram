@@ -48,9 +48,13 @@ class SetupStep(object):
 class SetupContext(object):
     """Everything a step needs: the document, tokens, the PDSO config, and the report."""
 
-    def __init__(self, doc, standards):
+    def __init__(self, doc, standards, options=None):
         self.doc = doc
         self.standards = standards
+        # Caller overrides of the standards files. Supported: "levels" (list of
+        # level names): the levels that get plan views, instead of each view's
+        # "levels" and "exclude_levels". The HTTP API's bootstrap sets it.
+        self.options = dict(options or {})
         self.logger = script.get_logger()
         self.results = []
         self.current_step = None
@@ -198,17 +202,20 @@ class SetupContext(object):
         return bool(saved)
 
 
-def run_setup(doc, standards, steps):
+def run_setup(doc, standards, steps, options=None):
     """Run the given setup steps in order.
+
+    The ribbon's Quick Setup and the HTTP API's bootstrap both run setup here.
 
     Args:
         doc (DB.Document): The project document.
         standards (Standards): Where to read standards files from.
         steps (list[SetupStep]): The steps to run.
+        options (dict): Overrides, see SetupContext.options.
     Returns:
         SetupContext: The context, with the report in .results.
     """
-    ctx = SetupContext(doc, standards)
+    ctx = SetupContext(doc, standards, options)
 
     group = DB.TransactionGroup(doc, "PDSO Quick Setup")
     group.Start()

@@ -429,7 +429,7 @@ def setup_model(
     levels: list[str] | None = None,
     area_scheme_mappings: dict[str, str] | None = None,
 ) -> dict:
-    """Make the model ready for PDSO. Creates only the items that are missing: the PDSO configuration, the 20 shared parameters, the Data Silo family, the configured area schemes, and one area plan for each scheme and level. It is safe to call again.
+    """Make the model ready for PDSO, the same way as the ribbon's three setup buttons: the PDSO configuration, the parameters (all 20 built-in ones if the model tracks none yet), then Quick Setup from the model's standards files: the configured area schemes, the Data Silo family, the PDSO view templates, one area plan for each scheme and level (named like "PDSO - GSF - L1", with the PDSO area plan template, which hides Program Volumes), a 3D Program Volumes view, and the Data Silo and Program Volume schedules. Items that are there are left alone. It is safe to call again. The reply has "setup": the Quick Setup report rows (step, item, status, message); look at rows with status "Failed" or "Warning".
 
     Args:
         levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
