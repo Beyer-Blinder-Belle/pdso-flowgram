@@ -44,6 +44,9 @@ def _create_or_update_template(ctx, spec, name, on_existing):
     else:
         result = status.CREATED
 
+    # Tokens such as {program_volume_prefix} can appear anywhere, e.g. in filter rules
+    spec = ctx.expand(spec)
+
     with ctx.transaction("Create view template {}".format(name)):
         if template is None:
             template = _new_template(ctx.doc, view_type, view_family)
@@ -143,6 +146,10 @@ def apply_view_settings(doc, view, spec):
     for category_spec in spec.get("categories", []):
         _apply_category(doc, view, category_spec, warnings)
 
+    for filter_spec in spec.get("filters", []):
+        if filter_spec.get("enabled", True):
+            _apply_filter(doc, view, filter_spec, warnings)
+
     if view.IsTemplate and "uncontrolled_parameters" in spec:
         attempt(
             "uncontrolled_parameters",
@@ -205,6 +212,26 @@ def _apply_category(doc, view, spec, warnings):
             view.SetCategoryOverrides(category.Id, overrides)
     except Exception as error:
         warnings.append("'{}': {}".format(name, error))
+
+
+def _apply_filter(doc, view, spec, warnings):
+    """Create or update a view filter, add it to the view, and set its graphics."""
+    name = spec.get("name")
+    if not name:
+        warnings.append("a filter has no name")
+        return
+
+    try:
+        filter_element = revit_utils.create_or_update_parameter_filter(doc, spec)
+        if not view.IsFilterApplied(filter_element.Id):
+            view.AddFilter(filter_element.Id)
+        if "visible" in spec:
+            view.SetFilterVisibility(filter_element.Id, bool(spec["visible"]))
+        overrides = revit_utils.build_overrides(doc, spec)
+        if overrides is not None:
+            view.SetFilterOverrides(filter_element.Id, overrides)
+    except Exception as error:
+        warnings.append("filter '{}': {}".format(name, error))
 
 
 def _set_uncontrolled_parameters(template, parameter_names):

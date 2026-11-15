@@ -88,7 +88,7 @@ families/               Data Silo .rfa (Revit 2026)
 | Which Area a Data Silo belongs to | `business/correlation_service.py` (same level + winding-number point-in-polygon) |
 | Stacking notation (`03-05, 10`) | `business/level_mapping_service.py`; background in `lib/pdso/code/legacy/LEVEL_MAPPING_PROCESS.md` |
 | Program Volume geometry and naming | `business/family_manager_service.py` (`<prefix><Program UID>`); shape Area chosen in `ExtendedDataSilo.get_area_for_program_volume_family_geometry` |
-| Skip-if-unchanged logic | `business/hashing_service.py` + hashes stored in the PV family schema |
+| Skip-if-unchanged logic | `business/hashing_service.py` + `family_manager_service._geometry_changed` (Area hash, DSO location, extrusion height stored in the PV family schema) |
 | Adding a Quick Setup step | `setup/steps/__init__.py` (`STEP_RUNNERS`) + `standards/setup.json` |
 
 ## Known gaps and traps
@@ -97,9 +97,9 @@ families/               Data Silo .rfa (Revit 2026)
 - **One client for each Revit.** pyRevit Routes gave a client the reply of a different request when more than one request ran at the same time (seen in tests, not fixed). The MCP server sends a request id (`_rid`) and the dispatcher returns it (`rid`), so a wrong reply is found: read-only requests are sent again, write requests stop with an error.
 - **Change `API_VERSION` (`api/handlers.py`) and `EXPECTED_API_VERSION` (`mcp/pdso_mcp_server.py`) together** when a route or a reply changes. `get_status` warns when they differ.
 - **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that. The Project Config screen shows each row as Area Scheme → Parameter and swaps on load and save; it also reads configs saved the old way (`{scheme: parameter}`) and rewrites them correctly on the next save.
-- **"Yes - Recompute All Geometry" isn't acted on.** It's accepted as an option, but phase 2 only checks for `"No"`.
-- **Program Volumes are found by family name `{prefix}{UID}`.** Changing a UID or the prefix leaves the old family behind (suspected; see architecture.md).
-- **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded.
+- **Program Volumes are found by family name `{prefix}{UID}`.** After a UID or prefix change, phase 2 finds the old family through `parent_data_silo_id` on its instances and renames it. Families last synced before that field was written are still left behind (see architecture.md).
+- **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded, and adds the tracked parameters to the Data Silo family.
+- **The shipped Data Silo family carries only Program UID, Program Stacking and Last Synced.** Every other parameter reaches Data Silos through the Generic Models binding. Never assume a built-in parameter is in the family or on an element: check the registry.
 - **Large files:** `audit_service.py`, `sync_service.py`, `preflight_service.py`, `body_3_parameters.py`, `mcp/pdso_mcp_server.py` (1–1.5k lines each). Navigate with `grep -n "def "`.
 - **The intranet docs predate this code.** Where they disagree, the code wins. Differences are listed at the end of [docs/parameter-reference.md](docs/parameter-reference.md).
 

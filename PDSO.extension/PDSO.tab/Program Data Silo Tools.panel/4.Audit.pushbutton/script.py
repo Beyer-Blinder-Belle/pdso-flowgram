@@ -14,7 +14,7 @@ Generates comprehensive validation report with element-level details including:
 import traceback
 
 # 3rd Party Modules
-from pyrevit import script
+from pyrevit import revit, script
 
 # Custom Modules
 from pdso.code.business.audit_service import generate_detailed_report
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     logger.info("Starting PDSO Audit - Detailed Report")
 
     try:
-        generate_detailed_report(output, logger)
+        generate_detailed_report(output, logger, revit.doc)
     except Exception as e:
         logger.error("Unexpected error during report generation: {}".format(str(e)))
         logger.error(traceback.format_exc())

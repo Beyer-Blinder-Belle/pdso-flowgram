@@ -62,7 +62,23 @@ def _create_views(ctx, spec, on_existing):
         if vft is None:
             raise ValueError("This model has no {} view type".format(view_family))
 
-    levels, missing = revit_utils.get_levels(ctx.doc, spec.get("levels", "all"))
+    exclude = spec.get("exclude_levels") or []
+    levels, missing = revit_utils.get_levels(
+        ctx.doc, spec.get("levels", "all"), exclude
+    )
+    excluded = [
+        level.Name
+        for level in revit_utils.get_levels(ctx.doc, spec.get("levels", "all"))[0]
+        if revit_utils.level_name_matches(level.Name, exclude)
+    ]
+    if excluded:
+        ctx.add(
+            ctx.expand(
+                spec["name"], level="(excluded levels)", area_scheme=scheme_name
+            ),
+            status.SKIPPED,
+            "exclude_levels leaves out: {}".format(", ".join(excluded)),
+        )
     for level_name in missing:
         ctx.add(
             ctx.expand(spec["name"], level=level_name, area_scheme=scheme_name),

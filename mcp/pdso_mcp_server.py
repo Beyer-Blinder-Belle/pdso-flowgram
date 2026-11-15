@@ -65,7 +65,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in PDSO.extension/.../api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.1"
+EXPECTED_API_VERSION = "1.2"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -551,7 +551,7 @@ def create_parameter(name: str, type: str = "string") -> dict:
     """Track a new program parameter for data that no field holds, for example "Tenant Type" or "Rent per SF". It becomes a Revit shared parameter on all programs and Program Volumes. The reply gives the field name (for example "rent_per_sf"): use it in update_program, update_programs, list_programs, summarize_programs and color_areas. The sync copies the value from a program to its Program Volumes. If the model has a shared parameter with the name already, that parameter is used and its values stay ("reattached": true).
 
     Args:
-        name: Parameter name as Revit shows it, for example "Tenant Type". The name and the type cannot change later.
+        name: Parameter name, for example "Tenant Type". PDSO adds the "PDSO - " prefix, as the Parameter Manager does ("PDSO - Tenant Type"), unless the model already has a shared parameter with the name as given. The name and the type cannot change later.
         type: "string", "multilineText", "number", "integer", "area" (square feet), "length" (feet) or "yesno".
     """
     return api("POST", "parameters", {"name": name, "type": type})

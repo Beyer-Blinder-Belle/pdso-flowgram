@@ -555,6 +555,53 @@ class PDSOParameterSetupService(object):
                 pass
             invalidate_registry(self.doc)
 
+    def add_tracked_parameters_to_family(self, family_name, shared_parameter_file):
+        """Add the model's tracked parameters to the Data Silo family.
+
+        For a Data Silo family loaded after the Parameter Manager ran (Quick Setup
+        loads it last). The project binding already puts every tracked parameter
+        on Data Silos; this also embeds them in the family. Bindings and the
+        tracked list aren't changed, and no parameter is removed from the family.
+
+        Args:
+            family_name (str): Name of the loaded Data Silo family
+            shared_parameter_file (str): Shared parameter file to read definitions
+                from (a missing definition is added to it, with the model's GUID)
+
+        Returns:
+            ApplyReport: success is True if nothing failed. A model that tracks
+                no parameters yet gives an info message and success True.
+        """
+        report = ApplyReport()
+        registry = get_registry(self.doc, refresh=True)
+        if not registry.is_configured or not registry.parameters:
+            report.info(
+                "The model tracks no parameters yet. Run the Parameter Manager; it "
+                "adds them to the Data Silo family."
+            )
+            report.success = True
+            return report
+
+        original_file = self.app.SharedParametersFilename
+        try:
+            resolved = self._resolve_definitions(
+                list(registry.parameters), shared_parameter_file, report
+            )
+            if resolved is None:
+                return report
+            self._update_data_silo_family(family_name, resolved, [], report)
+            report.success = report.count("error") == 0
+            return report
+        except Exception as e:
+            report.error("Unexpected error: {}".format(e))
+            self.logger.error(traceback.format_exc())
+            return report
+        finally:
+            try:
+                self.app.SharedParametersFilename = original_file
+            except Exception:
+                pass
+
     # -------------------------------------------------------------------------
 
     def _resolve_definitions(self, desired_parameters, shared_parameter_file, report):

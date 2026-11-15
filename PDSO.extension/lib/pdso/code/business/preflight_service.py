@@ -14,6 +14,7 @@ Example Usage:
 """
 
 # Python standard libraries
+import re
 from datetime import datetime
 
 # 3rd Party Modules
@@ -59,6 +60,7 @@ PREFLIGHT_CHECKS = [
         "Data Silo instances",
     ),
     ("uid_uniqueness", "check_uid_uniqueness_status", "UID uniqueness"),
+    ("uid_pattern", "check_uid_pattern_status", "UID pattern"),
     (
         "areas_multiple_silos",
         "check_areas_multiple_data_silos_status",
@@ -109,6 +111,36 @@ def status_level(status_text):
     if text.startswith(u"\u2713"):
         return "ok"
     return "unknown"
+
+
+def uid_pattern_status(pattern, uids, max_listed=5):
+    """Status text for the UID pattern check.
+
+    Args:
+        pattern (str): The configured UID pattern (a regular expression), or blank
+        uids (list[str]): The Program UID of each Data Silo
+        max_listed (int): How many failing UIDs to name in the message
+
+    Returns:
+        str: An ok or warning status. A blank pattern is ok.
+    """
+    if not pattern:
+        return "✓ No UID pattern configured"
+    try:
+        regex = re.compile(pattern)
+    except re.error as error:
+        return "⚠️ UID pattern {} is not a valid regular expression: {}".format(
+            pattern, error
+        )
+    failing = sorted(set(uid or "" for uid in uids if not regex.match(uid or "")))
+    if not failing:
+        return "✓ All Data Silo UIDs match the UID pattern"
+    listed = ", ".join("'{}'".format(uid) for uid in failing[:max_listed])
+    if len(failing) > max_listed:
+        listed += ", ..."
+    return "⚠️ {} UID{} don't match the pattern {}: {}".format(
+        len(failing), "s" if len(failing) != 1 else "", pattern, listed
+    )
 
 
 class PDSOPreflightService(object):
@@ -164,6 +196,7 @@ class PDSOPreflightService(object):
         self.check_data_silo_family_loaded_status = running_status
         self.check_data_silo_instances_status = running_status
         self.check_uid_uniqueness_status = running_status
+        self.check_uid_pattern_status = running_status
         self.check_areas_multiple_data_silos_status = running_status
         self.check_areas_no_data_silos_status = running_status
         self.check_data_silos_partial_containment_status = running_status
@@ -653,6 +686,36 @@ class PDSOPreflightService(object):
             has_errors = True
             self._update_check_icon_and_color(
                 "uid_uniqueness", self.check_uid_uniqueness_status
+            )
+
+        # CHECK 9b: UID Pattern (a warning: the sync can still run)
+        try:
+            if config is None or ext_data_silo_collection is None:
+                self.check_uid_pattern_status = (
+                    "✗ Cannot check UIDs - data silos not loaded"
+                )
+                has_errors = True
+            else:
+                data_silos = ext_data_silo_collection.extended_data_silos
+                self.check_uid_pattern_status = uid_pattern_status(
+                    config.uid_pattern,
+                    [
+                        data_silo.parameters["PDSO - Program UID"].value
+                        for data_silo in data_silos
+                    ],
+                )
+                if status_level(self.check_uid_pattern_status) == "warning":
+                    has_warnings = True
+
+            self._update_check_icon_and_color(
+                "uid_pattern", self.check_uid_pattern_status
+            )
+        except Exception as e:
+            self.check_uid_pattern_status = "✗ Script Error"
+            self.logger.error("UID pattern check error: {}".format(str(e)))
+            has_errors = True
+            self._update_check_icon_and_color(
+                "uid_pattern", self.check_uid_pattern_status
             )
 
         # SPATIAL CORRELATION - Required for remaining checks

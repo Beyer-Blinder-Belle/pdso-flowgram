@@ -19,7 +19,7 @@ report as data.
 import traceback
 
 # 3rd Party Modules
-from pyrevit import revit, DB
+from pyrevit import DB
 from collections import defaultdict
 from rpw.utils.dotnet import List as DotNetList
 
@@ -255,16 +255,15 @@ def print_area_boundary_issues(
             output.print_md("- {} **{}:** {}".format(icon, label, how_to_fix))
 
 
-def generate_detailed_report(output, logger, doc=None):
+def generate_detailed_report(output, logger, doc):
     """Print the detailed audit report to ``output``.
 
     Args:
         output: pyRevit output, or an object with the same print_md, print_table
             and linkify methods (see RecordingOutput)
         logger: pyRevit logger
-        doc: Revit Document to audit (default: the active document)
+        doc: Revit Document to audit
     """
-    doc = doc or revit.doc
     """Generate comprehensive detailed preflight validation report."""
     output.print_md("# PDSO Preflight Audit - Detailed Report")
     output.print_md("=" * 80)

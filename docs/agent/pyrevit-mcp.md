@@ -41,12 +41,27 @@ Setup, the full tool table and the route table are in the root [README → HTTP 
 - Use field names from `get_program_fields`, not Revit parameter names, in program calls.
 - Units are decimal feet and square feet everywhere.
 - The HTTP API has no authentication. Don't suggest exposing port 48884, and don't enable the dev flag (`/pdso/dev/exec`) on a non-dev machine.
+- `create_parameter` adds the `PDSO - ` prefix to a custom name, as the Parameter Manager does: `Room Finish` becomes `PDSO - Room Finish`. The field name (`room_finish`) is the same either way. A name the model already has a shared parameter for is kept as given, so its values are reused.
+- The program reply's `areas` (from `containing_areas`) is a dict keyed by area scheme name, `{"PDSO - GSF": {"id", "number", "name", "area"} or null, ...}`, not a list.
+
+### Drawing Areas from rooms
+
+There are two ways, and they give different outlines:
+
+| Outline | How | Suits |
+| --- | --- | --- |
+| The room's inside faces | `draft_area_from_room` traces the Room boundary as Revit computes it (wall finish faces by default). `inset` can only move it inwards. | NSF |
+| Wall centerlines | Compute the outline yourself, for example by offsetting the room outline outwards by half of each wall's thickness, or by reading the room boundary with `SpatialElementBoundaryLocation.Center` in a Path B query. Check it with `render_plan` and `draft_outlines`, then create it with `draft_area` and the points. | GSF |
+
+So don't use `draft_area_from_room` for GSF Areas that should run to wall centerlines: the GSF comes out too small.
 
 ## Path B: the pyRevit agent runtime (low level)
 
-> Status, checked 2026-11-14: the runtime shipped in **pyRevit 7.0** (October 2026) and is **experimental and off by default**. Facts below come from the [pyRevit agent runtime docs](https://docs.pyrevitlabs.io/agent-runtime/). Recipes 1–4 were run against a PDSO model on 2026-11-14 (Revit 2026.4, pyRevit 7.0.1, `pyrevit mcp install claude`). Recipe 5 and the sync script haven't been run yet. Items marked *unverified* haven't been tested; confirm them on first use and update this file.
+> Status, checked 2026-11-14: the runtime shipped in **pyRevit 7.0** (October 2026) and is **experimental and off by default**. Facts below come from the [pyRevit agent runtime docs](https://docs.pyrevitlabs.io/agent-runtime/). Recipes 1–5 were run against a PDSO model on 2026-11-14 (Revit 2026.4, pyRevit 7.0.1, `pyrevit mcp install claude`). Importing PDSO services through `workspace` works too. The sync script hasn't been run yet. Items marked *unverified* haven't been tested; confirm them on first use and update this file.
 
 ### Setup (once per workstation)
+
+Enable the agent host in Revit under **pyRevit → Settings**, or from a terminal:
 
 ```bash
 pyrevit configs agent enable
@@ -61,6 +76,7 @@ pyrevit agent status
 ```
 
 - Reload pyRevit or restart Revit after `enable`.
+- **Restart the Claude Code session after `install`.** Claude Code loads MCP servers only when a session starts, so the `pyrevit` tools don't appear until then. `/mcp` shows whether it's connected.
 - `install` takes `claude`, `codex`, `cursor`, `vscode` or `opencode`. Add `--project` to register for this repo only, which writes `.mcp.json`.
 - Transport: the client starts `pyrevit mcp` (stdio), which talks to Revit over a named pipe restricted to the current Windows user. There's no TCP port.
 - Approval policy: `pyrevit configs agent policy ask` (the default) asks for approval in Revit for every modify run. `readonly` allows queries and dry runs only. `auto` commits without asking. Use `ask` on real projects.
@@ -94,6 +110,9 @@ The runtime injects `doc`, `uidoc`, `app`, `uiapp`, `DB`, `UI` and `inputs` (a d
 - Changing another open document fails the run. Family documents opened with `EditFamily` are allowed, because they have no file.
 - Revit dialogs are closed automatically and listed in the result.
 - Return ids with `ElementId.Value` (Revit 2024+). `IntegerValue` was removed in later versions.
+- **IronPython on Revit 2026: `DB.ElementId(int)` is ambiguous** (it matches both the `Int64` and the `BuiltInParameter`/`BuiltInCategory` constructors). Write `DB.ElementId(System.Int64(i))` after `import System`.
+- **A dry run doesn't undo file writes.** Creating a shared parameter writes its definition to the shared parameter file, and that write stays after the rollback. It's harmless: the real run finds and reuses the definition.
+- A modal Revit dialog (for example "Project Not Saved Recently") blocks every run with `revit_busy` until the user answers it.
 
 ### Using PDSO's own library (optional)
 
@@ -112,9 +131,10 @@ That one folder covers `pdso`, `common` and the vendored `extensible_storage` li
 
 The services already run outside a pyRevit command (the HTTP API uses them), so they should work in agent runs too.
 
+Verified 2026-11-14: PDSO services import in agent runs with `workspace=<repo>/PDSO.extension/lib`.
+
 *Unverified:*
 
-- Whether pyRevit puts extension `lib` folders on `sys.path` for agent runs.
 - Whether `PDSOSyncService` works inside `run_modify`'s transaction group. Phase 2 edits and reloads family documents, which the runtime allows. Test with `dry_run=true` on a test model first.
 
 If any of these fail, fall back to the raw-API recipes.
@@ -336,7 +356,7 @@ Run it with `dry_run=true` first and show the user the change set. The values on
 
 - **Write only to Data Silos**, and only **tracked**, user-owned parameters. Never write Program Volumes, the harvested SF parameters, `PDSO - Last Synced`, or Area parameters.
 - **Don't change which parameters are tracked** from a script. That's the Parameter Manager's job (`PDSOParameterSetupService.apply`), and untracking deletes values.
-- **Don't change Program UIDs** without telling the user it orphans Program Volumes (see architecture known gaps).
+- **Don't change Program UIDs** without telling the user. The next sync renames the Program Volume family, but only if its instances were synced by a PDSO version that records their Data Silo (see architecture known gaps).
 - **Don't write extensible storage config** (Project Config) from scripts. It's per-project setup, and wrong values orphan elements. Ask the user to change it in Project Config.
 - **Don't create or delete Areas or Data Silos** unless the user asked for that exact change.
 - In workshared models, elements owned by someone else fail to edit. Report them; don't retry.

@@ -40,8 +40,11 @@ from .parameter_registry_service import get_registry
 
 
 # Option name -> (default value, permitted values)
-# Only "Fix", "Pin" and "No" change what the sync does. The other values are the
-# remaining choices of the Run Scripts window and mean "do not do this step".
+# "Fix", "Pin", "No" and RECOMPUTE_ALL_GEOMETRY change what the sync does. The
+# other values are the remaining choices of the Sync Data window and mean "do not
+# do this step" (or, for the geometry update, "use the geometry cache").
+RECOMPUTE_ALL_GEOMETRY = "Yes - Recompute All Geometry (slow)"
+
 SYNC_OPTIONS = {
     "area_harvest_workset": ("Fix", ["Fix", "Warn (if configured)", "Do Nothing"]),
     "area_harvest_pinning": ("Pin", ["Pin", "Maintain", "Unpin"]),
@@ -49,7 +52,7 @@ SYNC_OPTIONS = {
         "Yes - Use Geometry Cache",
         [
             "Yes - Use Geometry Cache",
-            "Yes - Recompute All Geometry (slow)",
+            RECOMPUTE_ALL_GEOMETRY,
             "No",
         ],
     ),
@@ -741,10 +744,18 @@ class PDSOSyncService(object):
         self.progress_value = 0
         self._notify()
 
+        force_recompute = (
+            self._program_volume_geometry_update_option == RECOMPUTE_ALL_GEOMETRY
+        )
+        if force_recompute:
+            self.logger.info("Recomputing all Program Volume geometry (cache ignored)")
+
         new_families = family_manager.create_or_update_program_volume_families(
             ext_data_silo_collection,
             ext_program_volume_families_collection,
             progress_callback=self._update_family_geometry_progress,
+            extrusion_height=getattr(config, "program_volume_extrusion_height", None),
+            force_recompute=force_recompute,
         )
 
         if new_families:

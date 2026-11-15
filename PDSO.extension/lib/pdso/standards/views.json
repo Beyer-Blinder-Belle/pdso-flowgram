@@ -1,5 +1,5 @@
 {
-  "_comment": "Working views to create. 'area_scheme' is the PDSO scheme key; it is looked up in the model's Project Config area scheme mapping, so it follows renamed schemes. Set enabled to true to create views for the other schemes too. Name tokens: {level}, {area_scheme}.",
+  "_comment": "Working views to create. 'area_scheme' is the PDSO scheme key; it is looked up in the model's Project Config area scheme mapping, so it follows renamed schemes. Set enabled to true to create views for the other schemes too. Name tokens: {level}, {area_scheme}. exclude_levels leaves out levels whose names match (case-insensitive, * is a wildcard).",
   "on_existing": "skip",
   "views": [
     {
@@ -7,6 +7,7 @@
       "view_type": "AreaPlan",
       "area_scheme": "PDSO - GSF",
       "levels": "all",
+      "exclude_levels": ["*Roof*", "*Parapet*"],
       "template": "PDSO - Area Plan - Working",
       "enabled": true
     },
@@ -15,6 +16,7 @@
       "view_type": "AreaPlan",
       "area_scheme": "PDSO - NSF",
       "levels": "all",
+      "exclude_levels": ["*Roof*", "*Parapet*"],
       "template": "PDSO - Area Plan - Working",
       "enabled": false
     },
@@ -23,6 +25,7 @@
       "view_type": "AreaPlan",
       "area_scheme": "PDSO - ZFA",
       "levels": "all",
+      "exclude_levels": ["*Roof*", "*Parapet*"],
       "template": "PDSO - Area Plan - Working",
       "enabled": false
     },

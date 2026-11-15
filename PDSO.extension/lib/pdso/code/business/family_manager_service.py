@@ -17,6 +17,16 @@ from pdso.code.business.area_boundary_service import (
     get_boundary_options,
 )
 
+# Keys of PdsoProgramVolumeFamilySchema fields. The Area hash and the Data Silo
+# basepoint are stored under the name of the shape Area's PDSO scheme.
+GEOMETRY_KEY = "PDSO - GSF"
+# Extra key in hashed_area_curve_geometry: the height the family was built with
+EXTRUSION_HEIGHT_KEY = "Extrusion Height"
+# Families built before the height was stored were all 8 ft tall
+LEGACY_EXTRUSION_HEIGHT = PROGRAM_VOLUME_EXTRUSION_HEIGHT
+# A Data Silo that moves less than this (ft, about 1/256") doesn't rebuild its family
+BASEPOINT_TOLERANCE = 1.0 / (256 * 12.0)
+
 # Module-level constant for Revit version template paths
 REVIT_VERSION_TEMPLATES = {
     "2026": r"C:/ProgramData/Autodesk/RVT 2026/Family Templates/English-Imperial/Generic Model.rft",
@@ -44,17 +54,33 @@ class PDSOFamilyManagerService(object):
         ext_data_silo_collection,
         ext_program_volume_family_collection,
         progress_callback=None,
+        extrusion_height=None,
+        force_recompute=False,
     ):
         """Create or update Program Volume families based on the provided ExtendedDataSilo objects.
 
+        A family is rebuilt when its Area outline, its Data Silo's location or
+        the extrusion height changed since it was last built, or when
+        force_recompute is set.
+
         Args:
-            ext_data_silos (List[ExtendedDataSilo]): List of ExtendedDataSilo objects to process.
-            program_volume_family_name_prefix (str): Prefix for naming Program Volume families.
+            ext_data_silo_collection (ExtendedDataSiloCollection): The Data
+                Silos to process.
+            ext_program_volume_family_collection
+                (ExtendedProgramVolumeFamilyCollection): The existing Program
+                Volume families (gives the name prefix).
             progress_callback (callable, optional): Callback function for progress updates.
                 Called with (current_index, total_count, family_name) after each family is processed.
+            extrusion_height (float, optional): Program Volume height in feet. Defaults
+                to PROGRAM_VOLUME_EXTRUSION_HEIGHT.
+            force_recompute (bool): Rebuild every family, even if nothing changed.
         Returns:
                 None (mutates input objects)
         """
+        if not extrusion_height or extrusion_height <= 0:
+            extrusion_height = PROGRAM_VOLUME_EXTRUSION_HEIGHT
+        self.extrusion_height = float(extrusion_height)
+
         self.logger.info("Creating or updating Program Volume families...")
 
         hashing_service = PDSOHashingService().get_instance()
@@ -80,6 +106,7 @@ class PDSOFamilyManagerService(object):
                     ext_program_volume_family,
                     desired_family_name,
                     hashing_service,
+                    force_recompute,
                 )
             except Exception as error:
                 self.logger.error(
@@ -106,6 +133,7 @@ class PDSOFamilyManagerService(object):
         ext_program_volume_family,
         desired_family_name,
         hashing_service,
+        force_recompute=False,
     ):
         """Create, update or skip the Program Volume family for a single Data Silo.
 
@@ -114,6 +142,7 @@ class PDSOFamilyManagerService(object):
             ext_program_volume_family (ExtendedProgramVolumeFamily): The Data Silo's family wrapper.
             desired_family_name (str): The name the family should end up with.
             hashing_service (PDSOHashingService): Service used to hash the area geometry.
+            force_recompute (bool): Rebuild the geometry even if nothing changed.
         Returns:
             None (mutates input objects)
         """
@@ -134,9 +163,8 @@ class PDSOFamilyManagerService(object):
             ext_area_for_program_volume_family_geometry.rpw_element
         )
 
-        previous_hash = ext_program_volume_family.retrieve_from_entity(
-            "hashed_area_curve_geometry", "PDSO - GSF"
-        )
+        basepoint = ext_data_silo.Location.Point
+        extrusion_height = self._extrusion_height()
 
         # The fdoc starts as None
         fdoc = None
@@ -153,7 +181,7 @@ class PDSOFamilyManagerService(object):
             fdoc = self.create_new_program_volume_family(
                 desired_family_name,
                 ext_area_for_program_volume_family_geometry.rpw_area,
-                ext_data_silo.Location.Point,
+                basepoint,
             )
 
             if fdoc is not None:
@@ -166,12 +194,12 @@ class PDSOFamilyManagerService(object):
                 )
 
         # Existing family - check if we need to update geometry
-        elif previous_hash is None or previous_hash != new_hash:
-            self.logger.debug(".  Previous hash: {}".format(previous_hash))
-            self.logger.debug(".  New hash: {}".format(new_hash))
+        elif force_recompute or self._geometry_changed(
+            ext_program_volume_family, new_hash, basepoint, extrusion_height
+        ):
             self.logger.debug(
-                ".  Hashes do not match. Updating Program Volume family for Data Silo '{}'".format(
-                    ext_data_silo.Id
+                ".  Updating Program Volume family for Data Silo '{}'{}".format(
+                    ext_data_silo.Id, " (recompute all)" if force_recompute else ""
                 )
             )
 
@@ -179,7 +207,7 @@ class PDSOFamilyManagerService(object):
             fdoc = self.update_program_volume_family_geometry(
                 ext_program_volume_family.rpw_element,
                 ext_area_for_program_volume_family_geometry.rpw_area,
-                ext_data_silo.Location.Point,
+                basepoint,
             )
 
             if fdoc is None:
@@ -189,10 +217,10 @@ class PDSOFamilyManagerService(object):
                     )
                 )
 
-        # Hashes match - no update needed
+        # Nothing changed - no update needed
         else:
             self.logger.debug(
-                ".  Hashes match, skipping Family updates for existing Program Volume family for Data Silo '{}'".format(
+                ".  Geometry unchanged, skipping Family updates for existing Program Volume family for Data Silo '{}'".format(
                     ext_data_silo.Id
                 )
             )
@@ -218,12 +246,17 @@ class PDSOFamilyManagerService(object):
                 # Set desired family name for renaming later
                 ext_program_volume_family.desired_family_name = desired_family_name
 
-                # Calculate and store updated hash
-                temp_dict = {"PDSO - GSF": new_hash}
-
+                # Store what the geometry was built from, so the next sync
+                # can tell whether it needs rebuilding
                 ext_program_volume_family.entity_fields_to_update[
                     "hashed_area_curve_geometry"
-                ] = temp_dict
+                ] = {
+                    GEOMETRY_KEY: new_hash,
+                    EXTRUSION_HEIGHT_KEY: repr(float(extrusion_height)),
+                }
+                ext_program_volume_family.entity_fields_to_update[
+                    "area_basepoint"
+                ] = {GEOMETRY_KEY: basepoint}
 
             else:
                 self.logger.error("Failed to load new/ updated family back into project")
@@ -235,6 +268,64 @@ class PDSOFamilyManagerService(object):
                     ext_data_silo.Id
                 )
             )
+
+    def _extrusion_height(self):
+        """Program Volume height in feet for this run."""
+        return getattr(self, "extrusion_height", PROGRAM_VOLUME_EXTRUSION_HEIGHT)
+
+    def _geometry_changed(
+        self, ext_program_volume_family, new_hash, basepoint, extrusion_height
+    ):
+        """Whether a family's geometry is out of date.
+
+        The geometry is the shape Area's outline, placed relative to the Data
+        Silo's location and extruded to the configured height. A family with no
+        stored basepoint (built before basepoints were stored) is rebuilt once.
+
+        Returns:
+            bool: True if the Area outline, the Data Silo location or the
+                extrusion height differs from what the family was built with.
+        """
+        # Read the entity once: each read of .entity opens a transaction
+        entity = ext_program_volume_family.entity
+        hashes = _as_dict(getattr(entity, "hashed_area_curve_geometry", None))
+        basepoints = _as_dict(getattr(entity, "area_basepoint", None))
+
+        previous_hash = hashes.get(GEOMETRY_KEY)
+        if previous_hash is None or previous_hash != new_hash:
+            self.logger.debug(
+                ".  Area outline changed (previous hash {}, new hash {})".format(
+                    previous_hash, new_hash
+                )
+            )
+            return True
+
+        try:
+            previous_height = float(
+                hashes.get(EXTRUSION_HEIGHT_KEY, LEGACY_EXTRUSION_HEIGHT)
+            )
+        except (TypeError, ValueError):
+            previous_height = None
+        if previous_height is None or abs(previous_height - extrusion_height) > 1e-6:
+            self.logger.debug(
+                ".  Extrusion height changed ({} -> {})".format(
+                    previous_height, extrusion_height
+                )
+            )
+            return True
+
+        previous_basepoint = basepoints.get(GEOMETRY_KEY)
+        if previous_basepoint is None or not previous_basepoint.IsAlmostEqualTo(
+            basepoint, BASEPOINT_TOLERANCE
+        ):
+            self.logger.debug(
+                ".  Data Silo location changed ({} -> {})".format(
+                    previous_basepoint, basepoint
+                )
+            )
+            return True
+
+        return False
 
     def create_new_program_volume_family(
         self, desired_family_name, wrapped_area_element, reference_point
@@ -590,12 +681,11 @@ class PDSOFamilyManagerService(object):
                 )
                 # Create a solid from the loops
                 self.logger.debug(
-                    "Creating extrusion geometry from {} curve loops (height: 8)".format(
-                        curve_loops.Count
-                    )
+                    "Creating extrusion geometry from {} curve loops "
+                    "(height: {})".format(curve_loops.Count, self._extrusion_height())
                 )
                 sol = DB.GeometryCreationUtilities.CreateExtrusionGeometry(
-                    curve_loops, DB.XYZ.BasisZ, PROGRAM_VOLUME_EXTRUSION_HEIGHT
+                    curve_loops, DB.XYZ.BasisZ, self._extrusion_height()
                 )
 
                 # Create a FreeFormElement in the family document
@@ -669,3 +759,13 @@ class ProgramVolumeFamilyLoadOptions(DB.IFamilyLoadOptions):
             not family_in_use or self.overwrite_parameters
         )
         return not family_in_use or self.overwrite_family
+
+
+def _as_dict(field_value):
+    """A plain dict from an extensible storage map field value (None gives {})."""
+    if field_value is None:
+        return {}
+    try:
+        return dict((key, field_value[key]) for key in field_value.Keys)
+    except AttributeError:
+        return dict(field_value)
