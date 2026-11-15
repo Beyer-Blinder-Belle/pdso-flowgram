@@ -39,7 +39,7 @@ def pick_spatial_element(prompt):
     return revit.doc.GetElement(reference.ElementId)
 
 
-PROJECT_TYPES = ["K-12", "Higher Education", "Residential", "Office", "Healthcare", "Other"]
+PROJECT_TYPES = ["Multifamily", "K-12", "Higher Education", "Office", "Healthcare", "Other"]
 
 
 def ask_project_type():

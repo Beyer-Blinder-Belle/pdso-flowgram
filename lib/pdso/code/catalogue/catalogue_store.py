@@ -61,6 +61,45 @@ def save_entry(entry, folder):
     return json_path
 
 
+def remove_previous(folder, source):
+    """Delete earlier harvests of the same unit, so a re-run replaces them.
+
+    The same unit is the same element id in the same model (same file path
+    when both have one, else the same model name).
+
+    Returns:
+        int: How many earlier entries were removed.
+    """
+    element_id = (source or {}).get("element_id")
+    if not element_id or not folder or not os.path.isdir(folder):
+        return 0
+
+    removed = 0
+    for file_name in sorted(os.listdir(folder)):
+        if not file_name.lower().endswith(ENTRY_EXTENSION):
+            continue
+        path = os.path.join(folder, file_name)
+        try:
+            with codecs.open(path, "r", encoding="utf-8") as stream:
+                other = json.loads(stream.read()).get("source") or {}
+        except Exception:
+            continue
+        if str(other.get("element_id")) != str(element_id):
+            continue
+        if source.get("model_path") and other.get("model_path"):
+            same = source["model_path"] == other["model_path"]
+        else:
+            same = source.get("model") == other.get("model")
+        if not same:
+            continue
+        os.remove(path)
+        sketch = path[: -len(ENTRY_EXTENSION)] + SKETCH_EXTENSION
+        if os.path.isfile(sketch):
+            os.remove(sketch)
+        removed += 1
+    return removed
+
+
 def load_folder(folder):
     """Load every entry in one folder.
 
@@ -110,11 +149,23 @@ _CATEGORY_COLORS = {
 }
 
 
+_EDGE_COLORS = {
+    "exterior": "#1f77b4",
+    "corridor": "#d62728",
+    "party": "#333333",
+    "unroomed": "#aaaaaa",
+}
+
+
 def entry_to_svg(entry, scale=12.0, margin=24.0):
     """A small top-down sketch: room outline, one marker per item.
 
     Each marker is a dot with a tick showing the item's rotation, colored by
-    category. Scale is pixels per foot. Y is flipped so north stays up.
+    category. Where the entry has features, walls are colored by what is
+    beyond them (blue exterior, red corridor, black a neighbour), partitions
+    are grey, rooms are named, windows
+    are light blue bars, doors are white gaps, and an arrow marks the entry.
+    Scale is pixels per foot. Y is flipped so the frame's Y axis points up.
     """
     width_px = entry.width * scale + 2 * margin
     height_px = entry.depth * scale + 2 * margin + 20
@@ -135,6 +186,102 @@ def entry_to_svg(entry, scale=12.0, margin=24.0):
         parts.append(
             '<polygon points="{}" fill="#f4f4f4" stroke="#333" stroke-width="2"/>'.format(
                 points
+            )
+        )
+
+    features = entry.features or {}
+    edges = features.get("edges", [])
+    for edge in edges:
+        x1, y1 = px(*edge["start"])
+        x2, y2 = px(*edge["end"])
+        parts.append(
+            '<line x1="{:.1f}" y1="{:.1f}" x2="{:.1f}" y2="{:.1f}" stroke="{}" '
+            'stroke-width="4" stroke-linecap="round"><title>{} {}</title></line>'.format(
+                x1, y1, x2, y2,
+                _EDGE_COLORS.get(edge.get("kind"), "#333333"),
+                _xml(edge.get("kind", "")),
+                _xml(edge.get("beyond", "")),
+            )
+        )
+
+    for wall in features.get("internal_walls", []):
+        x1, y1 = px(*wall["start"])
+        x2, y2 = px(*wall["end"])
+        parts.append(
+            '<line x1="{:.1f}" y1="{:.1f}" x2="{:.1f}" y2="{:.1f}" stroke="#777777" '
+            'stroke-width="3"/>'.format(x1, y1, x2, y2)
+        )
+    for door in features.get("internal_doors", []):
+        cx, cy = px(door["x"], door["y"])
+        parts.append(
+            '<circle cx="{:.1f}" cy="{:.1f}" r="5" fill="#ffffff" stroke="#777777">'
+            "<title>door: {} : {}</title></circle>".format(
+                cx, cy, _xml(door.get("family", "")), _xml(door.get("type", ""))
+            )
+        )
+    for room in features.get("rooms", []):
+        cx, cy = px(room["x"], room["y"])
+        parts.append(
+            '<text x="{:.1f}" y="{:.1f}" font-size="10" fill="#555" '
+            'text-anchor="middle">{}</text>'.format(cx, cy, _xml(room.get("name", "")))
+        )
+
+    for opening in features.get("openings", []):
+        if opening.get("edge", -1) < 0 or opening["edge"] >= len(edges):
+            continue
+        edge = edges[opening["edge"]]
+        dx = edge["end"][0] - edge["start"][0]
+        dy = edge["end"][1] - edge["start"][1]
+        length = math.hypot(dx, dy) or 1.0
+        half = (opening.get("width") or 3.0) / 2.0
+        x1, y1 = px(opening["x"] - dx / length * half, opening["y"] - dy / length * half)
+        x2, y2 = px(opening["x"] + dx / length * half, opening["y"] + dy / length * half)
+        is_door = opening.get("kind") == "door"
+        parts.append(
+            '<line x1="{:.1f}" y1="{:.1f}" x2="{:.1f}" y2="{:.1f}" stroke="{}" '
+            'stroke-width="{}"><title>{}: {} : {}</title></line>'.format(
+                x1, y1, x2, y2,
+                "#ffffff" if is_door else "#9ecae1",
+                5 if is_door else 7,
+                _xml(opening.get("kind", "")),
+                _xml(opening.get("family", "")),
+                _xml(opening.get("type", "")),
+            )
+        )
+
+    entrance = features.get("entry")
+    if entrance:
+        ex, ey = px(entrance["x"], entrance["y"])
+        tx, ty = px(
+            entrance["x"] + 2.5 * entrance["direction"][0],
+            entrance["y"] + 2.5 * entrance["direction"][1],
+        )
+        parts.append(
+            '<line x1="{:.1f}" y1="{:.1f}" x2="{:.1f}" y2="{:.1f}" stroke="#d62728" '
+            'stroke-width="2"/><circle cx="{:.1f}" cy="{:.1f}" r="4" fill="#d62728">'
+            "<title>entry</title></circle>".format(ex, ey, tx, ty, tx, ty)
+        )
+
+    for hosted in features.get("hosted_items", []):
+        cx, cy = px(hosted["x"], hosted["y"])
+        parts.append(
+            '<rect x="{:.1f}" y="{:.1f}" width="7" height="7" fill="none" stroke="#666">'
+            "<title>{} : {} (hosted)</title></rect>".format(
+                cx - 3.5, cy - 3.5, _xml(hosted.get("family", "")), _xml(hosted.get("type", ""))
+            )
+        )
+
+    for nested in features.get("nested_items", []):
+        cx, cy = px(nested["x"], nested["y"])
+        parts.append(
+            '<circle cx="{:.1f}" cy="{:.1f}" r="3" fill="none" stroke="{}">'
+            "<title>{} : {} (inside {})</title></circle>".format(
+                cx,
+                cy,
+                _CATEGORY_COLORS.get(nested.get("category"), "#888888"),
+                _xml(nested.get("family", "")),
+                _xml(nested.get("type", "")),
+                _xml(nested.get("parent_family", "")),
             )
         )
 
