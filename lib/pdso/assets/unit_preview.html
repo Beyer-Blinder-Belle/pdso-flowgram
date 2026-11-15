@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unit Harvest Preview</title>
+<title>Unit Harvest Debug</title>
 <!-- PDSO unit harvest preview. unit_grouping_service.write_outputs replaces the data token below. -->
 <style>
 :root{--bg:#f6f6f4;--panel:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#d9d9d4;--wall:#2b2b29;--shared:#e4e4df;--entr:#d6402b;--win:#2a7fd4;--door:#8a8a84;--sel:#111;--ok:#2e8b57}
@@ -50,15 +50,36 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .badge{font-size:11px;padding:1px 6px;border-radius:10px;border:1px solid var(--line)}
 .ok{color:var(--ok)}.ng{color:var(--entr)}
 pre{font-size:11px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;overflow:auto;max-height:260px}
+.views{display:flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.views button{border:0;background:var(--panel);color:var(--ink);padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.views button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+#jsonView{display:none;flex-direction:column;gap:8px}
+#jsonView .bar button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:5px 10px;font:inherit;font-size:13px;cursor:pointer}
+#jsonText{max-height:none;min-height:60vh;font-size:12px;line-height:1.45;background:var(--panel);margin:0;white-space:pre}
+.k{color:#8a4baf}.s{color:#2e7d4f}.num{color:#b0602a}
+@media (prefers-color-scheme:dark){.k{color:#c9a2e8}.s{color:#7fd1a0}.num{color:#e8a878}}
 </style>
 </head>
 <body>
 <header>
-  <div><h1>Unit harvest preview</h1><div class="sub" id="src"></div></div>
+  <div><h1>Unit harvest <span class="badge" style="font-size:12px;vertical-align:middle;color:var(--entr);border-color:var(--entr)">Debug view</span></h1><div class="sub" id="src"></div><div class="sub">Temporary screen to check what Harvest Units found. Switch to JSON to see the saved data.</div></div>
   <div class="stats" id="stats"></div>
 </header>
 <main>
   <section class="canvas">
+    <div class="bar">
+      <div class="views" role="group" aria-label="View">
+        <button id="vPlan" aria-pressed="true">Plan</button><button id="vJson" aria-pressed="false">JSON</button>
+      </div>
+    </div>
+    <div id="jsonView">
+      <div class="bar">
+        <label class="muted" style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="jGeo">Include geometry (room outlines, walls, openings)</label>
+        <span style="margin-left:auto;display:flex;gap:6px"><button id="jCopy">Copy</button><button id="jSave">Download</button></span>
+      </div>
+      <pre id="jsonText"></pre>
+    </div>
+    <div id="planView" style="display:flex;flex-direction:column;gap:10px">
     <div class="bar">
       <div class="tabs" id="tabs" role="group" aria-label="Levels"></div>
       <div class="toggles">
@@ -70,6 +91,7 @@ pre{font-size:11px;background:var(--bg);border:1px solid var(--line);border-radi
     </div>
     <svg id="plan" role="img" aria-label="Floor plan"></svg>
     <div class="muted" style="font-size:12px">Click a unit to see its details. Gray rooms are shared space and are not part of any unit.</div>
+    </div>
   </section>
   <aside id="side"></aside>
 </main>
@@ -167,7 +189,42 @@ function side(units, color){
   a.innerHTML=h;
   a.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>{const u=DATA.units.find(x=>x.uid===b.dataset.u);sel=(sel===u?null:u);draw()});
 }
+// ----- JSON view -----
+function jsonText(){
+  const data = Object.assign({}, DATA);
+  if(!document.getElementById("jGeo").checked) delete data.geometry;
+  return JSON.stringify(data, null, 2);
+}
+function highlight(text){
+  return esc(text).replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)(\s*:)?|\b(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)\b|\b(true|false|null)\b/g,
+    (m,str,colon,num,lit)=> str ? `<span class="${colon?'k':'s'}">${str}</span>${colon||""}` : num ? `<span class="num">${num}</span>` : `<span class="num">${lit}</span>`);
+}
+function showJson(){ document.getElementById("jsonText").innerHTML = highlight(jsonText()); }
+function setView(v){
+  document.getElementById("vPlan").setAttribute("aria-pressed", v==="plan");
+  document.getElementById("vJson").setAttribute("aria-pressed", v==="json");
+  document.getElementById("planView").style.display = v==="plan" ? "flex" : "none";
+  document.getElementById("jsonView").style.display = v==="json" ? "flex" : "none";
+  document.getElementById("side").style.display = v==="plan" ? "" : "none";
+  document.querySelector("main").style.gridTemplateColumns = v==="plan" ? "" : "1fr";
+  if(v==="json") showJson();
+  try{localStorage.setItem("pdso-unit-view", v)}catch(e){}
+}
+document.getElementById("vPlan").onclick=()=>setView("plan");
+document.getElementById("vJson").onclick=()=>setView("json");
+document.getElementById("jGeo").onchange=showJson;
+document.getElementById("jCopy").onclick=async e=>{
+  try{await navigator.clipboard.writeText(jsonText()); e.target.textContent="Copied";}
+  catch(err){e.target.textContent="Copy failed";}
+  setTimeout(()=>e.target.textContent="Copy",1500);
+};
+document.getElementById("jSave").onclick=()=>{
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([jsonText()],{type:"application/json"}));
+  a.download=(DATA.model||"model")+" - units.json"; a.click(); URL.revokeObjectURL(a.href);
+};
 draw();
+try{ if(localStorage.getItem("pdso-unit-view")==="json") setView("json"); }catch(e){}
 </script>
 </body>
 </html>
