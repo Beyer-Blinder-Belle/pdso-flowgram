@@ -45,6 +45,20 @@ def _plan_point(element):
     return (point.X, point.Y, level_id)
 
 
+def selected_target_id():
+    """Element id of the one selected Room or Area, or None.
+
+    A Room or an Area (a unit) can get a layout. It does not have to be in the
+    catalogue.
+    """
+    found = []
+    for element_id in revit.uidoc.Selection.GetElementIds():
+        element = revit.doc.GetElement(element_id)
+        if isinstance(element, (DB.Architecture.Room, DB.Area)) and element.Area > 0:
+            found.append(id_value(element.Id))
+    return found[0] if len(found) == 1 else None
+
+
 class RoomIndex(object):
     """The Rooms of the model with their plan data, read one time."""
 
