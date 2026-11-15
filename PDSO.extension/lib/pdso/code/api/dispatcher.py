@@ -35,12 +35,40 @@ class Context(object):
         self.query = dict(getattr(request, "query_params", None) or {})
 
     def require_doc(self):
-        """Return the active project document, or raise ApiError."""
+        """Return the project document of the request, or raise ApiError.
+
+        The field ``document`` (a title or a file path of an open project)
+        selects the document. Without it, the active document is used.
+        """
+        reference = self.arg("document")
+        if reference:
+            return self._open_document(str(reference))
         if self.doc is None:
             raise ApiError("No document is open in Revit.", 409)
         if self.doc.IsFamilyDocument:
             raise ApiError("The active document is a family. Open a project.", 409)
         return self.doc
+
+    def _open_document(self, reference):
+        """Find an open project document by title or by file path."""
+        wanted = reference.strip().lower()
+        titles = []
+        for doc in self.app.Documents:
+            if doc.IsFamilyDocument or doc.IsLinked:
+                continue
+            titles.append(doc.Title)
+            title = doc.Title.lower()
+            names = [title, doc.PathName.lower()]
+            if title.endswith(".rvt"):
+                names.append(title[:-4])
+            if wanted in names or wanted + ".rvt" in names:
+                return doc
+        raise ApiError(
+            "Document '{}' is not open. Open documents: {}".format(
+                reference, ", ".join(titles) or "none"
+            ),
+            404,
+        )
 
     def arg(self, name, default=None, required=False):
         """Read a value from the JSON body, then from the query string."""
@@ -81,6 +109,7 @@ def _convert(pattern, params):
 
 def _find(method, path):
     from pdso.code.api import handlers
+    from pdso.code.api import catalogue_handlers  # noqa: F401 (adds its routes)
 
     path = (path or "").strip("/")
     allowed = []

@@ -93,6 +93,12 @@ Then reload pyRevit. The API is at `http://127.0.0.1:48884/pdso/` (48884 is the 
 | Selection | `GET/POST selection` |
 | Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `GET/PUT/DELETE areas/<id>` |
 | Visualization | `POST views/export`, `POST views/color-areas`, `POST views/clear-colors`, `POST views/program-volumes` |
+| Open documents | `GET documents`, `POST documents/open`, `POST documents/save`, `POST documents/close` |
+| Unit Layout Catalogue | `GET catalogue/layouts`, `GET/DELETE catalogue/layouts/<id>`, `POST catalogue/harvest`, `POST catalogue/recommend`, `POST catalogue/similar-rooms`, `GET catalogue/preview`, `GET catalogue/item`, `POST catalogue/place`, `GET/DELETE catalogue/room-items` |
+
+A request can name the open document that it works on with the field `document` (a title or a file path). Without it, a request works on the active document. `POST documents/open` opens a file but does not show it, so a person or a different agent can use the same Revit at the same time.
+
+Requests are safe to send at the same time. The API runs them one at a time on Revit's main thread and gives each request its own reply.
 
 A reply is `{"ok": true, "data": ...}` or `{"ok": false, "error": {"type", "message", "traceback"}}`.
 
@@ -154,6 +160,8 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Selection | `select_elements`, `select_programs`, `get_selection` |
 | Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
+| Open documents | `list_open_documents`, `open_document_in_background`, `set_target_document`, `save_document`, `close_background_document` |
+| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `recommend_layouts`, `find_similar_rooms`, `preview_similar_rooms`, `place_layout`, `list_room_items`, `describe_item`, `clear_room_items`, `delete_layout` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
 

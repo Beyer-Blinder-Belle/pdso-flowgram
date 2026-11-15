@@ -43,6 +43,88 @@ def point_in_polygon(point, polygon):
     return inside
 
 
+def distance_to_polygon(point, polygon):
+    """Shortest distance from a point to the edges of a polygon."""
+    x, y = point
+    best = None
+    count = len(polygon)
+    for i in range(count):
+        ax, ay = polygon[i]
+        bx, by = polygon[(i + 1) % count]
+        dx, dy = bx - ax, by - ay
+        length_squared = dx * dx + dy * dy
+        if length_squared < TOLERANCE:
+            t = 0.0
+        else:
+            t = ((x - ax) * dx + (y - ay) * dy) / length_squared
+            t = max(0.0, min(1.0, t))
+        distance = math.hypot(x - ax - t * dx, y - ay - t * dy)
+        if best is None or distance < best:
+            best = distance
+    return best
+
+
+def point_in_or_near_polygon(point, polygon, tolerance):
+    """True if the point is in the polygon, or no farther than ``tolerance`` from it.
+
+    A family that stands against a wall has its insertion point on the room
+    boundary. In a second room with the same plan, that point can be a fraction
+    of an inch outside the boundary.
+    """
+    if point_in_polygon(point, polygon):
+        return True
+    return distance_to_polygon(point, polygon) <= tolerance
+
+
+def outline_mismatch(outline_a, outline_b):
+    """How far two outlines are from each other, in feet. 0.0 for the same outline.
+
+    The value is the mean distance from each corner of one outline to the edges
+    of the other outline, in the two directions. It is exact, so it also sees a
+    small wall jog that tells two orientations of an almost symmetric room apart.
+
+    Args:
+        outline_a, outline_b (list): [(x, y), ...] in the same frame.
+    """
+    if len(outline_a) < 3 or len(outline_b) < 3:
+        return float("inf")
+    a_to_b = sum(distance_to_polygon(point, outline_b) for point in outline_a)
+    b_to_a = sum(distance_to_polygon(point, outline_a) for point in outline_b)
+    return (a_to_b / len(outline_a) + b_to_a / len(outline_b)) / 2.0
+
+
+def outline_overlap(outline_a, outline_b, grid=16):
+    """How well two outlines cover each other: intersection over union, 0 to 1.
+
+    The value is an estimate from a grid of sample points, so two outlines that
+    are the same give 1.0 and a small difference gives a small change.
+
+    Args:
+        outline_a, outline_b (list): [(x, y), ...] in the same frame.
+        grid (int): Number of sample points on each side of the grid.
+    """
+    if len(outline_a) < 3 or len(outline_b) < 3:
+        return 0.0
+    xs = [p[0] for p in outline_a] + [p[0] for p in outline_b]
+    ys = [p[1] for p in outline_a] + [p[1] for p in outline_b]
+    min_x, min_y = min(xs), min(ys)
+    step_x = (max(xs) - min_x) / float(grid)
+    step_y = (max(ys) - min_y) / float(grid)
+    both = 0
+    either = 0
+    for i in range(grid):
+        x = min_x + (i + 0.5) * step_x
+        for j in range(grid):
+            y = min_y + (j + 0.5) * step_y
+            in_a = point_in_polygon((x, y), outline_a)
+            in_b = point_in_polygon((x, y), outline_b)
+            if in_a and in_b:
+                both += 1
+            if in_a or in_b:
+                either += 1
+    return both / float(either) if either else 0.0
+
+
 def rotate(point, angle):
     """Rotate a point about the origin."""
     cos_a = math.cos(angle)
