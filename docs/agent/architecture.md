@@ -1,6 +1,6 @@
 # PDSO Architecture (for agents)
 
-Dense reference for code changes and for scripting against a live model. Paths are relative to `PDSO.extension/lib/pdso/code/` unless they start with `PDSO.extension/`.
+Dense reference for code changes and for scripting against a live model. Paths are relative to `lib/pdso/code/` unless they say otherwise. The repository root is the pyRevit extension (it holds `startup.py`, `PDSO.tab/` and `lib/`).
 
 ## Domain model
 
@@ -16,7 +16,7 @@ Cardinality: one DSO → at most one Area per scheme (same level, point inside) 
 
 ## Persistent state (extensible storage)
 
-Defined in `data/extensible_storage_schemas.py` with the `extensible_storage` library (`BaseSchema`, `simple_field`, `map_field`), which is vendored, unmodified, in `PDSO.extension/lib/extensible_storage/`. Accessed through `business/extensible_storage_service.py`. **Never change these GUIDs.**
+Defined in `data/extensible_storage_schemas.py` with the `extensible_storage` library (`BaseSchema`, `simple_field`, `map_field`), which is vendored, unmodified, in `lib/extensible_storage/`. Accessed through `business/extensible_storage_service.py`. **Never change these GUIDs.**
 
 | Schema | GUID | Lives on | Fields |
 | --- | --- | --- | --- |
@@ -134,11 +134,11 @@ Each phase catches its own exceptions and logs them; a failure in one phase does
 Users run it **last** of the three setup buttons: Project Config → Parameter Manager → Quick Setup. Steps (`setup.json` order): `area_schemes` (creates the Revit schemes named in `area_scheme_mappings` by copying an existing scheme and renaming it), `families` (loads the shipped Data Silo family; keeps Project Config's family if it names a different, loaded one; then embeds the tracked parameters in the Data Silo family with `PDSOParameterSetupService.add_tracked_parameters_to_family`), `view_templates`, `views`, `schedules`. There is no parameters step; the Parameter Manager owns parameters.
 
 
-`setup/standards.py` resolves each `<id>.json` from the first folder that has it: project `PDSO Standards/` next to the (central) model, then the user folder picked with Shift+Click, then `%PDSO_STANDARDS_DIR%`, then `lib/pdso/standards/`. Files aren't merged. Tokens such as `{revit_yy}` and `{repo_dir}` are expanded. `setup/runner.py` runs the steps in `STEP_RUNNERS` (`setup/steps/__init__.py`) in `setup.json` order and collects report rows with `SetupContext.add()`. Format spec: `PDSO.extension/lib/pdso/standards/README.md`.
+`setup/standards.py` resolves each `<id>.json` from the first folder that has it: project `PDSO Standards/` next to the (central) model, then the user folder picked with Shift+Click, then `%PDSO_STANDARDS_DIR%`, then `lib/pdso/standards/`. Files aren't merged. Tokens such as `{revit_yy}` and `{repo_dir}` are expanded. `setup/runner.py` runs the steps in `STEP_RUNNERS` (`setup/steps/__init__.py`) in `setup.json` order and collects report rows with `SetupContext.add()`. Format spec: `lib/pdso/standards/README.md`.
 
 ## HTTP API and MCP server
 
-- `PDSO.extension/startup.py` registers one catch-all pyRevit Routes handler per HTTP method under the API name `pdso`, at `http://127.0.0.1:48884/pdso/` by default. Enable it with `pyrevit configs routes enable`.
+- `startup.py` registers one catch-all pyRevit Routes handler per HTTP method under the API name `pdso`, at `http://127.0.0.1:48884/pdso/` by default. Enable it with `pyrevit configs routes enable`.
 - `api/dispatcher.py` imports the route table on each request, matches `<name>`/`<int:name>` patterns, and wraps the reply as `{"ok": true, "data": ...}` or `{"ok": false, "error": {type, message, traceback}}`. `PDSOError(message, status)` from `business/errors.py` becomes a 400, 404 or 409 error.
 - `api/handlers.py` is the route table: `@route("GET", "programs/<uid_or_id>")`, and so on. Handlers stay thin and call services. `GET /pdso/routes` lists them all.
 - `mcp/pdso_mcp_server.py` (CPython 3.10+, run with `uv run --script`) maps about 45 MCP tools onto those routes. It can open an SSH port forward when `PDSO_SSH_HOST` is set, and saves images to `PDSO_OUTPUT_DIR`.

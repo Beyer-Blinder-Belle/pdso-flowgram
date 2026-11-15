@@ -31,4 +31,4 @@ Shift-click **Harvest Layout** to save to another folder instead, such as a shar
 
 ## Code
 
-`PDSO.extension/lib/pdso/code/catalogue/`. The geometry, entry format, storage and recommender have no Revit imports, so they can be read and tested outside Revit.
+`lib/pdso/code/catalogue/`. The geometry, entry format, storage and recommender have no Revit imports, so they can be read and tested outside Revit.

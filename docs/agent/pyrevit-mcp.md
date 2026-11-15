@@ -120,18 +120,18 @@ The recipes below use only the Revit API, so they work without importing PDSO co
 
 ```python
 import sys
-PDSO_LIB = inputs.get("pdso_lib")  # e.g. r"C:\...\pdso-flowgram\PDSO.extension\lib"
+PDSO_LIB = inputs.get("pdso_lib")  # e.g. r"C:\...\pdso-flowgram\lib"
 if PDSO_LIB and PDSO_LIB not in sys.path:
     sys.path.append(PDSO_LIB)
 ```
 
-Or pass `workspace=<repo>/PDSO.extension/lib` to `run_query`.
+Or pass `workspace=<repo>/lib` to `run_query`.
 
 That one folder covers `pdso`, `common` and the vendored `extensible_storage` library. The most useful import is `from pdso.code.business.parameter_registry_service import get_registry`.
 
 The services already run outside a pyRevit command (the HTTP API uses them), so they should work in agent runs too.
 
-Verified 2026-11-14: PDSO services import in agent runs with `workspace=<repo>/PDSO.extension/lib`.
+Verified 2026-11-14: PDSO services import in agent runs with `workspace=<repo>/lib`.
 
 *Unverified:*
 
@@ -368,7 +368,7 @@ Prefer `run_sync` on the PDSO MCP server. If you must use the runtime, a `run_mo
 
 ```python
 import sys
-sys.path.append(inputs["pdso_lib"])  # <repo>/PDSO.extension/lib
+sys.path.append(inputs["pdso_lib"])  # <repo>/lib
 from pdso.code.business.preflight_service import PDSOPreflightService
 from pdso.code.business.sync_service import PDSOSyncService
 

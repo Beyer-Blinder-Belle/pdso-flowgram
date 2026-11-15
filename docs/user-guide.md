@@ -49,17 +49,11 @@ You need:
 - Autodesk Revit (the shipped Data Silo family is for Revit 2026)
 - [pyRevit](https://github.com/pyrevitlabs/pyRevit)
 
-Clone the repository, add its folder to pyRevit, then reload pyRevit. The extensible storage library PDSO needs is bundled.
+In Revit, click **pyRevit → Extensions**. Under **Git information**, enter the name `PDSO` and the Git URL `https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git`, leave Path and Token empty, and click **Add and install**. pyRevit downloads PDSO and reloads. The extensible storage library PDSO needs is bundled.
 
-```bash
-git clone https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
-```
+To update PDSO later, click pyRevit's **Update** button.
 
-```bash
-pyrevit extensions paths add <path-to-pdso-flowgram>
-```
-
-You can also add the folder in **pyRevit → Settings → Custom Extension Directories**. Add the folder that contains `PDSO.extension`, not `PDSO.extension` itself. pyRevit's **Update** button keeps it up to date. (pyRevit's Extensions window can't install PDSO yet.)
+If you installed PDSO before it could be installed this way (you added a `pdso-flowgram` folder to pyRevit's Custom Extension Directories), the PDSO tab disappears after updating. Remove that folder from the Custom Extension Directories in **pyRevit → Settings**, then install from the Extensions window as above. Developers: see [Installation](../README.md#installation) in the README.
 
 A **PDSO** tab appears in the Revit ribbon with a **Program Data Silo Tools** panel. The buttons only work in a project (not in the family editor). The first three set up a model, in ribbon order.
 
@@ -133,7 +127,7 @@ Click **Quick Setup**, keep all steps ticked, and click **Run Setup**. It:
 
 Run it after the Parameter Manager, so the schedules get their PDSO columns. It's safe to run again. Everything it does is one undo step, **PDSO Quick Setup**.
 
-Your office or project can change what Quick Setup creates with JSON standards files. See the [standards README](../PDSO.extension/lib/pdso/standards/README.md).
+Your office or project can change what Quick Setup creates with JSON standards files. See the [standards README](../lib/pdso/standards/README.md).
 
 ### 4. Draw Areas and place Data Silos
 

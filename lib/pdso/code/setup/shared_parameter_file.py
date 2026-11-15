@@ -9,7 +9,7 @@ Setup reads, so the two can't drift apart.
 It has no Revit or pyRevit imports, so it also runs with plain Python. Run this
 file to regenerate the shipped default:
 
-    python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
+    python lib/pdso/code/setup/shared_parameter_file.py
 """
 
 # Python standard libraries

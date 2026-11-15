@@ -42,8 +42,8 @@ Strings can contain these tokens:
 | --- | --- |
 | `{revit_year}` | Revit version, e.g. `2026` |
 | `{revit_yy}` | Last two digits, e.g. `26` |
-| `{repo_dir}` | The folder this extension was installed or cloned into |
-| `{extension_dir}` | The `PDSO.extension` folder |
+| `{repo_dir}` | The folder PDSO was installed or cloned into (the extension folder) |
+| `{extension_dir}` | The same folder as `{repo_dir}` |
 | `{standards_dir}` | The folder of the file being read |
 | `{data_silo_family}` | Data Silo family name from Project Config |
 | `{program_volume_prefix}` | Program Volume family name prefix from Project Config |
@@ -91,7 +91,7 @@ If your company changed `parameters.json`, use **Shift+Click → Export PDSO sha
 After changing the default `parameters.json`, regenerate the shipped file:
 
 ```bash
-python PDSO.extension/lib/pdso/code/setup/shared_parameter_file.py
+python lib/pdso/code/setup/shared_parameter_file.py
 ```
 
 ## families.json

@@ -9,7 +9,7 @@ Orientation for coding agents. Read this first, then open only the doc you need.
 | HTTP API routes, MCP tools and setup | [README.md → HTTP API and MCP server](README.md#http-api-and-mcp-server) |
 | What users see and do, step by step | [docs/user-guide.md](docs/user-guide.md) |
 | Every Data Silo parameter, who writes it | [docs/parameter-reference.md](docs/parameter-reference.md) |
-| Quick Setup JSON standards format | [PDSO.extension/lib/pdso/standards/README.md](PDSO.extension/lib/pdso/standards/README.md) |
+| Quick Setup JSON standards format | [lib/pdso/standards/README.md](lib/pdso/standards/README.md) |
 
 ## What this is
 
@@ -25,7 +25,7 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
 
 ## Hard constraints
 
-- **IronPython 2.7 for everything under `PDSO.extension/`.** No f-strings, type hints, `pathlib` or other Py3-only syntax and stdlib. Use `"{}".format()`. Files start with `# -*- coding: utf-8 -*-`.
+- **IronPython 2.7 for everything pyRevit runs: `startup.py`, `PDSO.tab/` and `lib/`.** No f-strings, type hints, `pathlib` or other Py3-only syntax and stdlib. Use `"{}".format()`. Files start with `# -*- coding: utf-8 -*-`.
   - **Exception:** `mcp/pdso_mcp_server.py` and `tools/*.py` are **CPython 3.10+**, run outside Revit (`uv run --script`). They talk to Revit only over HTTP. Never import Revit or `pdso` code there.
 - **Never change a shared parameter GUID** or an extensible storage schema GUID. The code looks parameters up by GUID and existing models store data under these schema GUIDs.
 - **Never hardcode the PDSO parameter list.** Each model tracks its own set. Read it through `parameter_registry_service.get_registry(doc)`.
@@ -33,12 +33,13 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
 - **Never write to Program Volumes or to the harvested SF parameters** as a data-entry path. The sync overwrites them.
 - **Keep business logic in `business/` services**, not in view models or API handlers. Windows and API handlers are thin callers.
 - Lint: `ruff check .` (config in `pyproject.toml`). No unit tests. `tools/snowdon_acceptance.py` runs acceptance steps against the HTTP API in a real Revit.
-- Runtime deps: `pyrevit` and `rpw` (both ship with pyRevit). `extensible_storage` is vendored, unmodified, in `PDSO.extension/lib/extensible_storage/` (third-party, see its `NOTICE.md`; excluded from Ruff). Don't edit it.
+- Runtime deps: `pyrevit` and `rpw` (both ship with pyRevit). `extensible_storage` is vendored, unmodified, in `lib/extensible_storage/` (third-party, see its `NOTICE.md`; excluded from Ruff). Don't edit it.
 
 ## Map
 
 ```
-PDSO.extension/
+(repo root = the pyRevit extension; pyRevit ignores families/, mcp/, tools/, docs/, catalogue/)
+  extension.json             details for pyRevit's Extensions window
   startup.py                 registers the HTTP API (pyRevit Routes, API name "pdso")
   PDSO.tab/Program Data Silo Tools.panel/
     0.Config.pushbutton/     → view_models/body_1_setup.py (Project Config window)
