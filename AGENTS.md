@@ -50,8 +50,7 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
   PDSO.tab/Unit Layout Catalogue.panel/
     1.HarvestUnits.pushbutton/ → every Area with a data silo in the active area plan ("Harvest All Units")
     1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout")
-    2.FindRooms.pushbutton/  → PickerWindow + SuggestionWindow ("Find Rooms")
-    3.Place.pushbutton/      → PickerWindow + SuggestionWindow ("Place Layout")
+    2.Pull.pushbutton/       → PickerWindow + SuggestionWindow ("Pull from Catalogue": from a Room or from a layout)
   lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     api/        dispatcher.py (routing, {"ok","data"|"error"} envelope), handlers.py (route table)

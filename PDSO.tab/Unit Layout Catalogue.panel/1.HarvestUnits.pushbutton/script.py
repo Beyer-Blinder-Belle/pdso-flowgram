@@ -152,7 +152,7 @@ def print_details(entry, result):
         output.print_table(
             [[output.linkify(eid), label, reason] for eid, label, reason in result.skipped],
             columns=["Element", "Family : Type", "Why"],
-            title="Recorded but not placed by Place Layout (hosted families)",
+            title="Recorded but not placed by Pull from Catalogue (hosted families)",
         )
 
 

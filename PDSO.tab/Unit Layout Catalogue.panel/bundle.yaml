@@ -1,5 +1,4 @@
 layout:
   - 1.HarvestUnits
   - 1.Harvest
-  - 2.FindRooms
-  - 3.Place
+  - 2.Pull

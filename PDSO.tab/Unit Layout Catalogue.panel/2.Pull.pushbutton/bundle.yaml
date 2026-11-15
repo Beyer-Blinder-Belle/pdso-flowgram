@@ -1,0 +1,15 @@
+title: "Pull from\nCatalogue"
+
+tooltip: >-
+  Put a catalogue layout into a Room. Select a Room (or objects in it) first to
+  see the layouts that fit it, ranked, with a plan preview of each layout in
+  the Room. With no selection, choose the Room in a table, or start from a
+  layout to see the Rooms that it suits. The layout's id is written to
+  "PDSO - Unit Layout Type" on any PDSO data silo in the room.
+
+author: BBB DCT + hackathon team
+
+context: doc-project
+
+engine:
+  clean: true

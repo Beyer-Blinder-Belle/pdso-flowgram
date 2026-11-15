@@ -900,6 +900,8 @@ class PickerWindow(object):
         action_label (str): Text of the action button
         selected_key (str): Key of the row that is selected at the start
         owner_handle: Window handle of Revit
+        alternate_label (str): Text of a second button, or None. A click on
+            it closes the window and sets ``alternate`` to True
     """
 
     THUMB_WIDTH = 96.0
@@ -907,11 +909,12 @@ class PickerWindow(object):
 
     def __init__(
         self, title, hint, columns, rows, action_label, selected_key=None,
-        owner_handle=None,
+        owner_handle=None, alternate_label=None,
     ):
         self.rows = rows
         self.columns = columns
         self.result = None
+        self.alternate = False
         self._selected = None
         self._parts = []
         self.window = base_window(1180, 700, owner_handle)
@@ -948,15 +951,25 @@ class PickerWindow(object):
         head.Children.Add(titles)
         root.Children.Add(head)
 
-        bottom = StackPanel()
-        bottom.Orientation = Orientation.Horizontal
-        bottom.HorizontalAlignment = HorizontalAlignment.Right
+        bottom = DockPanel()
         bottom.Margin = Thickness(0, 10, 0, 0)
         DockPanel.SetDock(bottom, Dock.Bottom)
+        buttons = StackPanel()
+        buttons.Orientation = Orientation.Horizontal
+        DockPanel.SetDock(buttons, Dock.Right)
         self.action = button(action_label, 190, default=True)
         self.action.Click += self._accept
-        bottom.Children.Add(self.action)
-        bottom.Children.Add(button("Cancel", 110, cancel=True))
+        buttons.Children.Add(self.action)
+        buttons.Children.Add(button("Cancel", 110, cancel=True))
+        bottom.Children.Add(buttons)
+        other = StackPanel()
+        other.Orientation = Orientation.Horizontal
+        if alternate_label:
+            switch = button(alternate_label, 190)
+            switch.Margin = Thickness(0)
+            switch.Click += self._switch
+            other.Children.Add(switch)
+        bottom.Children.Add(other)
         root.Children.Add(bottom)
 
         header = self._grid([text(name, 12, MUTED, bold=True) for name, _ in columns], None)
@@ -1073,6 +1086,10 @@ class PickerWindow(object):
                     cell.Foreground = WHITE
                 else:
                     cell.Foreground = TEXT if position == 0 else MUTED
+
+    def _switch(self, sender, args):
+        self.alternate = True
+        self.window.DialogResult = False
 
     def _accept(self, sender, args):
         if self._selected is None or self._selected not in self._visible():
