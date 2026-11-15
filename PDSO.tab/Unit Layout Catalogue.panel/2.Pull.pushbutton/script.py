@@ -35,7 +35,14 @@ def pull_into_room(doc, room_id):
         rows.append(
             {
                 "preview": preview,
-                "title": "{}.  {}".format(rank, item["name"]),
+                "image": layout.get("image"),
+                "title": "{}.  {}{}".format(
+                    rank,
+                    item["name"],
+                    "   (catalogue {})".format(layout["catalogue"]["number"])
+                    if layout.get("catalogue")
+                    else "",
+                ),
                 "lines": [
                     (
                         "{}   |   {}   |   from {}, {}".format(

@@ -22,6 +22,7 @@ from pdso.code.catalogue.layout_entry import LayoutEntry
 
 ENTRY_EXTENSION = ".json"
 SKETCH_EXTENSION = ".svg"
+IMAGE_EXTENSION = ".png"  # plan image of the unit, when Harvest made one
 
 
 def repo_root():
@@ -120,11 +121,56 @@ def remove_previous(folder, source):
         if not same:
             continue
         os.remove(path)
-        sketch = path[: -len(ENTRY_EXTENSION)] + SKETCH_EXTENSION
-        if os.path.isfile(sketch):
-            os.remove(sketch)
+        for extension in (SKETCH_EXTENSION, IMAGE_EXTENSION):
+            beside = path[: -len(ENTRY_EXTENSION)] + extension
+            if os.path.isfile(beside):
+                os.remove(beside)
         removed += 1
     return removed
+
+
+def catalogue_numbers(folder):
+    """The catalogue numbers already given out in a folder, as {key: number}.
+
+    A catalogue is a group of layouts with the same shape. Its key is the
+    shape's corner sequence, which is the same however the unit is turned or
+    mirrored and whatever its proportions (see layout_geometry.shape_category).
+    """
+    numbers = {}
+    if not folder or not os.path.isdir(folder):
+        return numbers
+    for file_name in sorted(os.listdir(folder)):
+        if not file_name.lower().endswith(ENTRY_EXTENSION):
+            continue
+        try:
+            with codecs.open(os.path.join(folder, file_name), "r", encoding="utf-8") as stream:
+                group = (json.loads(stream.read()).get("features") or {}).get("catalogue") or {}
+        except Exception:
+            continue
+        if group.get("key") and group.get("number"):
+            numbers.setdefault(group["key"], int(group["number"]))
+    return numbers
+
+
+def assign_catalogue(entry, numbers):
+    """Give an entry its catalogue number; a new shape gets the next number.
+
+    Args:
+        entry (LayoutEntry): Its features must hold "shape".
+        numbers (dict): From catalogue_numbers; a new key is added to it.
+    Returns:
+        int: The catalogue number.
+    """
+    shape = entry.features.get("shape") or {}
+    key = shape.get("turns") or shape.get("category") or "unknown"
+    if key not in numbers:
+        numbers[key] = max(list(numbers.values()) + [0]) + 1
+    entry.features["catalogue"] = {
+        "number": numbers[key],
+        "key": key,
+        "shape": shape.get("category", ""),
+    }
+    return numbers[key]
 
 
 def load_folder(folder):

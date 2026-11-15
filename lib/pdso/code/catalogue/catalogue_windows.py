@@ -44,6 +44,7 @@ from System.Windows.Controls import (  # noqa: E402
     Dock,
     DockPanel,
     Grid,
+    Image,
     Orientation,
     RowDefinition,
     ScrollBarVisibility,
@@ -62,7 +63,9 @@ from System.Windows.Media import (  # noqa: E402
     PointCollection,
     SolidColorBrush,
 )
+from System.Windows.Media.Imaging import BitmapCacheOption, BitmapImage  # noqa: E402
 from System.Windows.Shapes import Ellipse, Line, Polygon  # noqa: E402
+from System import Uri  # noqa: E402
 
 WINDOW_TITLE = "PDSO Unit Layout Catalogue"
 PROJECT_TYPES = ["K-12", "Higher Education", "Residential", "Office", "Healthcare", "Other"]
@@ -317,6 +320,26 @@ def sketch_canvas(outline, width, height, boxes=None, points=None):
     return canvas
 
 
+def plan_image(path, width, height):
+    """The plan image that Harvest saved, fitted into width x height, or None."""
+    try:
+        bitmap = BitmapImage()
+        bitmap.BeginInit()
+        # Read the file now and let go of it, so that a new harvest can replace it
+        bitmap.CacheOption = BitmapCacheOption.OnLoad
+        bitmap.UriSource = Uri(path)
+        bitmap.EndInit()
+        image = Image()
+        image.Source = bitmap
+        image.Width = width
+        image.Height = height
+        image.HorizontalAlignment = HorizontalAlignment.Left
+        image.VerticalAlignment = VerticalAlignment.Top
+        return image
+    except Exception:
+        return None
+
+
 def fit_line(preview):
     """One line that says if the layout fits the Room, and "good", "warn" or "bad"."""
     match = preview["match"]
@@ -378,12 +401,14 @@ class SuggestionWindow(object):
 
     THUMB_WIDTH = 200.0
     ROW_HEIGHT = 78.0
+    IMAGE_WIDTH = 100.0
 
     def __init__(
         self, heading, fields, rows, action_label, option_label=None, reference=None,
         owner_handle=None,
     ):
         self.rows = rows
+        self.has_images = any(row.get("image") for row in rows)
         self.result = None
         self.option = False
         self._selected = None
@@ -465,6 +490,31 @@ class SuggestionWindow(object):
         if rows:
             self._select(0)
 
+    def _with_image(self, middle, path):
+        """Put the harvested plan image of a layout to the left of its text.
+
+        Every row keeps the same slot when any row has an image, so that the
+        text lines up. Hover over the image for a large view.
+        """
+        if not self.has_images:
+            return middle
+        host = DockPanel()
+        Grid.SetColumn(host, 1)
+        slot = Border()
+        slot.Width = self.IMAGE_WIDTH
+        slot.Margin = Thickness(10, 2, 0, 2)
+        if path:
+            picture = plan_image(path, self.IMAGE_WIDTH, self.ROW_HEIGHT - 8)
+            if picture is not None:
+                slot.Child = picture
+                large = plan_image(path, 560, 560)
+                if large is not None:
+                    slot.ToolTip = large
+        DockPanel.SetDock(slot, Dock.Left)
+        host.Children.Add(slot)
+        host.Children.Add(middle)
+        return host
+
     def _reference_row(self, reference):
         """The original as a row with the same columns and the same plan scale."""
         border = Border()
@@ -478,8 +528,14 @@ class SuggestionWindow(object):
                 GridLength(1, GridUnitType.Star) if width is None else GridLength(width)
             )
             grid.ColumnDefinitions.Add(column)
-        grid.Children.Add(
-            plan_canvas(
+        # The plan image from Harvest if there is one, else the diagram
+        picture = None
+        if reference.get("image"):
+            picture = plan_image(
+                reference["image"], self.THUMB_WIDTH - 4, self.ROW_HEIGHT - 4
+            )
+        if picture is None:
+            picture = plan_canvas(
                 reference["preview"],
                 self.THUMB_WIDTH - 4,
                 self.ROW_HEIGHT - 4,
@@ -487,7 +543,7 @@ class SuggestionWindow(object):
                 self.turn,
                 room=reference["room"],
             )
-        )
+        grid.Children.Add(picture)
         middle = StackPanel()
         middle.Margin = Thickness(16, 2, 8, 2)
         Grid.SetColumn(middle, 1)
@@ -506,7 +562,7 @@ class SuggestionWindow(object):
             block = text(content, 12, MUTED)
             block.Margin = Thickness(0, 1, 0, 0)
             middle.Children.Add(block)
-        grid.Children.Add(middle)
+        grid.Children.Add(self._with_image(middle, None))
         right = StackPanel()
         right.Margin = Thickness(0, 5, 16, 2)
         right.HorizontalAlignment = HorizontalAlignment.Right
@@ -548,7 +604,7 @@ class SuggestionWindow(object):
             blocks.append((block, state))
         for block, _ in blocks:
             middle.Children.Add(block)
-        grid.Children.Add(middle)
+        grid.Children.Add(self._with_image(middle, row.get("image")))
 
         right = StackPanel()
         right.Margin = Thickness(0, 3, 16, 2)

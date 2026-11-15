@@ -31,6 +31,7 @@ from pdso.code.catalogue import revit_layout_service as layout_service
 from pdso.code.catalogue.catalogue_settings import catalogue_folders, get_catalogue_folder
 from pdso.code.catalogue.catalogue_store import (
     ENTRY_EXTENSION,
+    IMAGE_EXTENSION,
     SKETCH_EXTENSION,
     entry_to_svg,
     load_catalogue,
@@ -110,7 +111,17 @@ def entry_summary(entry):
         "source": entry.source,
         "notes": entry.notes,
         "file": os.path.join(folder, entry.id + ENTRY_EXTENSION) if folder else None,
+        "image": _entry_image(folder, entry.id),
+        "catalogue": (entry.features or {}).get("catalogue"),
     }
+
+
+def _entry_image(folder, entry_id):
+    """Path of the plan image that Harvest saved beside the entry, or None."""
+    if not folder:
+        return None
+    path = os.path.join(folder, entry_id + IMAGE_EXTENSION)
+    return path if os.path.isfile(path) else None
 
 
 def list_layouts(program=None, project_type=None):
@@ -158,7 +169,7 @@ def delete_layout(entry_id):
     if folder is None or os.path.normcase(folder) == os.path.normcase(sample_folder()):
         raise PDSOError("A sample layout cannot be deleted.", 409)
     removed = []
-    for extension in (ENTRY_EXTENSION, SKETCH_EXTENSION):
+    for extension in (ENTRY_EXTENSION, SKETCH_EXTENSION, IMAGE_EXTENSION):
         path = os.path.join(folder, entry_id + extension)
         if os.path.exists(path):
             os.remove(path)

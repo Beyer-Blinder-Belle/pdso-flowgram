@@ -19,9 +19,15 @@ for _name in [name for name in sys.modules if name.startswith("pdso.code.catalog
     del sys.modules[_name]
 
 from pdso.code.catalogue.catalogue_settings import get_catalogue_folder  # noqa: E402
-from pdso.code.catalogue.catalogue_store import remove_previous, save_entry  # noqa: E402
+from pdso.code.catalogue.catalogue_store import (  # noqa: E402
+    assign_catalogue,
+    catalogue_numbers,
+    remove_previous,
+    save_entry,
+)
 from pdso.code.catalogue.catalogue_windows import PROJECT_TYPES  # noqa: E402
-from pdso.code.catalogue.harvest_features import pdso_value  # noqa: E402
+from pdso.code.catalogue.harvest_features import boundary_edges, pdso_value  # noqa: E402
+from pdso.code.catalogue.harvest_image import UnitImager, thumbnail_data_uri  # noqa: E402
 from pdso.code.catalogue.layout_entry import slugify  # noqa: E402
 from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
     areas_with_data_silo,
@@ -33,6 +39,8 @@ from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
 )
 
 output = script.get_output()
+
+ROW_IMAGE_HEIGHT = 110  # px, the plan in front of each row of the table
 
 
 def suggest_program(unit, rooms, fallback):
@@ -51,6 +59,25 @@ def suggest_program(unit, rooms, fallback):
     if len(rooms) == 1 and rooms[0].get("name"):
         return rooms[0]["name"].title()
     return fallback or "Unit"
+
+
+def html_table(columns, table_rows):
+    """A table as HTML. print_table can't hold a picture in a cell; this can."""
+    cell = "padding:6px 10px;border-bottom:1px solid #ccc;text-align:left;vertical-align:middle;"
+    parts = ['<table style="border-collapse:collapse;width:100%;font-size:13px;">', "<tr>"]
+    for name in columns:
+        parts.append(
+            '<th style="{}background:#263238;color:#fff;">{}</th>'.format(cell, name)
+        )
+    parts.append("</tr>")
+    for number, table_row in enumerate(table_rows):
+        shade = "background:#f2f2f2;" if number % 2 == 0 else ""
+        parts.append("<tr>")
+        for value in table_row:
+            parts.append('<td style="{}{}">{}</td>'.format(cell, shade, value))
+        parts.append("</tr>")
+    parts.append("</table>")
+    return "".join(parts)
 
 
 def units_to_harvest():
@@ -176,6 +203,9 @@ if __name__ == "__main__":
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     used_ids = set()
     rows, failures, last = [], [], None
+    # Catalogue numbers already given out: the same shape keeps its number
+    numbers = catalogue_numbers(folder)
+    saved = []
     replaced = 0
 
     for element in elements:
@@ -207,14 +237,17 @@ if __name__ == "__main__":
                 entry.id = "{}-{}".format(base, count)
             used_ids.add(entry.id)
 
+            catalogue_number = assign_catalogue(entry, numbers)
             replaced += remove_previous(folder, source)
-            save_entry(entry, folder)
+            path = save_entry(entry, folder)
+            saved.append((element, entry, path))
             last = (entry, result)
 
             lengths = features.get("edge_lengths", {})
             rows.append(
                 [
                     output.linkify(element.Id),
+                    catalogue_number,
                     entry.name,
                     features.get("shape", {}).get("category", ""),
                     "{:.1f} x {:.1f}".format(entry.width, entry.depth),
@@ -232,20 +265,50 @@ if __name__ == "__main__":
         except Exception as error:
             failures.append((element.Id, "{}: {}".format(type(error).__name__, error)))
 
+    # A plan image of each unit, from a temporary copy of the active view with
+    # tags and Area lines hidden. The copy is undone; the model does not change.
+    images = 0
+    imager = UnitImager(revit.doc, revit.doc.ActiveView)
+    try:
+        for index, (element, entry, path) in enumerate(saved):
+            picture = ""
+            outline = [start for start, _, _ in boundary_edges(element)]
+            image_path = path[: -len(".json")] + ".png"
+            if imager.export(outline, image_path):
+                entry.features["image"] = entry.id + ".png"
+                save_entry(entry, folder)
+                images += 1
+                # The plan goes in front of the unit's row of the table
+                data = thumbnail_data_uri(image_path, ROW_IMAGE_HEIGHT * 2)
+                if data:
+                    picture = '<img src="{}" height="{}">'.format(data, ROW_IMAGE_HEIGHT)
+            if index < len(rows):
+                rows[index].insert(0, picture)
+    finally:
+        image_error = imager.error
+        imager.close()
+
     output.print_md("## Harvested {} unit(s) from {}".format(len(rows), origin))
     output.print_md("**{}** · saved to `{}`".format(project_type, folder))
     if replaced:
         output.print_md("{} earlier harvest(s) of the same units were replaced.".format(replaced))
+    output.print_md(
+        "Plan images: {} of {}{}".format(
+            images, len(saved), " ({})".format(image_error) if image_error else ""
+        )
+    )
 
     if rows:
-        output.print_table(
-            rows,
-            columns=[
-                "Unit", "Name", "Shape", "Size (ft)", "Exterior (ft)", "Corridor (ft)",
-                "Party (ft)", "Entry", "Rooms", "Partitions", "Families", "Nested pieces",
-                "PDSO values",
-            ],
-            title="Units",
+        output.print_md("### Units")
+        output.print_html(
+            html_table(
+                [
+                    "Plan", "Unit", "Catalogue", "Name", "Shape", "Size (ft)", "Exterior (ft)",
+                    "Corridor (ft)", "Party (ft)", "Entry", "Rooms", "Partitions", "Families",
+                    "Nested pieces", "PDSO values set",
+                ],
+                rows,
+            )
         )
 
     if failures:
