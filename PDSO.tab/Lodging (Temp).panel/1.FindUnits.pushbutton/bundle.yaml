@@ -1,0 +1,16 @@
+title: "Find\nUnits"
+
+tooltip: >-
+  TEMPORARY (lodging prototype). Find the units (apartments or guest rooms) of
+  a model that has Rooms only: Rooms are grouped by how doors connect them,
+  with each unit's entrance and windows. Saves JSON, a debug view and catalogue
+  sheets (one per unit type, with a summary). Read only: the model is not
+  changed. Runs before PDSO setup; Harvest All Units then saves PDSO units to
+  the catalogue.
+
+author: hackathon team (lodging prototype)
+
+context: doc-project
+
+engine:
+  clean: true

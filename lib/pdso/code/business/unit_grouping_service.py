@@ -398,10 +398,12 @@ def group_units(rooms, doors, windows, shared_names=None, probe=None, level_orde
 
     _number_units(units, level_order)
     units.sort(key=lambda u: (level_order.get(u["level"], 0), u["uid"]))
+    unit_types = classify_units(units)
 
     return OrderedDict(
         [
             ("units", units),
+            ("unit_types", unit_types),
             ("shared_rooms", [
                 OrderedDict([("id", r["id"]), ("name", r["name"]), ("level", r["level"])])
                 for r in rooms if r["id"] in shared_ids
@@ -410,6 +412,88 @@ def group_units(rooms, doors, windows, shared_names=None, probe=None, level_orde
             ("unresolved_openings", unresolved),
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Unit types
+# ---------------------------------------------------------------------------
+
+# Words in a room name (lower case) that make it a bedroom, bathroom or kitchen.
+BEDROOM_WORDS = ("bedroom", "dormit", "quarto", "guest room", "sleep")
+BATHROOM_WORDS = ("bath", "bwc", "wc", "toilet", "shower", "banheiro")
+KITCHEN_WORDS = ("kitchen", "cozinha", "pantry")
+
+# Rooms of two units match when their areas differ by less than this (sf).
+TYPE_AREA_TOLERANCE = 2.0
+
+
+def _count_rooms(rooms, words):
+    return sum(1 for r in rooms if any(w in r["name"].lower() for w in words))
+
+
+def _type_key(unit):
+    """Same rooms (by name) with the same areas. Mirrored units match."""
+    return tuple(
+        sorted(
+            (r["name"].strip().lower(), int(round(r["area_sf"] / TYPE_AREA_TOLERANCE)))
+            for r in unit["rooms"]
+        )
+    )
+
+
+def _type_letter(index):
+    letters = ""
+    index += 1
+    while index:
+        index, rest = divmod(index - 1, 26)
+        letters = chr(65 + rest) + letters
+    return letters
+
+
+def classify_units(units):
+    """Group units into types and write each unit's "type". Pure Python.
+
+    Types are lettered A, B, ... from the most common, then the largest.
+
+    Returns:
+        list[OrderedDict]: id, name, bedrooms, bathrooms, kitchens, room_count,
+            area_sf, rooms (of the typical unit), units (uids), typical_unit
+    """
+    groups = OrderedDict()
+    for unit in units:
+        groups.setdefault(_type_key(unit), []).append(unit)
+
+    ordered = sorted(
+        groups.values(), key=lambda members: (-len(members), -members[0]["area_sf"])
+    )
+    types = []
+    for index, members in enumerate(ordered):
+        typical = members[0]
+        letter = _type_letter(index)
+        bedrooms = _count_rooms(typical["rooms"], BEDROOM_WORDS)
+        prefix = "{}BR".format(bedrooms) if bedrooms else "Studio"
+        for unit in members:
+            unit["type"] = letter
+        types.append(
+            OrderedDict(
+                [
+                    ("id", letter),
+                    ("name", "{} - Type {}".format(prefix, letter)),
+                    ("bedrooms", bedrooms),
+                    ("bathrooms", _count_rooms(typical["rooms"], BATHROOM_WORDS)),
+                    ("kitchens", _count_rooms(typical["rooms"], KITCHEN_WORDS)),
+                    ("room_count", typical["room_count"]),
+                    ("area_sf", typical["area_sf"]),
+                    ("rooms", [
+                        OrderedDict([("name", r["name"]), ("area_sf", r["area_sf"])])
+                        for r in typical["rooms"]
+                    ]),
+                    ("units", [u["uid"] for u in members]),
+                    ("typical_unit", typical["uid"]),
+                ]
+            )
+        )
+    return types
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +542,7 @@ def harvest_units(doc, shared_names=None, probe=None, with_geometry=True):
                     ("shared_rooms", len(grouped["shared_rooms"])),
                     ("entrances", sum(len(u["entrances"]) for u in units)),
                     ("windows_in_units", sum(len(u["windows"]) for u in units)),
+                    ("unit_types", len(grouped["unit_types"])),
                     ("units_to_check", sum(1 for u in units if u["issues"])),
                     ("unresolved_openings", len(grouped["unresolved_openings"])),
                 ]
@@ -476,27 +561,35 @@ def harvest_units(doc, shared_names=None, probe=None, with_geometry=True):
 # Output files
 # ---------------------------------------------------------------------------
 
-PREVIEW_TEMPLATE = os.path.join(
+ASSETS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "assets",
-    "unit_preview.html",
 )
+PREVIEW_TEMPLATE = os.path.join(ASSETS, "unit_preview.html")
+CATALOGUE_TEMPLATE = os.path.join(ASSETS, "unit_catalogue.html")
+
+
+def _fill_template(template_path, text, out_path):
+    with codecs.open(template_path, "r", encoding="utf-8") as stream:
+        template = stream.read()
+    # The JSON text is pure ASCII (see to_json); "</" must not close the script tag
+    with codecs.open(out_path, "w", encoding="utf-8") as stream:
+        stream.write(template.replace("__DATA__", text.replace("</", "<\\/")))
 
 
 def write_outputs(result, json_path):
-    """Write the harvest as JSON, and an HTML preview next to it.
+    """Write the units as JSON, with a debug view and catalogue sheets next to it.
 
     Returns:
-        tuple: (json path, html path)
+        tuple: (json path, debug view path, catalogue path)
     """
     text = to_json(result)
     with codecs.open(json_path, "w", encoding="utf-8") as stream:
         stream.write(text)
 
-    html_path = os.path.splitext(json_path)[0] + ".html"
-    with codecs.open(PREVIEW_TEMPLATE, "r", encoding="utf-8") as stream:
-        template = stream.read()
-    # The JSON text is pure ASCII (see to_json); "</" must not close the script tag
-    with codecs.open(html_path, "w", encoding="utf-8") as stream:
-        stream.write(template.replace("__DATA__", text.replace("</", "<\\/")))
-    return json_path, html_path
+    base = os.path.splitext(json_path)[0]
+    html_path = base + ".html"
+    catalogue_path = base + " - catalogue.html"
+    _fill_template(PREVIEW_TEMPLATE, text, html_path)
+    _fill_template(CATALOGUE_TEMPLATE, text, catalogue_path)
+    return json_path, html_path, catalogue_path

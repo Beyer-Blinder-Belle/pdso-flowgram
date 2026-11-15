@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Harvest Units (temporary): group Rooms into units and save JSON + preview."""
+"""Find Units (temporary): group Rooms into units; save JSON, a debug view and catalogue sheets."""
 
 import os
 import sys
@@ -24,9 +24,9 @@ def _default_name(doc):
     return "{} - units".format(safe or "model")
 
 
-def _report(output, result, json_path, html_path):
+def _report(output, result, paths):
     summary = result["summary"]
-    output.print_md("# Harvest Units (prototype)")
+    output.print_md("# Find Units (prototype)")
     output.print_md(
         "**{}** units, **{}** rooms in units, **{}** shared rooms, "
         "**{}** entrances, **{}** windows in units".format(
@@ -62,7 +62,16 @@ def _report(output, result, json_path, html_path):
         rows,
         columns=["Unit", "Rooms", "m2", "Room names", "Entrance", "Windows", "Issues"],
     )
-    output.print_md("Saved:\n\n- `{}`\n- `{}`".format(json_path, html_path))
+    types = result.get("unit_types", [])
+    if types:
+        output.print_table(
+            [
+                [t["id"], t["name"], len(t["units"]), "{:.2f}".format(t["area_sf"] * FT2_TO_M2)]
+                for t in types
+            ],
+            columns=["Type", "Name", "Units", "m2"],
+        )
+    output.print_md("Saved:\n\n" + "\n".join("- `{}`".format(p) for p in paths))
 
 
 if __name__ == "__main__":
@@ -72,20 +81,21 @@ if __name__ == "__main__":
     json_path = forms.save_file(
         file_ext="json",
         default_name=_default_name(doc),
-        title="Save the unit harvest (an HTML preview is saved next to it)",
+        title="Save the units (a debug view and catalogue sheets are saved next to it)",
     )
     if not json_path:
         script.exit()
 
     try:
-        with forms.ProgressBar(title="Harvesting units...", indeterminate=True):
+        with forms.ProgressBar(title="Finding units...", indeterminate=True):
             result = units_service.harvest_units(doc)
-        json_path, html_path = units_service.write_outputs(result, json_path)
+        paths = units_service.write_outputs(result, json_path)
     except Exception as error:  # prototype: show anything that goes wrong
-        output.print_md("# Harvest Units failed")
+        output.print_md("# Find Units failed")
         output.print_md("`{}`".format(error))
         output.print_code(traceback.format_exc())
         script.exit()
 
-    _report(output, result, json_path, html_path)
-    os.startfile(html_path)
+    _report(output, result, paths)
+    os.startfile(paths[1])  # debug view
+    os.startfile(paths[2])  # catalogue sheets
