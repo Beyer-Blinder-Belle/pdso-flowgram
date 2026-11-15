@@ -1,0 +1,30 @@
+{
+  "_comment": "Which setup steps run, in this order, and whether each is pre-ticked in the Quick Setup dialog. Run Project Config and the Parameter Manager before Quick Setup. See README.md in this folder.",
+  "steps": [
+    {
+      "id": "area_schemes",
+      "title": "Create the area schemes from Project Config",
+      "enabled": true
+    },
+    {
+      "id": "families",
+      "title": "Load the Program Data Silo family",
+      "enabled": true
+    },
+    {
+      "id": "view_templates",
+      "title": "Create or update PDSO view templates",
+      "enabled": true
+    },
+    {
+      "id": "views",
+      "title": "Create PDSO working views",
+      "enabled": true
+    },
+    {
+      "id": "schedules",
+      "title": "Create Data Silo and Program Volume schedules",
+      "enabled": true
+    }
+  ]
+}

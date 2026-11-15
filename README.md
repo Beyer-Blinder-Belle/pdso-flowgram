@@ -8,13 +8,13 @@ Built by the DCT team at [Beyer Blinder Belle](https://www.beyerblinderbelle.com
 
 ## What it does
 
-The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has four commands:
+The **Program Data Silo Tools** panel (on the **PDSO** ribbon tab) has five commands. The first three set up a model, in this order:
 
 | Button | What it does |
 | --- | --- |
-| **Model Setup** | Sets up a model for PDSO: adds the PDSO parameters, loads the Data Silo family, and creates view templates, working views and schedules. What it creates comes from JSON [standards files](PDSO.extension/lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
-| **Project Config** | Sets up the model-level PDSO configuration (area schemes, level mapping, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
+| **Project Config** | Sets up the model-level PDSO configuration (area scheme mappings, level mapping, Data Silo family, program volume family). The configuration is stored in the model with Revit Extensible Storage. |
 | **Parameter Manager** | Chooses which parameters PDSO tracks and creates them as shared parameters, bound to Generic Models (and optionally embedded in the Data Silo family). Must be run at least once per model before syncing. |
+| **Quick Setup** | Creates everything else PDSO needs in the model: the area schemes from Project Config, the Data Silo family, view templates, working views and schedules. What it creates comes from JSON [standards files](lib/pdso/standards/README.md) that a company or project can customize. Shift+Click to choose or export a standards folder. |
 | **Sync Data** | Syncs parameter data between Area objects, PDSO objects, and program volume (mass) objects, after a preflight check. |
 | **Audit Report** | Checks PDSO objects for data consistency, sync problems, and Area boundary issues. |
 
@@ -37,19 +37,56 @@ The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.p
 
 - Autodesk Revit
 - [pyRevit](https://github.com/pyrevitlabs/pyRevit)
-- The [`extensible-storage-pyrevit`](https://github.com/khorn06/extensible-storage-pyrevit) library by Kris Horn. A copy is bundled in `PDSO.extension/lib/extensible_storage`, so no separate install is needed (see its `NOTICE.md`).
+- The [`extensible-storage-pyrevit`](https://github.com/khorn06/extensible-storage-pyrevit) library by Kris Horn. A copy is bundled in `lib/extensible_storage`, so no separate install is needed (see its `NOTICE.md`).
 
 ## Installation
 
-Using the pyRevit CLI:
+### From pyRevit (recommended)
+
+In Revit, click **pyRevit → Extensions**. Under **Git information**, enter:
+
+- Name: `PDSO`
+- Git URL: `https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git`
+
+Leave Path and Token empty, and click **Add and install**. pyRevit clones the repository into `%APPDATA%\pyRevit\Extensions\PDSO.extension` and reloads. Update it later with pyRevit's **Update** button or from the Extensions window.
+
+Or use the pyRevit CLI, then reload pyRevit:
 
 ```bash
-pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git
+pyrevit extend ui PDSO https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git --branch=main
 ```
 
-Then reload pyRevit.
+Pass `--branch=main`: the CLI uses `master` when no branch is given.
 
-For development, clone this repo and add its folder to pyRevit's custom extension directories (pyRevit → Settings → Custom Extension Directories), or run `pyrevit extensions paths add <path-to-repo>`.
+### For development
+
+pyRevit loads folders whose names end in `.extension` from its search paths. Clone into such a folder, and add the folder above it as a search path:
+
+```bash
+git clone https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git PDSO.extension
+```
+
+```bash
+pyrevit extensions paths add <folder that contains PDSO.extension>
+```
+
+To keep a clone that has another name (such as `pdso-flowgram`), make a directory junction named `PDSO.extension` in a folder of its own, and add that folder instead. In PowerShell:
+
+```powershell
+New-Item -ItemType Junction -Path C:\pyRevit-dev\PDSO.extension -Target C:\path\to\pdso-flowgram
+```
+
+```bash
+pyrevit extensions paths add C:\pyRevit-dev
+```
+
+### Upgrading from the old layout
+
+Until this change the extension was in a `PDSO.extension` subfolder of the repository, and the search path was the repository folder. After you pull this change, the PDSO tab disappears until you re-point pyRevit:
+
+1. Forget the old search path: `pyrevit extensions paths forget <path-to-pdso-flowgram>`.
+2. Install from pyRevit, or set up a development folder as above.
+3. Reload pyRevit. Delete any leftover `PDSO.extension` folder inside the clone (Windows can't remove files that Revit had open during the pull).
 
 ## Revit family
 
@@ -57,18 +94,22 @@ PDSO needs the **Program Data Silo Object** family loaded in your project. The f
 
 - `PDSO - Program Data Silo Object - Rvt26.rfa` (Revit 2026)
 
-**Model Setup** loads it and sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+The family only carries the three required parameters: `PDSO - Program UID`, `PDSO - Program Stacking` and `PDSO - Last Synced`. Each project adds the parameters it needs in the **Parameter Manager**, which binds them to Generic Models. So a residential and an office project can use the same family.
+
+**Quick Setup** loads it, adds the model's tracked parameters to it, and, unless Project Config already names a different loaded family, sets it as the Data Silo family in Project Config. To do it by hand, load the family, then open **Project Config** and set the Data Silo family name to match the loaded family's name.
+
+Before reloading this family into a project that used an older copy, track every parameter you use in the Parameter Manager: values of untracked parameters live only in the old family and are lost on reload.
 
 ## Standards
 
-Model Setup is driven by JSON files in [`PDSO.extension/lib/pdso/standards/`](PDSO.extension/lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Model Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](PDSO.extension/lib/pdso/standards/README.md) for every option.
+Quick Setup is driven by JSON files in [`lib/pdso/standards/`](lib/pdso/standards/). They ship with working defaults. A company can override any of them from a shared folder (set the `PDSO_STANDARDS_DIR` environment variable, or Shift+Click Quick Setup), and a project can override them from a `PDSO Standards` folder next to the model. See the [standards README](lib/pdso/standards/README.md) for every option.
 
 ## HTTP API and MCP server
 
 The extension also has an HTTP API, so that a program or an AI agent can do the work of the three windows, and can create and change programs and Area outlines. The API runs in Revit through [pyRevit Routes](https://docs.pyrevitlabs.io/reference/pyrevit/routes/). An [MCP](https://modelcontextprotocol.io) server gives the API to agents such as Claude Code. The agent can be on the same computer as Revit, or on a different computer.
 
 ```
-agent  --MCP (stdio)-->  mcp/pdso_mcp_server.py  --HTTP (direct, or SSH port forward)-->  Revit + pyRevit + PDSO.extension
+agent  --MCP (stdio)-->  mcp/pdso_mcp_server.py  --HTTP (direct, or SSH port forward)-->  Revit + pyRevit + PDSO extension
 ```
 
 All lengths are decimal feet. All areas are square feet.
@@ -158,12 +199,31 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
 | Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
 | Selection | `select_elements`, `select_programs`, `get_selection` |
-| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `adjust_area`, `delete_area` |
+| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `draft_areas_from_rooms`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 | Open documents | `list_open_documents`, `open_document_in_background`, `set_target_document`, `save_document`, `close_background_document` |
 | Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `recommend_layouts`, `find_similar_rooms`, `preview_similar_rooms`, `place_layout`, `list_room_items`, `describe_item`, `clear_room_items`, `delete_layout` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
+
+### Work from intent
+
+The server instructions give an agent the PDSO workflow, so that a user can ask in plain language ("map out the program of the second floor of this school") and does not need to know PDSO. The tools that make this short:
+
+- `setup_model()` with no levels makes area plans for the levels that have Rooms.
+- `list_rooms(level, include_outline=false)` gives number, name, area and bounding box of each Room.
+- `draft_areas_from_rooms(level, room_numbers, insets)` drafts one Area for each Room in each scheme, for example `insets = {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}`. A Room that fails does not stop the other Rooms. If an inset splits a Room outline, a larger simplify tolerance or the largest piece is used, and `warnings` says so.
+- `create_programs` places one program in each Area by `area_id`.
+- `run_sync` returns `program_volumes`: the families and the id and level of each instance.
+- `show_view(view, fit=true)` opens a plan and zooms it to its Areas (or Rooms) in one call. `view_type` selects one view when a floor plan and an area plan have the same name.
+- `show_program_volumes` shows the 3D view in the Revit window.
+
+### Versions, reloads and more than one client
+
+- `GET status` returns `api_version`. `get_status` of the MCP server adds `version_warning` when the extension in Revit is not the version that the server expects.
+- While pyRevit reloads, the PDSO routes are gone for some seconds. The MCP server waits (up to 60 s) and sends the request again.
+- The MCP server sends a request id (`_rid`) with each request, and the API returns it (`rid`). In tests, pyRevit Routes gave a client the reply of a different request when more than one request ran at the same time. With the request id, the server finds a wrong reply: it sends a read-only request again, and it stops with a clear error for a request that changes the model. Use one client for each Revit when you can.
+- `POST document/open` answers the dialog "Unresolved References" ("Ignore and continue opening the project"), so that the request does not wait for a click. The reply lists `dialogs_answered` and `dialogs_seen`.
 
 ### Tracked parameters in the API
 
@@ -171,8 +231,8 @@ The API uses the tracked parameters of the model (see [Tracked parameters](#trac
 
 - `POST bootstrap` sets up the parameters of a model that tracks no parameter: all built-in parameters (the *Default* preset). It does not change a model that tracks parameters.
 - `GET parameters` lists the tracked parameters, and the built-in parameters that the model does not track.
-- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. If the model has one shared parameter with the name, that parameter is used and its values stay.
-- Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name (`Rent per SF` is `rent_per_sf`).
+- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. A custom name gets the `PDSO - ` prefix, as in the Parameter Manager (`Room Finish` becomes `PDSO - Room Finish`). If the model has one shared parameter with the name as given, that parameter is used and its values stay.
+- Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name without the prefix (`PDSO - Rent per SF` is `rent_per_sf`).
 - `DELETE parameters/<field or name>` stops the tracking. The Revit parameter and its values stay. With `purge=true`, the parameter is also removed from Generic Models, and its values are deleted. The required parameters cannot be deleted.
 - New shared parameter definitions go into the shared parameter file that Revit is set to use, then the fallback file of the Parameter Manager. If there is none, the API uses a file in the temporary folder.
 
@@ -188,39 +248,46 @@ The Program Volume of a program gets the shape of one Area that contains the Dat
 
 ### Development
 
+`tools/deploy_vm.sh` copies `lib/` and `startup.py` to the Revit computer, checks the copy, and loads the new code: with the dev route if the flag file is there, or with a pyRevit reload if it is not (`PDSO_RELOAD=auto|dev|pyrevit|none`).
+
 The API code is imported on each request. With the flag file `%APPDATA%\pyRevit\pdso_api_dev.flag` on the Revit computer, `POST /pdso/dev/reload` drops the cached `pdso` modules, so that new code is used without a pyRevit reload. The flag also enables `POST /pdso/dev/exec`, which runs Python code in Revit. Do not keep the flag on a computer that is not for development.
 
 The windows and the API use the same UI-free services in `lib/pdso/code/business/`.
 
 ## Repository layout
 
-The repository uses the standard pyRevit extension layout:
+The repository root is the pyRevit extension, so pyRevit's Extensions window can install it. pyRevit ignores the folders that aren't bundles (`families/`, `mcp/`, `tools/`, `docs/`, `catalogue/`).
 
 ```
+extension.json                        # Extension details shown in pyRevit's Extensions window
+startup.py                            # Registers the HTTP API with pyRevit Routes
+PDSO.tab/
+├── Program Data Silo Tools.panel/
+│   ├── 0.Config.pushbutton/          # Project configuration window
+│   ├── 1.Parameters.pushbutton/      # Parameter Manager (tracked shared parameters)
+│   ├── 2.Setup.pushbutton/           # Quick Setup from JSON standards (Shift+Click: options)
+│   ├── 3.RunScripts.pushbutton/      # Harvest Areas and sync program volumes
+│   └── 4.Audit.pushbutton/           # Audit report
+└── Unit Layout Catalogue.panel/
+lib/
+├── common/                           # Shared helpers and UI assets
+├── extensible_storage/               # Vendored third-party library (don't edit)
+└── pdso/
+    ├── code/
+    │   ├── api/                      # HTTP API: request dispatcher and route handlers
+    │   ├── business/                 # Services: sync, hashing, level mapping, storage, ...
+    │   ├── data/                     # Wrappers around Revit elements, schemas, parameter constants
+    │   ├── setup/                    # Quick Setup: standards loader, runner and steps
+    │   └── view_models/              # WPF view models (MVVM)
+    ├── standards/                    # Default JSON standards for Quick Setup
+    ├── xaml/                         # WPF windows and styles
+    └── documentation/                # Developer notes
 families/                             # Revit family files (.rfa)
 mcp/
 └── pdso_mcp_server.py                # MCP server for the HTTP API (runs on the agent's computer)
-PDSO.extension/
-├── startup.py                        # Registers the HTTP API with pyRevit Routes
-├── PDSO.tab/
-│   └── Program Data Silo Tools.panel/
-│       ├── 0.Setup.pushbutton/       # Model Setup from JSON standards (Shift+Click: options)
-│       ├── 1.Config.pushbutton/      # Project configuration window
-│       ├── 1b.Parameters.pushbutton/ # Parameter Manager (tracked shared parameters)
-│       ├── 2.RunScripts.pushbutton/  # Harvest Areas and sync program volumes
-│       └── 3.Audit.pushbutton/       # Audit report
-└── lib/
-    ├── common/                       # Shared helpers and UI assets
-    └── pdso/
-        ├── code/
-        │   ├── api/                  # HTTP API: request dispatcher and route handlers
-        │   ├── business/             # Services: sync, hashing, level mapping, storage, ...
-        │   ├── data/                 # Wrappers around Revit elements, schemas, parameter constants
-        │   ├── setup/                # Model Setup: standards loader, runner and steps
-        │   └── view_models/          # WPF view models (MVVM)
-        ├── standards/                # Default JSON standards for Model Setup
-        ├── xaml/                     # WPF windows and styles
-        └── documentation/            # Developer notes
+tools/                                # Acceptance runner and remote deploy script
+catalogue/                            # Unit Layout Catalogue samples
+docs/                                 # User guide, parameter reference, agent docs
 ```
 
 ## Development notes

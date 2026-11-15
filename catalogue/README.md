@@ -14,7 +14,7 @@ Harvest  ->  Store  ->  Recommend  ->  Create
 | **Recommend** | `Place Layout` button | Choose the target Room in a table with a plan for each Room and a search filter (a selection in the model selects its Room). A window shows the Room as it is now as the first row, and below it the best 5 layouts that fit, ranked, with a plan of each layout in the Room. Every layout is tried in all 8 orientations (4 turns, with and without a mirror) and ranked: 60% area match, 40% how snugly it fits. Same-program layouts come first. A layout is offered only if every item lands inside the target, or no more than 6 in. outside it (a family against a wall has its insertion point on the boundary). If more than one orientation fits equally, the one whose room outline is nearest to the target outline is used. |
 | **Create** | `Find Rooms` or `Place Layout` button | Places the chosen layout and selects the placed items. An option deletes the furniture that is in the Room first. Then the layout id is written to `PDSO - Unit Layout Type` on any PDSO data silo in the room |
 
-The windows are in `PDSO.extension/lib/pdso/code/catalogue/catalogue_windows.py`. The buttons call `catalogue_api_service`, the same code as the HTTP API and the MCP server. A test with the three buttons on the Snowdon sample placed the layout of Office Unit 401 into Office Unit 301 (19 of 19 items, same arrangement).
+The windows are in `lib/pdso/code/catalogue/catalogue_windows.py`. The buttons call `catalogue_api_service`, the same code as the HTTP API and the MCP server. A test with the three buttons on the Snowdon sample placed the layout of Office Unit 401 into Office Unit 301 (19 of 19 items, same arrangement).
 
 ## Without the buttons: HTTP API and MCP tools
 
@@ -73,4 +73,4 @@ Shift-click **Harvest Layout** to save to another folder instead, such as a shar
 
 ## Code
 
-`PDSO.extension/lib/pdso/code/catalogue/`. The geometry, entry format, storage and recommender have no Revit imports, so they can be read and tested outside Revit.
+`lib/pdso/code/catalogue/`. The geometry, entry format, storage and recommender have no Revit imports, so they can be read and tested outside Revit.

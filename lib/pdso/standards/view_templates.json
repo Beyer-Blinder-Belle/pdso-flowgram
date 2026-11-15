@@ -1,0 +1,66 @@
+{
+  "_comment": "View templates to create. on_existing: 'update' re-applies these settings to a template that already exists; 'skip' leaves it alone. See README.md for every option.",
+  "on_existing": "update",
+  "view_templates": [
+    {
+      "name": "PDSO - Area Plan - Working",
+      "view_type": "AreaPlan",
+      "scale": 96,
+      "detail_level": "Medium",
+      "visibility": {
+        "model_categories": "unchanged",
+        "annotation_categories": "unchanged",
+        "import_categories": "hidden"
+      },
+      "categories": [
+        {
+          "_comment": "Area boundaries: heavy, bright purple",
+          "category": "OST_AreaSchemeLines",
+          "visible": true,
+          "projection_lines": { "color": "#B400FF", "weight": 8 }
+        },
+        { "category": "OST_Areas", "visible": true },
+        { "category": "OST_AreaReferenceVisibility", "visible": true },
+        { "category": "OST_AreaInteriorFillVisibility", "visible": true },
+        { "category": "OST_AreaTags", "visible": true },
+        {
+          "_comment": "Program Data Silo Objects are Generic Models",
+          "category": "OST_GenericModel",
+          "visible": true
+        },
+        { "category": "OST_RvtLinks", "visible": false }
+      ],
+      "filters": [
+        {
+          "_comment": "Program Volumes are Generic Models too. Hide them in plans so only the Data Silos show.",
+          "name": "PDSO - Program Volumes",
+          "categories": ["OST_GenericModel"],
+          "rules": [
+            { "parameter": "ALL_MODEL_FAMILY_NAME", "operator": "begins_with", "value": "{program_volume_prefix}" }
+          ],
+          "visible": false
+        }
+      ]
+    },
+    {
+      "name": "PDSO - 3D - Program Volumes",
+      "view_type": "ThreeD",
+      "detail_level": "Medium",
+      "display_style": "ShadingWithEdges",
+      "visibility": {
+        "model_categories": "hidden",
+        "annotation_categories": "unchanged",
+        "import_categories": "hidden"
+      },
+      "categories": [
+        {
+          "_comment": "Program Volumes and Data Silos are Generic Models",
+          "category": "OST_GenericModel",
+          "visible": true,
+          "surface": { "transparency": 20 }
+        },
+        { "category": "OST_RvtLinks", "visible": false }
+      ]
+    }
+  ]
+}

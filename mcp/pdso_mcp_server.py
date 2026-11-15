@@ -5,7 +5,7 @@
 """MCP server for PDSO Flowgram.
 
 This server runs on your computer (macOS, Windows or Linux). It sends each tool
-call to the PDSO HTTP API in Revit (see PDSO.extension/startup.py). Revit can be
+call to the PDSO HTTP API in Revit (see startup.py at the repository root). Revit can be
 on the same computer, or on a different computer: then set PDSO_SSH_HOST and
 the server opens an SSH port forward to it.
 
@@ -38,6 +38,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,10 @@ OUTPUT_DIR = Path(
 DEFAULT_TIMEOUT = 120
 LONG_TIMEOUT = 1800  # sync and bootstrap can take minutes
 TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
+RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
+# Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
+# that this server was written for.
+EXPECTED_API_VERSION = "1.3"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -73,14 +78,37 @@ mcp = MCPServer(
     instructions=(
         "Tools for the PDSO Flowgram Revit plugin: programs (room types and unit "
         "types, stored as Data Silos), Area outlines, Program Volumes, sync and "
-        "audit. All lengths are decimal feet and all areas are square feet. Call "
-        "get_status first. A model that is new to PDSO needs setup_model one time. "
-        "After you change programs or areas, call run_sync to update the areas of "
-        "the programs and the Program Volumes. When the user describes data that "
-        "no program field holds, call create_parameter, then set the new field with "
-        "update_program or update_programs. In a model that has its own Areas and "
-        "area schemes, give the scheme names to setup_model (area_scheme_mappings) "
-        "and place the programs with create_programs."
+        "audit. All lengths are decimal feet and all areas are square feet.\n"
+        "The user does not need to know PDSO. Work from the user's intent and "
+        "decide the PDSO steps yourself.\n"
+        "How PDSO works: a program is a point object (Data Silo) in a 2D Area. "
+        "Each program needs one Area in each configured area scheme (default: "
+        "PDSO - GSF gross, PDSO - ZFA zoning, PDSO - NSF net). The sync copies the "
+        "area of each Area to its program and builds one 3D Program Volume for "
+        "the program on each level of its stacking.\n"
+        "Order of work for a model that is new to PDSO: (1) get_status. (2) "
+        "setup_model one time. (3) update_config with levels_mapping: one "
+        "two-digit stacking key for each occupied level, lowest first (01, 02, "
+        "...). (4) list_rooms(level, include_outline=false) to see the Rooms. (5) "
+        "draft_areas_from_rooms for the Rooms that fit the user's intent, with "
+        "one inset for each scheme. (6) create_programs with the area_id of each "
+        "Area of the scheme that feeds PDSO - GSF, or create_program at the "
+        "program_point. (7) run_preflight, then run_sync. (8) color_areas, "
+        "show_program_volumes, summarize_programs, get_audit_report.\n"
+        "Rules: call run_sync again after each change of programs or Areas, "
+        "before you show results or totals. Program UID: it must match the "
+        "uid_pattern of get_config (default: two characters, two digits, two "
+        "characters, for example CL-02-18) and be unique. Stacking: the stacking "
+        "keys of the levels where the program repeats (\"02\", \"01-03\", \"01, "
+        "03\"); default is the level of the program only. show_view(view, "
+        "fit=true) shows a plan and zooms it to its Areas or Rooms. If two views "
+        "have the same name, give view_type or the view id. Do not select "
+        "elements in a view after color_areas.\n"
+        "When the user describes data that no program field holds, call "
+        "create_parameter, then set the new field with update_program or "
+        "update_programs. In a model that has its own Areas and area schemes, "
+        "give the scheme names to setup_model (area_scheme_mappings) and place "
+        "the programs with create_programs."
     ),
 )
 
@@ -145,31 +173,41 @@ def _open_tunnel() -> None:
 # Title of the open Revit document that the tools work on. None: the active document.
 _target_document: str | None = None
 
+# Requests that change nothing in the model. It is safe to send them again.
+_READ_ONLY_POSTS = (
+    "views/export",
+    "views/activate",
+    "catalogue/recommend",
+    "catalogue/similar-rooms",
+)
+
 
 def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> Any:
-    query = {key: value for key, value in query.items() if value is not None}
+    """Send one request. Send it again if the reply belongs to a different request."""
     if (
         _target_document
-        and "document" not in query
+        and query.get("document") is None
         and not path.startswith("documents")
     ):
-        query["document"] = _target_document
-    url = f"{API_URL}/{path}"
-    if query:
-        url += "?" + urllib.parse.urlencode(query)
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Content-Type": "application/json"} if data is not None else {}
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        raw = _OPENER.open(request, timeout=timeout).read()
-    except urllib.error.HTTPError as error:
-        raw = error.read()
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        raise ToolError(f"The PDSO API gave a reply that is not JSON: {raw[:300]!r}")
-    if isinstance(payload, dict) and "exception" in payload:
-        raise ToolError(f"pyRevit Routes error: {payload['exception'].get('message')}")
+        query = dict(query, document=_target_document)
+    read_only = method == "GET" or path in _READ_ONLY_POSTS
+    for attempt in range(3):
+        payload, request_id = _send(method, path, body, query, timeout)
+        if payload.get("rid") in (None, request_id):
+            break
+        # pyRevit Routes gave this client the reply of a different request.
+        if not read_only:
+            raise ToolError(
+                "The reply from Revit belongs to a different request (more than one "
+                "client uses this Revit at the same time). The change of this call "
+                "was possibly made. Read the model state before you send the call again."
+            )
+        time.sleep(0.5)
+    else:
+        raise ToolError(
+            "The replies from Revit belong to different requests (more than one "
+            "client uses this Revit at the same time). Try again later."
+        )
     if not payload.get("ok"):
         error = payload.get("error", {})
         message = error.get("message", "Unknown error")
@@ -177,6 +215,43 @@ def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> An
             message += "\n" + error["traceback"][-1200:]
         raise ToolError(message)
     return payload["data"]
+
+
+def _send(method: str, path: str, body: Any, query: dict, timeout: int) -> tuple[dict, str]:
+    request_id = uuid.uuid4().hex
+    query = {key: value for key, value in query.items() if value is not None}
+    query["_rid"] = request_id
+    url = f"{API_URL}/{path}?" + urllib.parse.urlencode(query)
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    deadline = time.monotonic() + RELOAD_WAIT
+    while True:
+        request = urllib.request.Request(
+            url, data=data, method=method, headers=headers
+        )
+        try:
+            raw = _OPENER.open(request, timeout=timeout).read()
+        except urllib.error.HTTPError as error:
+            raw = error.read()
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            raise ToolError(
+                f"The PDSO API gave a reply that is not JSON: {raw[:300]!r}"
+            )
+        if not (isinstance(payload, dict) and "exception" in payload):
+            break
+        message = str(payload["exception"].get("message"))
+        # While pyRevit reloads, the routes server answers but the PDSO routes
+        # are not registered yet ("Route does not exits"). The request did not
+        # reach the PDSO code, so it is safe to send it again.
+        if "RouteHandlerNotDefined" in message and time.monotonic() < deadline:
+            time.sleep(2)
+            continue
+        raise ToolError(f"pyRevit Routes error: {message}")
+    if not isinstance(payload, dict):
+        raise ToolError(f"The PDSO API gave a reply that is not an object: {raw[:300]!r}")
+    return payload, request_id
 
 
 def api(
@@ -251,8 +326,16 @@ def _save_image(name: str, data: bytes) -> Path:
 
 @mcp.tool()
 def get_status() -> dict:
-    """Get the Revit version, the open document, its levels, and if the model has a PDSO configuration. Call this first."""
-    return api("GET", "status")
+    """Get the Revit version, the open document, its levels, and if the model has a PDSO configuration. Call this first. If the reply has "version_warning", the PDSO extension in Revit and this MCP server are not the same version: tell the user."""
+    status = api("GET", "status")
+    found = status.get("api_version")
+    if found != EXPECTED_API_VERSION:
+        status["version_warning"] = (
+            f"The PDSO extension in Revit has API version {found or 'unknown (older than 1.1)'}. "
+            f"This MCP server expects {EXPECTED_API_VERSION}. Some tools can fail. "
+            "Update the extension on the Revit computer and reload pyRevit, or update this server."
+        )
+    return status
 
 
 @mcp.tool()
@@ -304,14 +387,25 @@ def list_levels() -> list:
 
 
 @mcp.tool()
-def list_rooms(level: str | None = None, name: str | None = None) -> list:
-    """List the placed Rooms of the model (read-only): id, number, name, level, area (SF), and the outline as [x, y] points in feet. Use the outlines as real geometry for draft_area.
+def list_rooms(
+    level: str | None = None,
+    name: str | None = None,
+    include_outline: bool = True,
+) -> list:
+    """List the placed Rooms of the model (read-only): id, number, name, level, area (SF), bbox ([x_min, y_min, x_max, y_max] in feet), and the outline as [x, y] points in feet. To select Rooms or to draft Areas with draft_areas_from_rooms, the outlines are not necessary: give include_outline=false.
 
     Args:
         level: Level name.
         name: Text that the Room name or number must contain.
+        include_outline: Include the outline points of each Room.
     """
-    return api("GET", "rooms", level=level, name=name)
+    return api(
+        "GET",
+        "rooms",
+        level=level,
+        name=name,
+        outline="true" if include_outline else "false",
+    )
 
 
 @mcp.tool()
@@ -338,9 +432,16 @@ def setup_model(
     """Make the model ready for PDSO. Creates only the items that are missing: the PDSO configuration, the 20 shared parameters, the Data Silo family, the configured area schemes, and one area plan for each scheme and level. It is safe to call again.
 
     Args:
-        levels: Names of the levels that get area plans. Default: all levels.
+        levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
     """
+    if not levels:
+        with_rooms = {room["level"] for room in api("GET", "rooms", outline="false")}
+        levels = [
+            level["name"]
+            for level in api("GET", "levels")
+            if level["name"] in with_rooms
+        ] or None
     body = _clean({"levels": levels, "area_scheme_mappings": area_scheme_mappings})
     return api("POST", "bootstrap", body, timeout=LONG_TIMEOUT)
 
@@ -411,7 +512,7 @@ def run_sync(
     fix_worksets: bool = True,
     force: bool = False,
 ) -> dict:
-    """Run the PDSO sync. It runs the preflight checks first. Phase 1 copies the area of each Area to the program in it (GSF, NSF, ZFA). Phase 2 creates or updates one Program Volume family for each program, from its GSF Area outline. Phase 3 creates, moves and updates the Program Volume instances on each level in the program's stacking. This changes the model.
+    """Run the PDSO sync. It runs the preflight checks first. Phase 1 copies the area of each Area to the program in it (GSF, NSF, ZFA). Phase 2 creates or updates one Program Volume family for each program, from its GSF Area outline. Phase 3 creates, moves and updates the Program Volume instances on each level in the program's stacking. This changes the model. The reply has "program_volumes": the count of families and instances, and for each program its Program Volume family and the id and level of each instance.
 
     Args:
         update_program_volume_geometry: Run phase 2.
@@ -465,7 +566,7 @@ def create_parameter(name: str, type: str = "string") -> dict:
     """Track a new program parameter for data that no field holds, for example "Tenant Type" or "Rent per SF". It becomes a Revit shared parameter on all programs and Program Volumes. The reply gives the field name (for example "rent_per_sf"): use it in update_program, update_programs, list_programs, summarize_programs and color_areas. The sync copies the value from a program to its Program Volumes. If the model has a shared parameter with the name already, that parameter is used and its values stay ("reattached": true).
 
     Args:
-        name: Parameter name as Revit shows it, for example "Tenant Type". The name and the type cannot change later.
+        name: Parameter name, for example "Tenant Type". PDSO adds the "PDSO - " prefix, as the Parameter Manager does ("PDSO - Tenant Type"), unless the model already has a shared parameter with the name as given. The name and the type cannot change later.
         type: "string", "multilineText", "number", "integer", "area" (square feet), "length" (feet) or "yesno".
     """
     return api("POST", "parameters", {"name": name, "type": type})
@@ -626,7 +727,7 @@ def select_programs(
     unit_layout_type: str | None = None,
     uids: list[str] | None = None,
 ) -> dict:
-    """Select programs in the Revit window by filter or by UID.
+    """Select programs in the Revit window by filter or by UID. Do not call this when the active view has the color overlay of color_areas: the programs are under the colored regions, and Revit can show a dialog that blocks all tools until a person closes it. Call clear_area_colors first, or select in a different view.
 
     Args:
         level: Level name.
@@ -718,46 +819,64 @@ def draft_area(
     return api("POST", "areas", body)
 
 
-@mcp.tool()
-def draft_area_from_room(
-    scheme: str,
-    level: str,
-    room_number: str,
-    inset: float = 0.0,
-    tolerance: float = 0.05,
-) -> dict:
-    """Draft a new Area from the boundary of a placed Room. Reads the Room outline, removes the very short segments, optionally moves the outline to the inside, then drafts the Area (same as draft_area). The Area gets the name and number of the Room. Returns the Area with the area that Revit computed, and program_point: a point inside the Area where a program (create_program) can go.
+# Simplify tolerances (feet) to try when an inset splits a Room outline.
+_INSET_TOLERANCES = (0.3, 0.8, 1.5)
 
-    Args:
-        scheme: Area scheme name, for example "PDSO - GSF".
-        level: Level name of the Room.
-        room_number: Number of the Room, for example "303".
-        inset: Distance in feet to move the outline to the inside (0 keeps the Room boundary).
-        tolerance: Simplify tolerance in feet. Outline points that change the shape less than this are removed.
+
+def _room_polygon(room: dict, inset: float, tolerance: float):
+    """Make the Area outline of a Room: simplify, then move to the inside.
+
+    A Room with many small wall offsets (window bays, columns) can break into
+    more than one piece when the outline moves to the inside. Then a larger
+    simplify tolerance is used. If the outline still has more than one piece,
+    the largest piece is used. Returns (polygon, warnings).
     """
     from shapely.geometry import Polygon
 
-    rooms = [
-        room
-        for room in api("GET", "rooms", level=level)
-        if str(room["number"]) == str(room_number)
-    ]
-    if not rooms:
-        raise ToolError(
-            f"No placed Room with number '{room_number}' on level '{level}'."
-        )
-    room = rooms[0]
-    if len(room["outline"]) < 3:
-        raise ToolError(f"Room {room_number} has no closed outline.")
-    polygon = Polygon(room["outline"]).simplify(tolerance, preserve_topology=True)
-    if inset:
-        polygon = polygon.buffer(-abs(inset), join_style=2).simplify(
-            min(tolerance, 0.02), preserve_topology=True
+    number = room["number"]
+    if len(room.get("outline") or []) < 3:
+        raise ToolError(f"Room {number} has no closed outline.")
+    source = Polygon(room["outline"])
+    if not source.is_valid:
+        source = source.buffer(0)
+    warnings: list[str] = []
+
+    def build(simplify_tolerance: float):
+        shape = source.simplify(simplify_tolerance, preserve_topology=True)
+        if inset:
+            shape = shape.buffer(-abs(inset), join_style=2).simplify(
+                min(simplify_tolerance, 0.02), preserve_topology=True
+            )
+        return shape
+
+    polygon = build(tolerance)
+    if polygon.geom_type != "Polygon" or polygon.is_empty:
+        for larger in _INSET_TOLERANCES:
+            if larger <= tolerance:
+                continue
+            candidate = build(larger)
+            if candidate.geom_type == "Polygon" and not candidate.is_empty:
+                polygon = candidate
+                warnings.append(
+                    f"Room {number}: the outline with inset {inset} ft was not one closed shape at tolerance {tolerance} ft. Tolerance {larger} ft was used."
+                )
+                break
+    if polygon.geom_type == "MultiPolygon" and not polygon.is_empty:
+        parts = sorted(polygon.geoms, key=lambda part: part.area, reverse=True)
+        lost = sum(part.area for part in parts[1:])
+        polygon = parts[0]
+        warnings.append(
+            f"Room {number}: the outline with inset {inset} ft has {len(parts)} pieces. The largest piece was used ({lost:.1f} SF in the other pieces is not in the Area)."
         )
     if polygon.is_empty or polygon.geom_type != "Polygon":
         raise ToolError(
-            f"The outline of Room {room_number} with inset {inset} ft is not one closed shape."
+            f"The outline of Room {number} with inset {inset} ft is not one closed shape."
         )
+    return polygon, warnings
+
+
+def _draft_from_room(scheme: str, level: str, room: dict, inset: float, tolerance: float) -> dict:
+    polygon, warnings = _room_polygon(room, inset, tolerance)
     points = [[round(x, 3), round(y, 3)] for x, y in list(polygon.exterior.coords)[:-1]]
     body = {
         "scheme": scheme,
@@ -769,9 +888,8 @@ def draft_area_from_room(
     area = api("POST", "areas", body)
     inner = polygon.buffer(-0.5, join_style=2)
     point = (inner if not inner.is_empty else polygon).representative_point()
-    result = {
-        key: value for key, value in area.items() if key not in ("outline", "holes")
-    }
+    result = {key: value for key, value in area.items() if key not in ("outline", "holes")}
+    result["warnings"] = list(result.get("warnings") or []) + warnings
     result["room"] = {
         "number": str(room["number"]),
         "name": room["name"],
@@ -782,6 +900,95 @@ def draft_area_from_room(
     result["inset"] = inset
     result["program_point"] = {"x": round(point.x, 2), "y": round(point.y, 2)}
     return result
+
+
+@mcp.tool()
+def draft_area_from_room(
+    scheme: str,
+    level: str,
+    room_number: str,
+    inset: float = 0.0,
+    tolerance: float = 0.05,
+) -> dict:
+    """Draft a new Area from the boundary of a placed Room. Reads the Room outline, removes the very short segments, optionally moves the outline to the inside, then drafts the Area (same as draft_area). The Area gets the name and number of the Room. Returns the Area with the area that Revit computed, and program_point: a point inside the Area where a program (create_program) can go. If the inset splits the outline, a larger tolerance or the largest piece is used and "warnings" says so. For more than one Room, use draft_areas_from_rooms.
+
+    Args:
+        scheme: Area scheme name, for example "PDSO - GSF".
+        level: Level name of the Room.
+        room_number: Number of the Room, for example "303".
+        inset: Distance in feet to move the outline to the inside (0 keeps the Room boundary).
+        tolerance: Simplify tolerance in feet. Outline points that change the shape less than this are removed.
+    """
+    rooms = [
+        room
+        for room in api("GET", "rooms", level=level)
+        if str(room["number"]) == str(room_number)
+    ]
+    if not rooms:
+        raise ToolError(f"No placed Room with number '{room_number}' on level '{level}'.")
+    return _draft_from_room(scheme, level, rooms[0], inset, tolerance)
+
+
+@mcp.tool()
+def draft_areas_from_rooms(
+    level: str,
+    room_numbers: list[str],
+    insets: dict[str, float] | None = None,
+    tolerance: float = 0.05,
+) -> dict:
+    """Draft the Areas of many Rooms in one step: one Area for each Room in each area scheme. This is the fast way to map out the program of a floor. Each Area gets the name and number of its Room. A Room that fails does not stop the other Rooms: see "errors".
+
+    Returns "areas": for each Area its scheme, number, name, id, area (SF), warnings and program_point (a point inside the Area for create_program); "created": the count for each scheme; "errors": the Rooms that failed, with the reason.
+
+    Args:
+        level: Level name of the Rooms.
+        room_numbers: Numbers of the Rooms, for example ["216", "218", "219"].
+        insets: Area scheme name to the distance in feet that the outline moves to the inside of the Room boundary (0 keeps the Room boundary). One Area is drafted in each scheme that you give, for example {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}. Default: all area schemes of the PDSO configuration, with inset 0.
+        tolerance: Simplify tolerance in feet.
+    """
+    if not room_numbers:
+        raise ToolError("Give at least one Room number.")
+    if insets is None:
+        mappings = api("GET", "config").get("area_scheme_mappings") or {}
+        insets = {scheme: 0.0 for scheme in mappings.values() if scheme}
+    if not insets:
+        raise ToolError(
+            "The model has no configured area scheme. Call setup_model first, or give insets."
+        )
+    by_number = {str(room["number"]): room for room in api("GET", "rooms", level=level)}
+    areas: list[dict] = []
+    errors: list[dict] = []
+    created: dict[str, int] = {}
+    for number in [str(number) for number in room_numbers]:
+        if number not in by_number:
+            errors.append(
+                {"room_number": number, "error": f"No placed Room with number '{number}' on level '{level}'."}
+            )
+    for scheme, inset in insets.items():
+        created[scheme] = 0
+        for number in [str(number) for number in room_numbers]:
+            room = by_number.get(number)
+            if room is None:
+                continue
+            try:
+                result = _draft_from_room(scheme, level, room, float(inset or 0), tolerance)
+            except ToolError as error:
+                errors.append({"room_number": number, "scheme": scheme, "error": str(error)})
+                continue
+            created[scheme] += 1
+            areas.append(
+                {
+                    "scheme": scheme,
+                    "number": result.get("number"),
+                    "name": result.get("name"),
+                    "id": result.get("id"),
+                    "area": result.get("area"),
+                    "inset": result["inset"],
+                    "warnings": result["warnings"],
+                    "program_point": result["program_point"],
+                }
+            )
+    return {"level": level, "created": created, "areas": areas, "errors": errors}
 
 
 @mcp.tool()
@@ -854,14 +1061,69 @@ def list_views(view_type: str | None = None) -> list:
 
 
 @mcp.tool()
-def show_view(view: str, zoom_box: list[float] | None = None) -> dict:
-    """Show a view in the Revit window.
+def show_view(
+    view: str,
+    zoom_box: list[float] | None = None,
+    fit: bool = False,
+    view_type: str | None = None,
+) -> dict:
+    """Show a view in the Revit window. One call opens the view and zooms it.
 
     Args:
         view: View name or element id.
         zoom_box: Zoom a plan view to this rectangle: [x_min, y_min, x_max, y_max] in feet.
+        fit: Zoom a plan view to its content: the Areas of an area plan, or the Rooms of the level if the view has no Areas. Ignored if zoom_box is given.
+        view_type: Revit view type, for example FloorPlan or AreaPlan. Give it when two views have the same name (a floor plan and an area plan of the same level).
     """
-    return api("POST", "views/activate", _clean({"view": view, "zoom_box": zoom_box}))
+    body = _clean({"view": view, "type": view_type})
+    info = api("POST", "views/activate", body)
+    if zoom_box is None and fit:
+        zoom_box = _content_box(info)
+        if zoom_box is None:
+            info["zoomed"] = False
+            info["zoom_note"] = "No Areas and no Rooms to zoom to."
+            return info
+    if zoom_box is None:
+        return info
+    # Revit opens a new view after the first request ends. The zoom works only
+    # on an open view, so ask again until the view is open.
+    body = {"view": str(info["id"]), "zoom_box": zoom_box}
+    for attempt in range(6):
+        info = api("POST", "views/activate", body)
+        if info.get("zoomed"):
+            break
+        time.sleep(0.5)
+    info["zoom_box"] = zoom_box
+    return info
+
+
+def _content_box(view_info: dict) -> list[float] | None:
+    """Rectangle around the Areas (or the Rooms) of a plan view, with a margin."""
+    level = view_info.get("level")
+    if not level:
+        return None
+    points: list[list[float]] = []
+    if view_info.get("area_scheme"):
+        for area in api("GET", "areas", scheme=view_info["area_scheme"], level=level):
+            points.extend(area.get("outline") or [])
+    if not points:
+        for room in api("GET", "rooms", level=level, outline="false"):
+            if room.get("bbox"):
+                points.append(room["bbox"][:2])
+                points.append(room["bbox"][2:])
+    if not points:
+        return None
+    x_min = min(point[0] for point in points)
+    x_max = max(point[0] for point in points)
+    y_min = min(point[1] for point in points)
+    y_max = max(point[1] for point in points)
+    margin = max(0.08 * max(x_max - x_min, y_max - y_min), 5.0)
+    return [
+        round(x_min - margin, 1),
+        round(y_min - margin, 1),
+        round(x_max + margin, 1),
+        round(y_max + margin, 1),
+    ]
 
 
 @mcp.tool()
@@ -918,14 +1180,16 @@ def show_program_volumes(
     pixel_width: int = 1600,
     building: str = "ghost",
     section_box: bool = True,
+    show: bool = True,
 ) -> list:
-    """Make (or update) the shaded 3D view "PDSO - Program Volumes", color the Program Volumes by a program field, and return its image and legend. Program Volumes come from run_sync.
+    """Make (or update) the shaded 3D view "PDSO - Program Volumes", color the Program Volumes by a program field, show the view in the Revit window, and return its image and legend. Program Volumes come from run_sync.
 
     Args:
         color_by: Program field that gives the color.
         pixel_width: Width of the image in pixels.
         building: "ghost" makes the other model elements transparent, so that the volumes in a building show. "show" keeps them as they are.
         section_box: Cut the view to a box around the Program Volumes.
+        show: Make the 3D view the active view in the Revit window. Give false to keep the view that the user looks at.
     """
     info = api(
         "POST",
@@ -941,7 +1205,14 @@ def show_program_volumes(
     )
     data = base64.b64decode(result["image_base64"])
     path = _save_image("program_volumes", data)
-    summary = {"view": info["view"], "legend": info["legend"], "file": str(path)}
+    if show:
+        api("POST", "views/activate", {"view": str(info["view"]["id"])})
+    summary = {
+        "view": info["view"],
+        "legend": info["legend"],
+        "file": str(path),
+        "shown_in_revit": show,
+    }
     return [json.dumps(summary), Image(data=data, format="png")]
 
 

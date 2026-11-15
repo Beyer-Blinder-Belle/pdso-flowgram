@@ -1,0 +1,201 @@
+# PDSO standards
+
+**Quick Setup** (PDSO tab → Program Data Silo Tools → Quick Setup) reads the JSON files in this folder to decide what to add to a model. Run it after **Project Config** and the **Parameter Manager**: it reads the area scheme mappings and Data Silo family from Project Config, and the schedules need the parameters the Parameter Manager creates. The files here are the shipped defaults. Copy and edit them to change what setup creates for your company or project.
+
+| File | What it defines |
+| --- | --- |
+| `setup.json` | Which steps run, in what order, and which are ticked by default |
+| `area_schemes.json` | Area schemes to create (by default, the ones named in Project Config) |
+| `families.json` | Families to load (the Program Data Silo family) |
+| `view_templates.json` | View templates and their visibility and graphics settings |
+| `views.json` | Working views to create and the template each one uses |
+| `schedules.json` | Schedules, their fields, filters and sorting |
+| `parameters.json` | Not a setup step. Only used by **Shift+Click → Export PDSO shared parameter file** (see below) |
+
+## Customizing
+
+Setup looks for each file in these folders, highest priority first. The first folder that has the file wins, and the whole file is used. Files aren't merged.
+
+1. **Project**: a `PDSO Standards` folder next to the model (for a workshared model, next to the central model).
+2. **User**: a folder picked with **Shift+Click → Use a standards folder** on the Quick Setup button.
+3. **Company**: the folder in the `PDSO_STANDARDS_DIR` environment variable. Use this to roll out shared standards on every workstation.
+4. **Default**: this folder.
+
+So a company folder only needs the files it changes. For example, a company that only wants different view templates ships just `view_templates.json`, and everything else comes from the defaults.
+
+To start, use **Shift+Click → Export default standards to a folder** on the Quick Setup button. It copies these files to a folder you pick (usually a shared network folder).
+
+The setup report lists which file and folder each step used.
+
+## Common options
+
+- Every file accepts `"_comment"` keys anywhere. Setup ignores them.
+- Every item accepts `"enabled": false` to skip it without deleting it.
+- `on_existing` (per file) says what to do with an item that's already in the model. See each file below.
+- Setup is safe to run again. It runs as one undo step, **PDSO Quick Setup**.
+
+### Tokens
+
+Strings can contain these tokens:
+
+| Token | Value |
+| --- | --- |
+| `{revit_year}` | Revit version, e.g. `2026` |
+| `{revit_yy}` | Last two digits, e.g. `26` |
+| `{repo_dir}` | The folder PDSO was installed or cloned into (the extension folder) |
+| `{extension_dir}` | The same folder as `{repo_dir}` |
+| `{standards_dir}` | The folder of the file being read |
+| `{data_silo_family}` | Data Silo family name from Project Config |
+| `{program_volume_prefix}` | Program Volume family name prefix from Project Config |
+| `{level}`, `{area_scheme}` | Level and area scheme names (`views.json` names only) |
+
+## setup.json
+
+```json
+{ "steps": [ { "id": "views", "title": "Create PDSO working views", "enabled": true } ] }
+```
+
+`id` is one of `area_schemes`, `families`, `view_templates`, `views`, `schedules`, and setup reads `<id>.json` for it. Steps run in the listed order: area schemes before views (area plans need their scheme), and view templates before views.
+
+There's no `parameters` step any more: the **Parameter Manager** creates and binds parameters, before Quick Setup runs. A company `setup.json` that still lists `parameters` gets an "Unknown setup step" row in the report; remove that entry.
+
+## area_schemes.json
+
+| Key | Meaning |
+| --- | --- |
+| `from_project_config` | `true` (default) creates every Revit area scheme named in Project Config's area scheme mappings. With no mappings saved yet, it uses `PDSO - GSF`, `PDSO - NSF` and `PDSO - ZFA` and warns. |
+| `schemes` | Extra area scheme names to create |
+
+Schemes already in the model are left alone. The Revit API can't create an area scheme from nothing, so a new scheme is a copy of one already in the model (one that isn't Gross Building, if there is one), renamed. Its Areas aren't copied.
+
+## parameters.json
+
+Not a setup step. The **Parameter Manager** decides which parameters a model tracks and creates them. This file lists the 20 built-in PDSO parameters, and is only used to write a shared parameter file (below). Don't change the GUIDs: the PDSO tools find parameters by GUID.
+
+| Key | Meaning |
+| --- | --- |
+| `shared_parameter_group` | Group name in the shared parameter file (default `PDSO`) |
+| `parameters[].type` | `string`, `multilineText`, `number` or `area` |
+| `parameters[].description` | Optional tooltip text |
+
+### Shared parameter file
+
+Revit can only add a shared parameter to a project from a shared parameter file. [`PDSO Shared Parameters.txt`](PDSO%20Shared%20Parameters.txt) is generated from the default `parameters.json`. To add the parameters by hand:
+
+1. **Manage → Project Parameters → New → Shared parameter → Select**.
+2. Browse to this file, choose the **PDSO** group, and pick a parameter.
+3. Select **Instance**, tick **Generic Models**, and click **OK**. Repeat for each parameter.
+
+If your company changed `parameters.json`, use **Shift+Click → Export PDSO shared parameter file** on the Quick Setup button instead. It writes the file from whichever `parameters.json` Quick Setup would use.
+
+After changing the default `parameters.json`, regenerate the shipped file:
+
+```bash
+python lib/pdso/code/setup/shared_parameter_file.py
+```
+
+## families.json
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Family name in Revit |
+| `files` | Paths to try in order. The first that exists is loaded. Relative paths resolve against this file's folder. |
+| `on_existing` | `skip` (default) leaves a loaded family alone. `reload` loads it again over the existing one. |
+| `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`) |
+| `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config, unless Project Config already names a different family that is loaded |
+| `add_tracked_parameters` | For the Data Silo family: add the parameters the model tracks (chosen in the Parameter Manager) to the family (default `true`). The shipped family only has Program UID, Program Stacking and Last Synced. |
+
+## view_templates.json
+
+`on_existing`: `update` (default) re-applies these settings to an existing template. `skip` leaves it alone.
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Template name |
+| `view_type` | `AreaPlan`, `FloorPlan`, `CeilingPlan` or `ThreeD` |
+| `scale` | Scale denominator, e.g. `96` for 1/8" = 1'-0" |
+| `detail_level` | `Coarse`, `Medium` or `Fine` |
+| `display_style` | e.g. `Wireframe`, `HLR`, `Shading`, `ShadingWithEdges`, `FlatColors`, `Realistic` |
+| `visibility.model_categories` | `hidden` or `visible` sets every model category first. `unchanged` (default) leaves them alone. |
+| `visibility.annotation_categories` | Same, for annotation categories |
+| `visibility.import_categories` | `hidden`, `visible` or `unchanged` |
+| `categories` | Per-category settings, applied after `visibility` (see below) |
+| `filters` | Rule-based view filters to create (or update) and add to the template, applied after `categories` (see below) |
+| `uncontrolled_parameters` | `BuiltInParameter` names the template should not control, e.g. `["VIEW_PHASE"]` |
+
+Each `categories` entry:
+
+```json
+{
+  "category": "OST_AreaSchemeLines",
+  "visible": true,
+  "halftone": false,
+  "projection_lines": { "color": "#B400FF", "weight": 8, "pattern": "Solid" },
+  "cut_lines": { "color": [255, 0, 0], "weight": 4 },
+  "surface": { "color": "#FFE0FF", "transparency": 50 },
+  "cut_pattern": { "color": "#000000" }
+}
+```
+
+- `category` is a `BuiltInCategory` name (`OST_Walls`, the same in every language), a category name as Revit shows it (`Walls`), or `Parent|Subcategory` (`Generic Models|PDSO - GSF Program Volume`).
+- Colors are `"#RRGGBB"` or `[r, g, b]`. Line weights are 1–16. Surface and cut colors use a solid fill.
+
+A new template copies its starting settings from an existing view of the same type, if the model has one. Anything the file doesn't set keeps those settings. To control a category, list it.
+
+Each `filters` entry creates a view filter with that name in the model, or updates the one that's there, and adds it to the template:
+
+```json
+{
+  "name": "PDSO - Program Volumes",
+  "categories": ["OST_GenericModel"],
+  "rules": [
+    { "parameter": "ALL_MODEL_FAMILY_NAME", "operator": "begins_with", "value": "{program_volume_prefix}" }
+  ],
+  "visible": false
+}
+```
+
+- `categories`: as in `categories` entries above. `rules` must all match.
+- `parameter`: a `BuiltInParameter` name (`ALL_MODEL_FAMILY_NAME` is **Family Name**, the same in every language) or the parameter name as Revit shows it (`PDSO - Program Type`). It must be a parameter Revit allows in a filter on those categories.
+- `operator`: `equals`, `not_equals`, `contains`, `not_contains`, `begins_with`, `not_begins_with`, `ends_with`, `not_ends_with`. Values are compared as text.
+- `visible`, and the graphic keys of a `categories` entry (`halftone`, `projection_lines`, `surface`, ...), set the filter's visibility and overrides in the template.
+
+The shipped area plan template uses the filter above to hide Program Volumes, which are Generic Models like the Data Silos. The filter's rule holds the prefix from Project Config at the time Quick Setup ran. After changing the prefix, run the view_templates step again. To hide Program Volumes in your own floor plan templates, add the **PDSO - Program Volumes** filter to them in Visibility/Graphics.
+
+Useful categories: `OST_AreaSchemeLines` (area boundaries), `OST_Areas`, `OST_AreaReferenceVisibility` (Areas → Reference), `OST_AreaInteriorFillVisibility` (Areas → Interior Fill), `OST_AreaTags`, `OST_GenericModel` (Data Silos and Program Volumes), `OST_RvtLinks` (Revit links).
+
+## views.json
+
+`on_existing`: `skip` (default) leaves an existing view with the same name alone. `update` re-applies its template and parameters.
+
+| Key | Meaning |
+| --- | --- |
+| `name` | View name. Can use `{level}` and `{area_scheme}`. |
+| `view_type` | `AreaPlan`, `FloorPlan`, `CeilingPlan` or `ThreeD` |
+| `area_scheme` | For area plans: the PDSO scheme key (`PDSO - GSF`). It's looked up in Project Config's area scheme mapping, so renamed schemes still work. |
+| `levels` | `"all"` or a list of level names. Plans get one view per level. |
+| `exclude_levels` | Level names to leave out, e.g. `["*Roof*", "*Parapet*"]` (the default for area plans). Case-insensitive; `*` matches any text and `?` one character. The report lists the levels it left out. |
+| `template` | View template name to apply |
+| `parameters` | View parameters to set, e.g. `{ "View Subdiscipline": "PDSO" }` for browser organization. Parameters the template controls can't be set. |
+
+Setup doesn't create area schemes. If a scheme is missing, create it in **Area and Volume Computations** and run setup again.
+
+## schedules.json
+
+`on_existing`: `skip` (default) leaves an existing schedule alone. `replace` deletes it and creates it again.
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Schedule name |
+| `category` | Category to schedule, as in view templates |
+| `fields` | Columns: `parameter` (the name in Revit's field list), plus optional `heading`, `hidden`, `totals` |
+| `filters` | `parameter`, `operator` and `value`. Fields used only for filtering are added as hidden fields. |
+| `sort` | `parameter`, plus optional `order` (`ascending` or `descending`), `header` and `footer` |
+| `itemize` | Show every instance (default Revit behavior is `true`) |
+| `grand_totals` | Show the grand total row |
+
+Operators: `equals`, `not_equals`, `greater`, `greater_or_equal`, `less`, `less_or_equal`, `contains`, `not_contains`, `begins_with`, `not_begins_with`, `ends_with`, `not_ends_with`, `has_value`, `has_no_value`.
+
+For the `Family` and `Family and Type` fields, use a text operator such as `begins_with` or `contains`. Revit rejects `equals` with a family name on these fields (it expects an element, not text), and the schedule is then created without that filter.
+
+A field whose parameter isn't in the model yet is skipped with a warning. Track it in the Parameter Manager, then run the schedules step again with `on_existing: "replace"` to rebuild the schedule.

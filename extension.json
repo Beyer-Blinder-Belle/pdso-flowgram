@@ -1,0 +1,14 @@
+{
+    "builtin": "False",
+    "default_enabled": "True",
+    "type": "extension",
+    "rocket_mode_compatible": "False",
+    "name": "PDSO",
+    "description": "Program Data Silo tools: one Data Silo per unit holds the program data, Areas give the square footage, and Program Volumes show it on every stacked level.",
+    "author": "Beyer Blinder Belle",
+    "author_profile": "https://github.com/Beyer-Blinder-Belle",
+    "url": "https://github.com/Beyer-Blinder-Belle/pdso-flowgram.git",
+    "website": "https://github.com/Beyer-Blinder-Belle/pdso-flowgram",
+    "image": "",
+    "dependencies": []
+}
