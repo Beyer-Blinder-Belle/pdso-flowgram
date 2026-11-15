@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.3"
+EXPECTED_API_VERSION = "1.4"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
