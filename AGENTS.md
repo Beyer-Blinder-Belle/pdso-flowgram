@@ -47,6 +47,10 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
     2.Setup.pushbutton/      → setup.runner.run_setup ("Quick Setup"; config.py = Shift+Click menu)
     3.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
     4.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
+  PDSO.tab/Unit Layout Catalogue.panel/
+    1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout")
+    2.FindRooms.pushbutton/  → PickerWindow + SuggestionWindow ("Find Rooms")
+    3.Place.pushbutton/      → PickerWindow + SuggestionWindow ("Place Layout")
   lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     api/        dispatcher.py (routing, {"ok","data"|"error"} envelope), handlers.py (route table)
@@ -59,6 +63,9 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
                   workset_coordination, area_boundary, extensible_storage_service,
                   parameter_registry_service, parameter_preset_service  ← building blocks
                   revit_helpers, log_capture, errors
+    catalogue/  Unit Layout Catalogue: catalogue_api_service (UI-free; used by the buttons,
+                the API routes in api/catalogue_handlers.py and the MCP tools), revit_layout_service
+                (harvest, create), layout_* (pure geometry, recommender), catalogue_windows (WPF in code)
     data/       Extended* wrappers around rpw elements + collections; schemas; parameter catalog
     setup/      Quick Setup: standards loader, runner, steps/*.py
     view_models/ WPF MVVM (thin over the services)

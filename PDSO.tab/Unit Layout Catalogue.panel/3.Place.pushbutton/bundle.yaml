@@ -1,0 +1,14 @@
+title: "Place\nLayout"
+
+tooltip: >-
+  Choose a Room, see the catalogue layouts ranked by how well they fit, with a
+  plan preview of each layout in the Room, and place the one you choose. The
+  layout's id is written to "PDSO - Unit Layout Type" on any PDSO data silo in
+  the room.
+
+author: BBB DCT + hackathon team
+
+context: doc-project
+
+engine:
+  clean: true

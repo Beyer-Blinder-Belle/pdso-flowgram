@@ -7,7 +7,10 @@ are tried and the best one that fits is kept.
 
 An orientation fits when the oriented layout rectangle is no larger than the
 target rectangle (within a tolerance) and every item lands inside the target
-outline. The layout is centred in the target rectangle.
+outline (within the same tolerance, because a family against a wall has its
+insertion point on the boundary). The layout is centred in the target
+rectangle. When more than one orientation fits equally snugly, the one whose
+room outline covers the target outline best is kept.
 
 Score (0-1):
     60%  area match     1 - |target - entry| / entry, floored at 0
@@ -19,7 +22,8 @@ from pdso.code.catalogue.layout_geometry import (
     ORIENTATIONS,
     orient_point,
     orient_size,
-    point_in_polygon,
+    outline_mismatch,
+    point_in_or_near_polygon,
 )
 
 # How much larger than the target rectangle a layout may be (ft). Room
@@ -94,6 +98,17 @@ def oriented_items(entry, placement):
     return result
 
 
+def oriented_outline(entry, placement):
+    """The entry's room outline in the target room frame for a placement."""
+    outline = []
+    for point in entry.boundary:
+        x, y = orient_point(
+            point, entry.width, entry.depth, placement.turns, placement.mirror
+        )
+        outline.append((x + placement.shift[0], y + placement.shift[1]))
+    return outline
+
+
 def best_placement(entry, target_width, target_depth, target_outline):
     """The snuggest orientation of an entry that fits the target, or None."""
     best = None
@@ -106,14 +121,20 @@ def best_placement(entry, target_width, target_depth, target_outline):
         placement = Placement(turns, mirror, shift)
 
         if target_outline and not all(
-            point_in_polygon(point, target_outline)
+            point_in_or_near_polygon(point, target_outline, FIT_TOLERANCE)
             for _, point in oriented_items(entry, placement)
         ):
             continue
 
         spare = max(0.0, target_width - width) + max(0.0, target_depth - depth)
-        # Prefer no mirror and fewer turns when two orientations fit equally well
-        rank = (spare, mirror, turns)
+        mismatch = 0.0
+        if target_outline and entry.boundary:
+            mismatch = outline_mismatch(
+                oriented_outline(entry, placement), target_outline
+            )
+        # Prefer the snuggest fit, then the best outline match, then no mirror
+        # and fewer turns
+        rank = (round(spare, 2), round(mismatch, 2), mirror, turns)
         if best is None or rank < best[0]:
             best = (rank, placement, spare)
 
