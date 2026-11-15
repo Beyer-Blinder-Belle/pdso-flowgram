@@ -1352,7 +1352,7 @@ def harvest_layout(
     project_type: str = "Other",
     notes: str = "",
 ) -> dict:
-    """Save the layout of a Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. Returns the JSON entry and its file path.
+    """Save the layout of a Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. PDSO data silos and Program Volumes are not part of a layout. The family of each item is saved as a file in the families folder of the catalogue folder (family_files), so that place_layout can load it into a model that does not have it. Returns the JSON entry and its file path.
 
     Args:
         room: Room number (for example "304"), or the element id of a Room or Area.
@@ -1409,7 +1409,7 @@ def find_similar_rooms(
 
 @mcp.tool()
 def place_layout(room: str, layout_id: str) -> dict:
-    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field. If the layout does not fit, nothing is placed.
+    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. A family that the model does not have is loaded first, from the family files that harvest_layout saved in the catalogue folder or from a different open model (see loaded_families). Returns the ids of the placed elements, the families that could not be loaded (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field. If the layout does not fit, nothing is placed.
 
     Args:
         room: Room number, or the element id of a Room or Area.
@@ -2042,6 +2042,8 @@ def _fit_text_line(preview: dict) -> tuple[str, str]:
         if crossing:
             text += f", but {crossing} item{' goes' if crossing == 1 else 's go'} across the Room outline"
             state = "warn"
+        if match.get("items_to_load"):
+            text += f"; {len(match['families_to_load'])} families will be loaded"
         if match["items_not_loaded"]:
             text += f"; {match['items_not_loaded']} items: family not loaded"
             state = "warn"

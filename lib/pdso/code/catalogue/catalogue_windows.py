@@ -332,6 +332,11 @@ def fit_line(preview):
                 across, " goes" if across == 1 else "s go"
             )
             state = "warn"
+        if match.get("items_to_load"):
+            line += "; {} famil{} will be loaded".format(
+                len(match["families_to_load"]),
+                "y" if len(match["families_to_load"]) == 1 else "ies",
+            )
         if match["items_not_loaded"]:
             line += "; {} items: family not loaded".format(match["items_not_loaded"])
             state = "warn"
