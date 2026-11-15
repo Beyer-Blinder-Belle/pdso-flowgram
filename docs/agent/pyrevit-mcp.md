@@ -25,7 +25,7 @@ Setup, the full tool table and the route table are in the root [README → HTTP 
 | Step | Tools |
 | --- | --- |
 | Orient | `get_status`, `get_config`, `check_config`, `list_levels` |
-| Make a model ready (only if asked) | `setup_model` (bootstrap: creates only what's missing) |
+| Make a model ready (only if asked) | `setup_model` (config, parameters, then Quick Setup; leaves existing items alone) |
 | Learn the data shape | `get_program_fields` (field names such as `uid`), `list_parameters` |
 | Read the program | `list_programs`, `summarize_programs`, `describe_program`, `list_areas` |
 | See it | `render_plan` (diagram from model data, can preview draft outlines), `export_view_image`, `color_areas` |

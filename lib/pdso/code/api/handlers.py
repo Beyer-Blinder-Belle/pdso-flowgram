@@ -31,7 +31,7 @@ ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.3"
+API_VERSION = "1.4"
 
 
 def route(method, pattern):
@@ -190,7 +190,7 @@ def activate_view(ctx):
 
 @route("POST", "bootstrap")
 def bootstrap(ctx):
-    """Create the PDSO items that are missing. Body: levels?, area_scheme_mappings?"""
+    """Config, parameters, then Quick Setup. Body: levels?, area_scheme_mappings?"""
     return bootstrap_service.bootstrap(
         ctx.require_doc(),
         levels=ctx.arg("levels"),

@@ -7,7 +7,7 @@ Schemes that are already in the model are left alone.
 
 The Revit API can't create an area scheme from nothing, so a new scheme is a copy
 of one already in the model (one that isn't Gross Building, if there is one),
-renamed. bootstrap_service.ensure_area_schemes uses the same technique for the API.
+renamed. The HTTP API's bootstrap runs this step too.
 """
 
 # 3rd Party Modules
