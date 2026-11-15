@@ -48,7 +48,8 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
     3.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
     4.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
   PDSO.tab/Unit Layout Catalogue.panel/
-    1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout")
+    1.Harvest.pushbutton/    → every Area with a data silo in the active area plan ("Harvest Layout")
+    2.HarvestRoom.pushbutton/ → catalogue/catalogue_windows.HarvestWindow ("Harvest One Room")
     2.FindRooms.pushbutton/  → PickerWindow + SuggestionWindow ("Find Rooms")
     3.Place.pushbutton/      → PickerWindow + SuggestionWindow ("Place Layout")
   lib/extensible_storage/    vendored third-party ES library (don't edit)
