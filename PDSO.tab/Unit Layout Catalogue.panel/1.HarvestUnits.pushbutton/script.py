@@ -30,6 +30,7 @@ from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
     harvest,
     is_area_plan,
     is_spatial_element,
+    save_family_files,
 )
 
 output = script.get_output()
@@ -209,6 +210,8 @@ if __name__ == "__main__":
 
             replaced += remove_previous(folder, source)
             save_entry(entry, folder)
+            # Family files, so the layout can go into a model without the families
+            save_family_files(revit.doc, entry, folder)
             last = (entry, result)
 
             lengths = features.get("edge_lengths", {})

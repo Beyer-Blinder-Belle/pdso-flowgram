@@ -54,6 +54,7 @@ from pdso.code.catalogue.layout_recommender import (
     oriented_items,
     oriented_outline,
     recommend,
+    refine_placement,
 )
 
 # Number of sample points on each side of the grid that compares two outlines
@@ -232,6 +233,7 @@ def _room_instances(element):
     for category in layout_service.HARVEST_CATEGORIES:
         categories.Add(category)
     instances = []
+    pdso_kind = layout_service.pdso_kinds(doc)
     for instance in (
         DB.FilteredElementCollector(doc)
         .OfClass(DB.FamilyInstance)
@@ -240,6 +242,10 @@ def _room_instances(element):
     ):
         location = instance.Location
         if not isinstance(location, DB.LocationPoint):
+            continue
+        # PDSO data silos and Program Volumes are not furniture. They must
+        # not be listed, counted or deleted.
+        if pdso_kind(instance) is not None:
             continue
         point = location.Point
         if not point_in_polygon((point.X, point.Y), outline):
@@ -382,6 +388,7 @@ def rooms_overview(doc):
     categories = layout_service.List[DB.BuiltInCategory]()
     for category in layout_service.HARVEST_CATEGORIES:
         categories.Add(category)
+    pdso_kind = layout_service.pdso_kinds(doc)
     for instance in (
         DB.FilteredElementCollector(doc)
         .OfClass(DB.FamilyInstance)
@@ -390,6 +397,8 @@ def rooms_overview(doc):
     ):
         location = instance.Location
         if not isinstance(location, DB.LocationPoint) or instance.SuperComponent is not None:
+            continue
+        if pdso_kind(instance) is not None:
             continue
         host = instance.Host
         if (host is not None and not isinstance(host, DB.Level)) or instance.HostFace is not None:
@@ -469,10 +478,14 @@ def harvest_layout(
         raise PDSOError(
             "The Room or Area is not placed or not enclosed. It has no boundary.", 409
         )
-    path = save_entry(result.entry, folder or get_catalogue_folder())
+    target_folder = folder or get_catalogue_folder()
+    path = save_entry(result.entry, target_folder)
+    # The family files let the layout go into a model that has not the families
+    family_files = layout_service.save_family_files(doc, result.entry, target_folder)
     return {
         "layout": entry_summary(result.entry),
         "file": path,
+        "family_files": family_files,
         "entry": result.entry.to_dict(),
         "skipped": [
             {"id": id_value(element_id), "label": label, "reason": reason}
@@ -554,7 +567,8 @@ def place_layout(doc, reference, entry_id):
 
     Returns:
         dict: {"target": {...}, "layout_id", "placement", "placed": [element
-            ids], "missing": {"Family : Type": count}, "tagged_programs":
+            ids], "missing": {"Family : Type": count}, "loaded_families":
+            {family name: where it came from}, "tagged_programs":
             [element ids], "warnings": [str]}
     """
     element = get_spatial_element(doc, reference)
@@ -573,15 +587,22 @@ def place_layout(doc, reference, entry_id):
             409,
         )
     chosen = recommendations[0]
+    placement = refine_placement(
+        entry, chosen.placement, frame.width, frame.depth, local_outline
+    )
+    # Families that the model has not are loaded first: from the family files
+    # of the catalogue, or from a different open model
+    families = layout_service.load_missing_families(doc, entry, catalogue_folders())
     with Transaction(doc, "PDSO - Place Unit Layout") as transaction:
-        result = layout_service.create(element, entry, chosen.placement)
+        result = layout_service.create(element, entry, placement)
     return {
         "target": _spatial_info(element),
         "layout_id": entry.id,
         "score": chosen.score,
-        "placement": _placement_info(chosen.placement),
+        "placement": _placement_info(placement),
         "placed": [id_value(element_id) for element_id in result.placed],
         "missing": result.missing,
+        "loaded_families": families["loaded"],
         "tagged_programs": [id_value(element_id) for element_id in result.tagged_silos],
         "warnings": list(result.warnings) + list(transaction.warnings),
     }
@@ -881,7 +902,9 @@ def preview_layout_in_room(doc, reference, entry_id):
     shape, shape_orientation = shape_match(entry, frame, local_outline)
     area_score = area_match(entry, area)
     if recommendations:
-        placement = recommendations[0].placement
+        placement = refine_placement(
+            entry, recommendations[0].placement, frame.width, frame.depth, local_outline
+        )
         orientation_from = "placement"
     else:
         turns, mirror = shape_orientation
@@ -891,6 +914,9 @@ def preview_layout_in_room(doc, reference, entry_id):
         orientation_from = "best outline match"
 
     symbols = layout_service._symbol_lookup(doc)
+    # Families that place_layout loads first count as loaded
+    loadable = layout_service.loadable_families(doc, entry, catalogue_folders())
+    to_load = 0
     boxes = _type_boxes(doc, set(item.symbol_key for item in entry.items))
     items = []
     outside = 0
@@ -903,6 +929,9 @@ def preview_layout_in_room(doc, reference, entry_id):
         )
         inside = point_in_or_near_polygon(local_point, local_outline, FIT_TOLERANCE)
         loaded = item.symbol_key in symbols
+        if not loaded and item.family in loadable:
+            loaded = True
+            to_load += 1
         outside += 0 if inside else 1
         not_loaded += 0 if loaded else 1
         known = boxes.get(item.symbol_key)
@@ -991,6 +1020,8 @@ def preview_layout_in_room(doc, reference, entry_id):
             "items_outside": outside,
             "items_across_outline": across,
             "items_not_loaded": not_loaded,
+            "items_to_load": to_load,
+            "families_to_load": sorted(loadable),
         },
         "layout_outline": [
             list(frame.to_world(point))
