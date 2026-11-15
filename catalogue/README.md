@@ -24,10 +24,12 @@ The same four steps are in the HTTP API (`/pdso/catalogue/...`) and in the MCP s
 | --- | --- |
 | `harvest_layout` | Saves the layout of a Room or Area. Gives the JSON entry and its file path |
 | `list_layouts`, `get_layout` | Lists the catalogue. Gives one entry with its JSON and its SVG sketch |
-| `recommend_layouts` | Ranks the layouts for one target Room |
+| `preview_pull_from_catalogue` | Shows images of the layouts that fit one Room, before anything is placed: the Room as it is now, then the best 5 layouts, ranked, with a plan of each layout in the Room. The same picture as the **Pull from Catalogue** button. The Room does not have to be harvested |
+| `pull_from_catalogue` | Puts a layout into one target Room: the one operation of the **Pull from Catalogue** button. It needs the Room. Without a layout id it uses the best layout that fits. It can delete the furniture that is in the Room first |
+| `recommend_layouts` | Ranks the layouts for one target Room (data only) |
 | `find_similar_rooms` | Ranks the Rooms of a model for one layout. `similarity` is the average of the area match and the outline match (1.0 is the same shape and size) |
 | `preview_similar_rooms` | Shows images of the best 5 Rooms that `find_similar_rooms` suggests, before anything is placed: a ranked list (thumbnail, Room, level, area, area match, shape match, match in percent, fits or not) and one large plan for each Room. Each plan shows the Room outline, the items of the layout where `place_layout` would put them, the furniture that is in the Room now, and the outline of the source room. An item that goes across a wall is amber. The model does not change (route `GET catalogue/preview`) |
-| `place_layout` | Places a layout into a target Room |
+| `place_layout` | Low-level placement of one layout into a target Room; prefer `pull_from_catalogue` |
 | `list_room_items`, `clear_room_items` | Lists (with the height above the level) or deletes the free-standing families in a Room |
 | `describe_item` | Describes one family instance: position, flips, plan box, level and instance parameters. Use it to compare a placed item with the original item (route `GET catalogue/item`) |
 | `delete_layout` | Deletes a layout file (not a sample) |
