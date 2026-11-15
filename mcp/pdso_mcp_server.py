@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.4"
+EXPECTED_API_VERSION = "1.5"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -80,14 +80,27 @@ mcp = MCPServer(
         "types, stored as Data Silos), Area outlines, Program Volumes, sync and "
         "audit. All lengths are decimal feet and all areas are square feet.\n"
         "The user does not need to know PDSO. Work from the user's intent and "
-        "decide the PDSO steps yourself.\n"
+        "decide the PDSO steps yourself, but keep the user in the loop for "
+        "setup: it adds items to their model.\n"
         "How PDSO works: a program is a point object (Data Silo) in a 2D Area. "
         "Each program needs one Area in each configured area scheme (default: "
         "PDSO - GSF gross, PDSO - ZFA zoning, PDSO - NSF net). The sync copies the "
         "area of each Area to its program and builds one 3D Program Volume for "
         "the program on each level of its stacking.\n"
+        "Setting up a model: call get_setup_status, then tell the user in plain "
+        "words what a setup would add and what the model has already, and agree "
+        "the scope before you call setup_model, unless they already said what "
+        "they want. The full package (the default) is what the PDSO ribbon's "
+        "setup buttons make: the configuration, the 20 built-in parameters, "
+        "area schemes, the Data Silo family, view templates, area plans for "
+        "each scheme and level, a 3D view and two schedules. The minimum to "
+        "place programs and run the sync is parts=[\"area_schemes\", "
+        "\"families\"] with parameters=\"required\". Offer both, or a scope in "
+        "between; the user may not want views or schedules added to a working "
+        "model. A smaller scope is fine: setup_model can add parts later.\n"
         "Order of work for a model that is new to PDSO: (1) get_status. (2) "
-        "setup_model one time. (3) update_config with levels_mapping: one "
+        "get_setup_status, agree the scope, then setup_model one time. (3) "
+        "update_config with levels_mapping: one "
         "two-digit stacking key for each occupied level, lowest first (01, 02, "
         "...). (4) list_rooms(level, include_outline=false) to see the Rooms. (5) "
         "draft_areas_from_rooms for the Rooms that fit the user's intent, with "
@@ -425,15 +438,25 @@ def create_level(name: str, elevation: float) -> dict:
 
 
 @mcp.tool()
+def get_setup_status() -> dict:
+    """Read-only. What each part of a PDSO setup makes, whether the sync needs it, and what the model has already ("state": present, partial or missing, with details). Also "full_package" and "minimum": setup_model arguments. Call it before setup_model and use it to agree the scope with the user."""
+    return api("GET", "setup")
+
+
+@mcp.tool()
 def setup_model(
     levels: list[str] | None = None,
     area_scheme_mappings: dict[str, str] | None = None,
+    parts: list[str] | None = None,
+    parameters: str = "all",
 ) -> dict:
-    """Make the model ready for PDSO, the same way as the ribbon's three setup buttons: the PDSO configuration, the parameters (all 20 built-in ones if the model tracks none yet), then Quick Setup from the model's standards files: the configured area schemes, the Data Silo family, the PDSO view templates, one area plan for each scheme and level (named like "PDSO - GSF - L1", with the PDSO area plan template, which hides Program Volumes), a 3D Program Volumes view, and the Data Silo and Program Volume schedules. Items that are there are left alone. It is safe to call again. The reply has "setup": the Quick Setup report rows (step, item, status, message); look at rows with status "Failed" or "Warning".
+    """Make the model ready for PDSO, the same way as the ribbon's three setup buttons: the PDSO configuration, the parameters, then the chosen Quick Setup parts from the model's standards files. This adds items to the user's model: agree the scope with the user first (see get_setup_status), unless they already said what they want. Items that are there are left alone. It is safe to call again, for example to add parts later. The reply has "setup": the Quick Setup report rows (step, item, status, message); look at rows with status "Failed" or "Warning".
 
     Args:
         levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
+        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": one area plan for each scheme and level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
+        parameters: Used only if the model tracks no parameters yet. "all": the 20 built-in parameters (unit data such as bedroom, bathroom and kitchen counts, use group, load factor). "required": only Program UID, Program Stacking, Last Synced and the area parameters; add others later with create_parameter.
     """
     if not levels:
         with_rooms = {room["level"] for room in api("GET", "rooms", outline="false")}
@@ -442,7 +465,14 @@ def setup_model(
             for level in api("GET", "levels")
             if level["name"] in with_rooms
         ] or None
-    body = _clean({"levels": levels, "area_scheme_mappings": area_scheme_mappings})
+    body = _clean(
+        {
+            "levels": levels,
+            "area_scheme_mappings": area_scheme_mappings,
+            "parts": parts,
+            "parameters": parameters,
+        }
+    )
     return api("POST", "bootstrap", body, timeout=LONG_TIMEOUT)
 
 

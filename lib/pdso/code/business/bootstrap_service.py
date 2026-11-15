@@ -31,6 +31,7 @@ from . import config_service, parameter_service
 from .errors import PDSOError
 from .family_manager_service import ProgramVolumeFamilyLoadOptions
 from .revit_helpers import Transaction, all_levels, find_level, id_value
+from pdso.code.setup import revit_utils
 from pdso.code.setup.runner import SetupContext, SetupStep, run_setup
 from pdso.code.setup.standards import Standards, StandardsError
 from pdso.code.setup.steps import views as views_step
@@ -42,8 +43,47 @@ logger = script.get_logger()
 DATA_SILO_MARKER_HALF_SIZE = 1.0
 DATA_SILO_MARKER_HEIGHT = 1.0
 
+# The parts of a setup, in order. "configuration" and "parameters" always run
+# (the parameters only if the model tracks none); the others are Quick Setup
+# steps and can be chosen with bootstrap(parts=...).
+SETUP_PARTS = [
+    (
+        "configuration",
+        "The PDSO configuration (Project Config): area scheme mappings, Program "
+        "Volume prefix and height, UID pattern, level mapping.",
+    ),
+    (
+        "parameters",
+        "The tracked PDSO parameters on Generic Models. 'all': the 20 built-in "
+        "ones (unit data such as bedroom and kitchen counts). 'required': only "
+        "Program UID, Program Stacking, Last Synced and the area parameters.",
+    ),
+    (
+        "area_schemes",
+        "One Revit area scheme for each mapping (default: PDSO - GSF, PDSO - "
+        "NSF, PDSO - ZFA). A model's own schemes can be mapped instead.",
+    ),
+    ("families", "The Data Silo family: the point object that holds each program."),
+    (
+        "view_templates",
+        "PDSO view templates: an area plan template that hides Program Volumes, "
+        "and a 3D template for Program Volumes.",
+    ),
+    (
+        "views",
+        "Working views: one area plan for each mapped scheme and level (all "
+        "levels but Roof and Parapet by default) and a 3D Program Volumes view.",
+    ),
+    ("schedules", "A Data Silo schedule and a Program Volume schedule."),
+]
+# What placing programs, drawing Areas and running the sync need
+REQUIRED_FOR_SYNC = ("configuration", "parameters", "area_schemes", "families")
+MINIMUM_SCOPE = {"parts": ["area_schemes", "families"], "parameters": "required"}
 
-def bootstrap(doc, levels=None, area_scheme_mappings=None):
+
+def bootstrap(
+    doc, levels=None, area_scheme_mappings=None, parameters="all", parts=None
+):
     """Make the model ready for PDSO: configuration, parameters, then Quick Setup.
 
     Args:
@@ -56,13 +96,45 @@ def bootstrap(doc, levels=None, area_scheme_mappings=None):
             before the area schemes and area plans are made. Use this for a
             model that has its own area schemes. Default: the configuration is
             not changed.
+        parameters (str): "all" or "required" (see parameter_service.setup_default).
+            Only used if the model tracks no parameters yet.
+        parts (list): Quick Setup parts to run: "area_schemes", "families",
+            "view_templates", "views", "schedules". Default: the parts setup.json
+            turns on (the full package). MINIMUM_SCOPE lists what the sync needs.
 
     Returns:
         dict: "config_created", "shared_parameters", "data_silo_family",
-            "area_schemes", "area_plans", and "setup" (the Quick Setup report
-            rows: step, item, status, message)
+            "area_schemes", "area_plans", "parts" (the parts that ran), and
+            "setup" (the Quick Setup report rows: step, item, status, message)
     """
-    report = {}
+    if parameters not in parameter_service.PARAMETER_SETS:
+        raise PDSOError(
+            "parameters must be one of: {}".format(
+                ", ".join(parameter_service.PARAMETER_SETS)
+            )
+        )
+    # Quick Setup steps to run, checked before anything in the model changes
+    standards = Standards(doc)
+    try:
+        all_steps = SetupStep.from_standards(standards.load("setup.json"))
+    except StandardsError as error:
+        raise PDSOError("Quick Setup standards: {}".format(error), 500)
+    if parts is None:
+        steps = [step for step in all_steps if step.enabled]
+    else:
+        known = [step.id for step in all_steps]
+        unknown = [part for part in parts if part not in known]
+        if unknown:
+            raise PDSOError(
+                "Unknown setup parts: {}. Use any of: {}".format(
+                    ", ".join(unknown), ", ".join(known)
+                )
+            )
+        steps = [step for step in all_steps if step.id in parts]
+    chosen = [step.id for step in steps]
+    level_elements = [find_level(doc, reference) for reference in levels or []]
+
+    report = {"parts": chosen}
     report["config_created"] = config_service.initialize_config(doc)
     if area_scheme_mappings:
         config_service.update_config(
@@ -75,22 +147,12 @@ def bootstrap(doc, levels=None, area_scheme_mappings=None):
         id_value(family.Id)
         for family in DB.FilteredElementCollector(doc).OfClass(DB.Family)
     )
-    level_elements = [find_level(doc, reference) for reference in levels or []]
     area_plans_before = set(id_value(view.Id) for view in _area_plans(doc))
 
     # Parameter Manager
-    report["shared_parameters"] = ensure_shared_parameters(doc)
+    report["shared_parameters"] = ensure_shared_parameters(doc, parameters)
 
     # Quick Setup, from the same standards folders as the ribbon button
-    standards = Standards(doc)
-    try:
-        steps = [
-            step
-            for step in SetupStep.from_standards(standards.load("setup.json"))
-            if step.enabled
-        ]
-    except StandardsError as error:
-        raise PDSOError("Quick Setup standards: {}".format(error), 500)
     options = {}
     if level_elements:
         options["levels"] = [level.Name for level in level_elements]
@@ -104,7 +166,9 @@ def bootstrap(doc, levels=None, area_scheme_mappings=None):
     config = config_service.get_config(doc)
     family_name = config["data_silo_family_name"]
     family = find_family(doc, family_name)
-    if family is None:
+    if family is None and "families" not in chosen:
+        report["data_silo_family"] = None
+    elif family is None:
         report["data_silo_family"] = ensure_data_silo_family(doc, family_name)
         rows.append(
             {
@@ -134,11 +198,11 @@ def bootstrap(doc, levels=None, area_scheme_mappings=None):
 
     # One area plan for each mapped scheme and level. Quick Setup made the ones
     # views.json turns on; this adds the rest with the same names and template.
-    views_data = _load_views_standards(standards)
-    if not level_elements:
-        level_elements = _default_area_plan_levels(ctx, views_data, doc)
     plans = []
-    for scheme_name in scheme_names:
+    views_data = _load_views_standards(standards)
+    if "views" in chosen and not level_elements:
+        level_elements = _default_area_plan_levels(ctx, views_data, doc)
+    for scheme_name in scheme_names if "views" in chosen else []:
         if find_area_scheme(doc, scheme_name) is None:
             continue  # the area_schemes step reported why
         for level in level_elements:
@@ -180,18 +244,173 @@ def _default_area_plan_levels(ctx, views_data, doc):
 # =============================================================================
 
 
-def ensure_shared_parameters(doc):
+def ensure_shared_parameters(doc, which="all"):
     """Set up the tracked parameters, if the model tracks no parameter yet.
 
-    A new model gets all built-in PDSO parameters (the "Default" preset of the
-    Parameter Manager): shared parameters, bound to Generic Models (instance),
-    and saved as the tracked parameters of the model. A model that tracks
-    parameters is not changed.
+    A new model gets the built-in PDSO parameters ("all": the "Default" preset
+    of the Parameter Manager; "required": the "Blank" preset): shared
+    parameters, bound to Generic Models (instance), and saved as the tracked
+    parameters of the model. A model that tracks parameters is not changed.
 
     Returns:
         dict: {"created": [names], "existing": [names]}
     """
-    return parameter_service.setup_default(doc)
+    return parameter_service.setup_default(doc, which)
+
+
+# =============================================================================
+# Setup status (read-only)
+# =============================================================================
+
+
+def setup_status(doc):
+    """What each setup part makes, and what the model has already. Read-only.
+
+    For an agent to agree the scope of a setup with the user before calling
+    bootstrap.
+
+    Returns:
+        dict: "parts" (one dict per part: part, description, required_for_sync,
+            state "present", "partial" or "missing", details), "full_package"
+            and "minimum" (bootstrap arguments)
+    """
+    config = config_service.get_config(doc)
+    standards = Standards(doc)
+    ctx = SetupContext(doc, standards)
+    mappings = config.get("area_scheme_mappings") or {
+        "PDSO - GSF": "PDSO - GSF",
+        "PDSO - NSF": "PDSO - NSF",
+        "PDSO - ZFA": "PDSO - ZFA",
+    }
+    scheme_names = sorted(set(v for v in mappings.values() if v))
+    states = {}
+
+    states["configuration"] = (
+        "present" if config.get("exists") else "missing",
+        {"exists": bool(config.get("exists"))},
+    )
+
+    tracked = list((config.get("tethered_parameters") or {}).keys())
+    states["parameters"] = (
+        "present" if tracked else "missing",
+        {"tracked": sorted(tracked)},
+    )
+
+    present = [name for name in scheme_names if find_area_scheme(doc, name)]
+    states["area_schemes"] = (
+        _state(present, scheme_names),
+        {
+            "present": present,
+            "missing": [name for name in scheme_names if name not in present],
+        },
+    )
+
+    family_name = config.get("data_silo_family_name") or ctx.expand(
+        "PDSO - Program Data Silo Object - Rvt{revit_yy}"
+    )
+    loaded = find_family(doc, family_name) is not None
+    states["families"] = (
+        "present" if loaded else "missing",
+        {"data_silo_family": family_name, "loaded": loaded},
+    )
+
+    templates = [
+        ctx.expand(spec.get("name", ""))
+        for spec in _standards_items(standards, "view_templates.json", "view_templates")
+    ]
+    have = [name for name in templates if revit_utils.find_view_template(doc, name)]
+    states["view_templates"] = (
+        _state(have, templates),
+        {"present": have, "missing": [n for n in templates if n not in have]},
+    )
+
+    views_data = _load_views_standards(standards)
+    levels = _default_area_plan_levels(ctx, views_data, doc)
+    missing_plans = []
+    expected = 0
+    for scheme_name in scheme_names:
+        scheme = find_area_scheme(doc, scheme_name)
+        for level in levels:
+            expected += 1
+            if scheme is None or find_area_plan(doc, scheme, level) is None:
+                missing_plans.append("{} / {}".format(scheme_name, level.Name))
+    views_3d = [
+        ctx.expand(spec.get("name", ""))
+        for spec in (views_data or {}).get("views", [])
+        if spec.get("view_type") == "ThreeD" and spec.get("enabled", True)
+    ]
+    have_3d = [
+        name
+        for name in views_3d
+        if revit_utils.find_view(doc, name, DB.ViewType.ThreeD) is not None
+    ]
+    states["views"] = (
+        _state_counts(
+            expected - len(missing_plans) + len(have_3d), expected + len(views_3d)
+        ),
+        {
+            "area_plan_levels": [level.Name for level in levels],
+            "missing_area_plans": missing_plans,
+            "views_3d_present": have_3d,
+            "views_3d_missing": [n for n in views_3d if n not in have_3d],
+        },
+    )
+
+    schedules = [
+        ctx.expand(spec.get("name", ""))
+        for spec in _standards_items(standards, "schedules.json", "schedules")
+    ]
+    have = [
+        name
+        for name in schedules
+        if revit_utils.find_view(doc, name, view_class=DB.ViewSchedule) is not None
+    ]
+    states["schedules"] = (
+        _state(have, schedules),
+        {"present": have, "missing": [n for n in schedules if n not in have]},
+    )
+
+    parts = []
+    for part, description in SETUP_PARTS:
+        state, details = states[part]
+        parts.append(
+            {
+                "part": part,
+                "description": description,
+                "required_for_sync": part in REQUIRED_FOR_SYNC,
+                "state": state,
+                "details": details,
+            }
+        )
+    return {
+        "parts": parts,
+        "full_package": {
+            "parts": [part for part, _ in SETUP_PARTS[2:]],
+            "parameters": "all",
+        },
+        "minimum": dict(MINIMUM_SCOPE),
+    }
+
+
+def _state(present, expected):
+    """'present', 'partial' or 'missing' from the items found and expected."""
+    return _state_counts(len(present), len(expected))
+
+
+def _state_counts(have, total):
+    if not total or have >= total:
+        return "present"
+    return "partial" if have else "missing"
+
+
+def _standards_items(standards, file_name, key):
+    """The enabled items of a standards file, or [] if it can't be read."""
+    try:
+        data = standards.load(file_name).data
+    except StandardsError as error:
+        logger.warning("{}: {}".format(file_name, error))
+        return []
+    return [item for item in data.get(key, []) if item.get("enabled", True)]
 
 
 # =============================================================================

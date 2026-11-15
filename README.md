@@ -127,7 +127,7 @@ Then reload pyRevit. The API is at `http://127.0.0.1:48884/pdso/` (48884 is the 
 | Group | Routes |
 | --- | --- |
 | Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `POST document/close`, `POST document/save`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
-| Setup | `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
+| Setup | `GET setup`, `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
 | Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
 | Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `POST programs/batch`, `GET/PUT/DELETE programs/<uid or id>` |
@@ -144,6 +144,8 @@ Requests are safe to send at the same time. The API runs them one at a time on R
 A reply is `{"ok": true, "data": ...}` or `{"ok": false, "error": {"type", "message", "traceback"}}`.
 
 `POST bootstrap` makes a model ready for PDSO the same way as the ribbon's three setup buttons. It writes the configuration (and `area_scheme_mappings`, if given), sets up the 20 built-in parameters if the model tracks none, then runs **Quick Setup** from the model's standards files: area schemes, the Data Silo family, view templates, working views and schedules. It also makes sure every mapped area scheme has an area plan on each level, named and templated as `views.json` says (for example `PDSO - GSF - L1`). `levels` (names or ids) chooses the levels; without it, the levels `views.json` gives plans to (all but Roof and Parapet). If no Data Silo family file can be loaded (a Revit version without a shipped family), it builds a placeholder family. The reply lists what it made and, under `setup`, the Quick Setup report rows. Items that are there are left alone.
+
+The body can narrow the scope. `parts` lists the Quick Setup steps to run (`area_schemes`, `families`, `view_templates`, `views`, `schedules`; default: the ones `setup.json` turns on). `parameters` is `"all"` (the 20 built-in parameters, the default) or `"required"` (only Program UID, Program Stacking, Last Synced and the area parameters); it only matters for a model that tracks no parameters yet. `GET setup` (read-only) describes each part and says what the model has already.
 
 ### MCP server (on the agent's computer)
 
@@ -194,7 +196,7 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Task | Tools |
 | --- | --- |
 | Model | `get_status`, `open_project`, `close_project`, `new_project`, `save_project`, `list_levels`, `create_level`, `list_rooms` |
-| Setup | `setup_model`, `get_config`, `update_config`, `check_config` |
+| Setup | `get_setup_status`, `setup_model`, `get_config`, `update_config`, `check_config` |
 | Parameters | `list_parameters`, `create_parameter`, `delete_parameter` |
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
 | Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
@@ -210,6 +212,7 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 
 The server instructions give an agent the PDSO workflow, so that a user can ask in plain language ("map out the program of the second floor of this school") and does not need to know PDSO. The tools that make this short:
 
+- Setup keeps the user in the loop. The agent calls `get_setup_status` (what each part makes and what the model has), agrees the scope with the user, then calls `setup_model`. `parts` and `parameters` choose between the full package (the default: what the ribbon's setup buttons make) and the minimum the sync needs (`parts=["area_schemes", "families"]`, `parameters="required"`). `setup_model` can add parts later.
 - `setup_model()` with no levels makes area plans for the levels that have Rooms.
 - `list_rooms(level, include_outline=false)` gives number, name, area and bounding box of each Room.
 - `draft_areas_from_rooms(level, room_numbers, insets)` drafts one Area for each Room in each scheme, for example `insets = {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}`. A Room that fails does not stop the other Rooms. If an inset splits a Room outline, a larger simplify tolerance or the largest piece is used, and `warnings` says so.

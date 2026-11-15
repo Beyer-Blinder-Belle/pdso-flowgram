@@ -251,19 +251,43 @@ def _require_configured(doc):
     return registry
 
 
-def setup_default(doc):
-    """Track all built-in parameters, if the model tracks no parameter yet.
+PARAMETER_SETS = ("all", "required")
 
-    This is the "Default" preset of the Parameter Manager. A model that tracks
-    parameters is not changed.
+
+def setup_default(doc, which="all"):
+    """Track the built-in parameters, if the model tracks no parameter yet.
+
+    Args:
+        which (str): "all": every built-in parameter (the "Default" preset of
+            the Parameter Manager). "required": only the parameters the tools
+            need (the "Blank" preset): Program UID, Program Stacking, Last
+            Synced, and the parameters the area scheme mappings write into.
+
+    A model that tracks parameters is not changed.
 
     Returns:
         dict: {"created": [names], "existing": [names]}
     """
+    if which not in PARAMETER_SETS:
+        raise PDSOError(
+            "parameters must be one of: {}".format(", ".join(PARAMETER_SETS))
+        )
     registry = registry_service.get_registry(doc, refresh=True)
     if registry.is_configured:
         return {"created": [], "existing": registry.names()}
-    _apply(doc, list(standard_pdso_parameters.values()), [])
+    if which == "all":
+        desired = list(standard_pdso_parameters.values())
+    else:
+        names = list(CORE_PARAMETER_NAMES)
+        for name in registry_service.get_area_mapped_parameter_names(doc):
+            if name in standard_pdso_parameters and name not in names:
+                names.append(name)
+        desired = [
+            definition
+            for name, definition in standard_pdso_parameters.items()
+            if name in names
+        ]
+    _apply(doc, desired, [])
     return {
         "created": registry_service.get_registry(doc, refresh=True).names(),
         "existing": [],
