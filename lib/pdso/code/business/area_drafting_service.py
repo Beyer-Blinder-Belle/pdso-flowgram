@@ -30,6 +30,7 @@ from .revit_helpers import (
     point_in_polygon,
     polygon_area,
     polygon_interior_point,
+    to_number,
 )
 
 logger = script.get_logger()
@@ -408,12 +409,13 @@ def create_area(doc, scheme, level, points, name=None, number=None):
     """
     outline = _clean_outline(points)
     level_element = find_level(doc, level)
-    view = _area_plan(doc, scheme, level_element)
 
     # Revit computes an Area next to other Areas only after its boundary lines
-    # are committed. Thus the lines and the Area are in two transactions.
+    # are committed. Thus the lines and the Area are in two transactions. A new
+    # area plan is made inside the group, so a failure removes it too.
     warnings = []
     with TransactionGroup(doc, "PDSO - Create Area"):
+        view = _area_plan(doc, scheme, level_element)
         with Transaction(doc, "PDSO - Draw Area Outline") as transaction:
             _draw_outline(doc, view, level_element, outline)
         warnings.extend(transaction.warnings)
@@ -471,7 +473,6 @@ def set_area_outline(doc, area_id, points):
     area = get_area(doc, area_id)
     outline = _clean_outline(points)
     level = doc.GetElement(area.LevelId)
-    view = _area_plan(doc, _scheme_name(area), level)
     previous_area = area.Area
 
     location = getattr(area.Location, "Point", None)
@@ -493,6 +494,7 @@ def set_area_outline(doc, area_id, points):
             )
 
     with TransactionGroup(doc, "PDSO - Set Area Outline"):
+        view = _area_plan(doc, _scheme_name(area), level)
         with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
             old_lines = _exclusive_line_ids(doc, area, to_remove)
             if old_lines:
@@ -525,14 +527,6 @@ def _move_location(area, location, x, y):
     area.Location.Move(DB.XYZ(x - location.X, y - location.Y, 0))
     if was_pinned:
         area.Pinned = True
-
-
-def _number(value, name):
-    """A caller's number as a float, or a PDSOError."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise PDSOError("{} must be a number. Got: {!r}".format(name, value))
 
 
 def _polygon_centroid(points):
@@ -577,7 +571,6 @@ def _transform_area(doc, area, transform, name):
     if location is None:
         raise PDSOError("The Area is not placed. Delete it and create a new Area.")
     level = doc.GetElement(area.LevelId)
-    view = _area_plan(doc, _scheme_name(area), level)
     previous_area = area.Area
 
     curves = []
@@ -590,6 +583,7 @@ def _transform_area(doc, area, transform, name):
 
     warnings = []
     with TransactionGroup(doc, name):
+        view = _area_plan(doc, _scheme_name(area), level)
         with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
             old_lines = _exclusive_line_ids(doc, area)
             if old_lines:
@@ -632,7 +626,7 @@ def move_area_vertex(doc, area_id, index, x, y):
         raise PDSOError(
             "Vertex index must be 0 to {}. Got: {!r}".format(len(outline) - 1, index)
         )
-    outline[index] = [_number(x, "x"), _number(y, "y")]
+    outline[index] = [to_number(x, "x"), to_number(y, "y")]
     return set_area_outline(doc, area_id, outline)
 
 
@@ -652,8 +646,8 @@ def move_area(doc, area_id, dx, dy, move_programs=True):
     Returns:
         dict: The Area after the change (see area_info), plus "moved_programs"
     """
-    dx = _number(dx, "dx")
-    dy = _number(dy, "dy")
+    dx = to_number(dx, "dx")
+    dy = to_number(dy, "dy")
     area = get_area(doc, area_id)
     old_outline = _current_outline(doc, area)
 
@@ -692,7 +686,7 @@ def scale_area(doc, area_id, factor):
     Args:
         factor (float): Linear scale factor. 2.0 makes the area four times larger.
     """
-    factor = _number(factor, "factor")
+    factor = to_number(factor, "factor")
     if factor <= 0:
         raise PDSOError("The scale factor must be more than 0.")
     area = get_area(doc, area_id)

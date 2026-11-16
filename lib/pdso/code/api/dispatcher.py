@@ -66,6 +66,26 @@ class Context(object):
             raise ApiError("The active document is a family. Open a project.", 409)
         return self.doc
 
+    def require_active_doc(self):
+        """Return the active document, for a route that uses the Revit window.
+
+        Selection and views act on the active document only. If the request
+        names another document (``document``), this raises an ApiError
+        instead of mixing the two: ids or views of one document would be
+        used in the window of the other.
+        """
+        doc = self.require_doc()
+        if self.doc is None or not doc.Equals(self.doc):
+            raise ApiError(
+                "This works only on the active document ('{}'), and the request "
+                "is for '{}'. Activate that document in Revit, or clear the "
+                "target document.".format(
+                    self.doc.Title if self.doc is not None else "none", doc.Title
+                ),
+                409,
+            )
+        return doc
+
     def _open_document(self, reference):
         """Find an open project document by title or by file path."""
         wanted = reference.strip().lower()

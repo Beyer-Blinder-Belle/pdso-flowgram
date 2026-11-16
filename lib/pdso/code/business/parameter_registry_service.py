@@ -518,17 +518,30 @@ class PDSOParameterSetupService(object):
                     report,
                 )
 
-            # 4. Save the tracked list
+            # 4. Save the tracked list. A parameter that was tracked before and
+            # failed this time stays tracked: dropping it would silently stop
+            # the sync from writing it.
+            storage_service = PDSOExtensibleStorageService(self.doc)
+            previous = {}
+            config = storage_service.get_document_config()
+            if config is not None:
+                previous = _net_dict_to_python(config.tethered_parameters)
             tracked = {}
             for item in resolved:
+                name = item.parameter.parameter_name
                 if not item.failed and item.guid is not None:
-                    tracked[item.parameter.parameter_name] = item.guid
+                    tracked[name] = item.guid
+                elif name in previous:
+                    tracked[name] = previous[name]
+                    report.warning(
+                        "'{}' could not be set up this time; it stays tracked as "
+                        "before.".format(name)
+                    )
 
             if not tracked:
                 report.error("No parameters could be set up; nothing was saved.")
                 return report
 
-            storage_service = PDSOExtensibleStorageService(self.doc)
             storage_service.ensure_schemas_exist()
             if not storage_service.update_document_config(tethered_parameters=tracked):
                 report.error(

@@ -81,6 +81,14 @@ def level_info(level):
     }
 
 
+def to_number(value, name):
+    """A caller's value as a float, or a PDSOError (400) that names the field."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise PDSOError("'{}' must be a number. Got: {!r}".format(name, value))
+
+
 def point_in_polygon(x, y, polygon):
     """Ray-casting test. ``polygon`` is a list of (x, y)."""
     inside = False

@@ -127,7 +127,8 @@ def uid_pattern_status(pattern, uids, max_listed=5):
     if not pattern:
         return "✓ No UID pattern configured"
     try:
-        regex = re.compile(pattern)
+        # The whole UID must match (re.match alone only anchors the start)
+        regex = re.compile(r"(?:{})\Z".format(pattern))
     except re.error as error:
         return "⚠️ UID pattern {} is not a valid regular expression: {}".format(
             pattern, error

@@ -230,15 +230,19 @@ def _apply(doc, desired, removed, unbind_removed=False):
         shared_parameter_file_for_writes(doc),
         unbind_removed=unbind_removed,
     )
-    if not report.success:
-        errors = [text for level, text in report.messages if level == "error"]
+    errors = [text for level, text in report.messages if level == "error"]
+    warnings = [text for level, text in report.messages if level == "warning"]
+    if not report.tracked:
+        # Nothing was saved to the configuration
         raise PDSOError(
             "The parameters were not set up: {}".format(
                 " ".join(errors) or "unknown error"
             ),
             409,
         )
-    return [text for level, text in report.messages if level == "warning"]
+    # The tracked list was saved, so the model changed: report the errors of
+    # single parameters as warnings instead of failing the whole request
+    return ["Error: {}".format(text) for text in errors] + warnings
 
 
 def _require_configured(doc):

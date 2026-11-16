@@ -11,6 +11,8 @@ Example Usage:
 """
 
 # 3rd Party Modules
+import re
+
 from pyrevit import script, DB
 
 # Custom Modules
@@ -145,8 +147,18 @@ def update_config(doc, updates):
         if name in updates:
             values[name] = str(updates[name])
 
+    if "uid_pattern" in values:
+        values["uid_pattern"] = check_uid_pattern(values["uid_pattern"])
+
     if "program_volume_extrusion_height" in updates:
-        height = float(updates["program_volume_extrusion_height"])
+        try:
+            height = float(updates["program_volume_extrusion_height"])
+        except (TypeError, ValueError):
+            raise PDSOError(
+                "program_volume_extrusion_height must be a number. Got: {!r}".format(
+                    updates["program_volume_extrusion_height"]
+                )
+            )
         if height <= 0:
             raise PDSOError("program_volume_extrusion_height must be more than 0.")
         values["program_volume_extrusion_height"] = height
@@ -189,6 +201,35 @@ def update_config(doc, updates):
     if not service.update_document_config(**values):
         raise PDSOError("Could not save the PDSO configuration.", 500)
     return get_config(doc)
+
+
+def check_uid_pattern(pattern):
+    """Return a Program UID pattern if it is a valid regular expression.
+
+    An empty pattern turns the check off. Raises PDSOError for a pattern that
+    does not compile, so a bad pattern is never saved (every program create
+    and update would fail on it).
+    """
+    if not pattern:
+        return ""
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        raise PDSOError(
+            "uid_pattern is not a valid regular expression: {}".format(error)
+        )
+    return pattern
+
+
+def uid_matches(pattern, uid):
+    """True if the whole UID matches the pattern (an empty pattern matches all)."""
+    if not pattern:
+        return True
+    try:
+        return re.match(r"(?:{})\Z".format(pattern), uid or "") is not None
+    except re.error:
+        # A pattern saved before it was checked: do not block programs on it
+        return True
 
 
 def _require_map(value, name):

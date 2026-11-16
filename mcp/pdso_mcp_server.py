@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.6"
+EXPECTED_API_VERSION = "1.7"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -274,17 +274,69 @@ def api(
     timeout: int = DEFAULT_TIMEOUT,
     **query: Any,
 ) -> Any:
-    """Call the PDSO HTTP API. Open the SSH port forward if it is necessary."""
+    """Call the PDSO HTTP API. Open the SSH port forward if it is necessary.
+
+    A request that changes the model is sent again after the port forward is
+    opened only if it surely did not reach Revit (the connection was refused).
+    """
+    read_only = method == "GET" or path in _READ_ONLY_POSTS
     try:
         return _request(method, path, body, query, timeout)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
-        if not SSH_HOST or isinstance(error, TimeoutError):
+        if _is_timeout(error):
+            raise ToolError(_timeout_message(error, read_only))
+        if not SSH_HOST:
             raise ToolError(_unreachable_message(error))
+        if not read_only and not _not_sent(error):
+            raise ToolError(
+                f"The connection to Revit dropped during '{method} {path}' ({error}). "
+                "Revit may have made the change. Check the model (for example with "
+                "a list tool) before you send it again."
+            )
     _open_tunnel()
     try:
         return _request(method, path, body, query, timeout)
-    except (urllib.error.URLError, ConnectionError) as error:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+        if _is_timeout(error):
+            raise ToolError(_timeout_message(error, read_only))
         raise ToolError(_unreachable_message(error))
+
+
+def _reason(error: Exception) -> Any:
+    """The underlying error of a urllib URLError, or the error itself."""
+    if isinstance(error, urllib.error.URLError) and isinstance(error.reason, Exception):
+        return error.reason
+    return error
+
+
+def _is_timeout(error: Exception) -> bool:
+    return isinstance(_reason(error), TimeoutError)
+
+
+def _not_sent(error: Exception) -> bool:
+    """True if the request surely did not reach the server.
+
+    urllib wraps an error of the connect step in a URLError (for example
+    ConnectionRefusedError). An error after the request was sent comes as
+    RemoteDisconnected or ConnectionResetError, not wrapped.
+    """
+    if not isinstance(error, urllib.error.URLError):
+        return False
+    reason = _reason(error)
+    dropped = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+    return isinstance(reason, OSError) and not isinstance(reason, dropped)
+
+
+def _timeout_message(error: Exception, read_only: bool) -> str:
+    if read_only:
+        return (
+            f"The PDSO API did not answer in time ({error}). Revit may be busy; try again."
+        )
+    return (
+        f"The PDSO API did not answer in time ({error}). Revit may still be making "
+        "the change: it runs queued requests one at a time. Wait, then check the "
+        "model (for example with a list tool) before you send it again."
+    )
 
 
 def _unreachable_message(error: Exception) -> str:
@@ -1235,14 +1287,23 @@ def show_program_volumes(
     )
     data = base64.b64decode(result["image_base64"])
     path = _save_image("program_volumes", data)
+    shown = False
+    not_shown_reason = None
     if show:
-        api("POST", "views/activate", {"view": str(info["view"]["id"])})
+        try:
+            api("POST", "views/activate", {"view": str(info["view"]["id"])})
+            shown = True
+        except ToolError as error:
+            # The view is in a document that is not the active one
+            not_shown_reason = str(error)
     summary = {
         "view": info["view"],
         "legend": info["legend"],
         "file": str(path),
-        "shown_in_revit": show,
+        "shown_in_revit": shown,
     }
+    if not_shown_reason:
+        summary["not_shown_reason"] = not_shown_reason
     return [json.dumps(summary), Image(data=data, format="png")]
 
 
@@ -1272,7 +1333,7 @@ def open_document_in_background(path: str, detach: bool = False) -> dict:
 
 @mcp.tool()
 def set_target_document(document: str | None = None) -> dict:
-    """Select the open Revit document that all the tools of this server work on. Without an argument, the tools work on the active document again. Tools that use the Revit window (selection, show_view) always use the active document.
+    """Select the open Revit document that all the tools of this server work on. Without an argument, the tools work on the active document again. Tools that use the Revit window (show_view, select_elements, select_programs, get_selection) work only when the target is the active document; with another target they return an error and change nothing.
 
     Args:
         document: Title of an open document (see list_open_documents), for example "snowdon_catalogue_sim".

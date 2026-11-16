@@ -31,7 +31,7 @@ ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.6"
+API_VERSION = "1.7"
 
 
 def route(method, pattern):
@@ -176,7 +176,7 @@ def list_rooms(ctx):
 @route("POST", "views/activate")
 def activate_view(ctx):
     """Show a view in the Revit window. Body: view (name or id), type?, zoom_box?"""
-    doc = ctx.require_doc()
+    doc = ctx.require_active_doc()
     view = model_service.find_view(
         doc, ctx.arg("view", required=True), view_type=ctx.arg("type")
     )
@@ -216,7 +216,11 @@ def get_config(ctx):
 @route("PUT", "config")
 def put_config(ctx):
     """Change PDSO configuration fields. Body: the fields to change"""
-    return config_service.update_config(ctx.require_doc(), ctx.body)
+    # "document" selects the document; it is not a configuration field
+    updates = dict(
+        (key, value) for key, value in ctx.body.items() if key != "document"
+    )
+    return config_service.update_config(ctx.require_doc(), updates)
 
 
 @route("GET", "config/checks")
@@ -357,7 +361,11 @@ def get_program_summary(ctx):
 @route("GET", "programs")
 def list_programs(ctx):
     """List the programs. Query: level? and any program field as a filter"""
-    return program_service.list_programs(ctx.require_doc(), ctx.query)
+    # "document" selects the document; it is not a filter
+    filters = dict(
+        (key, value) for key, value in ctx.query.items() if key != "document"
+    )
+    return program_service.list_programs(ctx.require_doc(), filters)
 
 
 @route("POST", "programs")
@@ -420,14 +428,14 @@ def delete_program(ctx, ref):
 @route("GET", "selection")
 def get_selection(ctx):
     """Describe the elements that are selected in Revit."""
-    ctx.require_doc()
+    ctx.require_active_doc()
     return program_service.get_selection(ctx.uidoc)
 
 
 @route("POST", "selection")
 def set_selection(ctx):
     """Select elements in Revit and zoom to them. Body: ids, zoom?"""
-    ctx.require_doc()
+    ctx.require_active_doc()
     ids = ctx.arg("ids", required=True)
     if not isinstance(ids, list):
         raise ApiError("'ids' must be a list of element ids.")
