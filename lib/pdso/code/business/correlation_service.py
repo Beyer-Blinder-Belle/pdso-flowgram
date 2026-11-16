@@ -124,12 +124,23 @@ class PDSOCorrelationService(object):
                 str(ext_data_silo.parameters["PDSO - Program UID"].value),
             )
             for ext_data_silo in ext_data_silo_collection.extended_data_silos
+            if ext_data_silo.parameters["PDSO - Program UID"].value
         )
         # {Data Silo id: Family}, read from the Program Volume instances on first use
         previous_families = None
 
         # Correlate each Data Silo to Program Volume Families on the same level
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
+            # A Data Silo with no UID would expect the family "<prefix>None",
+            # and every such Data Silo would claim the same family
+            if not ext_data_silo.parameters["PDSO - Program UID"].value:
+                self.logger.warning(
+                    "Data Silo {} has no Program UID; it gets no Program Volume.".format(
+                        ext_data_silo.Id
+                    )
+                )
+                continue
+
             # Find Program Volume Families by matching family name. Family name is prefix + data silo UID
             expected_family_name = "{}{}".format(
                 program_volume_family_name_prefix,
@@ -716,15 +727,6 @@ class PDSOCorrelationService(object):
                                 ):
                                     polygon_vertices.append(pt)
 
-                        # Update bounding box
-                        start_pt = curve.GetEndPoint(0)
-                        end_pt = curve.GetEndPoint(1)
-                        for pt in [start_pt, end_pt]:
-                            min_x = min(min_x, pt.X)
-                            max_x = max(max_x, pt.X)
-                            min_y = min(min_y, pt.Y)
-                            max_y = max(max_y, pt.Y)
-
                     except Exception:
                         # If curve evaluation fails, try to get at least the endpoints
                         try:
@@ -739,6 +741,14 @@ class PDSOCorrelationService(object):
                         except:
                             continue
 
+                # Bounding box from the sampled points: an arc can bulge past
+                # its end points, so the end points alone are not enough
+                for pt in polygon_vertices:
+                    min_x = min(min_x, pt.X)
+                    max_x = max(max_x, pt.X)
+                    min_y = min(min_y, pt.Y)
+                    max_y = max(max_y, pt.Y)
+
                 # Close the polygon if needed
                 if polygon_vertices and len(polygon_vertices) > 2:
                     first_pt = polygon_vertices[0]
@@ -752,6 +762,8 @@ class PDSOCorrelationService(object):
                     all_polygons.append(polygon_vertices)
 
             # Quick bounding box check
+            if min_x == float("inf"):
+                return False
             buffer = max(max_x - min_x, max_y - min_y) * 0.01
             if (
                 test_point.X < min_x - buffer

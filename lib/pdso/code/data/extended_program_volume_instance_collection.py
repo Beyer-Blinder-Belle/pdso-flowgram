@@ -272,6 +272,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
 
         # Commit parameter updates on valid instances
         skipped_count = 0
+        failed_count = 0
         newly_created_count = 0
         existing_updated_count = 0
 
@@ -305,6 +306,8 @@ class ExtendedProgramVolumeInstanceCollection(object):
                     existing_updated_count += 1
 
             except Exception as e:
+                # One instance that fails must not roll back the whole
+                # transaction (the other instances and the deletions)
                 self.logger.error(
                     "Failed to commit changes for instance {}: {}".format(
                         ext_program_volume_instance.Id
@@ -313,7 +316,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
                         str(e),
                     )
                 )
-                raise
+                failed_count += 1
 
         # Log summary of commit operation
         self.logger.debug(
@@ -326,6 +329,12 @@ class ExtendedProgramVolumeInstanceCollection(object):
             self.logger.warning(
                 "Skipped {} instances with no parent Data Silo".format(
                     skipped_count
+                )
+            )
+        if failed_count > 0:
+            self.logger.error(
+                "{} Program Volume instances could not be updated (see the errors above)".format(
+                    failed_count
                 )
             )
 

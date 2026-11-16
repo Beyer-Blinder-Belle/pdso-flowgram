@@ -85,10 +85,11 @@ class ExtendedProgramVolumeFamily(object):
             return None
 
         try:
-            with PdsoProgramVolumeFamilySchema(
+            # Read without "with": its exit writes the entity back in a
+            # transaction, so each read would change the model
+            return PdsoProgramVolumeFamilySchema(
                 self.rpw_element.unwrap(), update=False
-            ) as entity:
-                return entity
+            )
         except Exception as e:
             self.logger.error(
                 "Failed to retrieve PdsoProgramVolumeFamilySchema for program volume family: {}".format(

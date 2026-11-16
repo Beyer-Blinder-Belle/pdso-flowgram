@@ -148,16 +148,16 @@ class PDSOLevelMappingService(object):
         """
         config = self.ext_storage_service.get_document_config()
         if config:
-            with config as c:
-                level_mappings = c.levels_mapping or {}
+            # Read without "with": its exit writes the entity back
+            level_mappings = config.levels_mapping or {}
 
-                # Convert .NET Dictionary to Python dict
-                if hasattr(level_mappings, "Keys"):
-                    self.level_mappings_cache = {
-                        k: level_mappings[k] for k in level_mappings.Keys
-                    }
-                else:
-                    self.level_mappings_cache = level_mappings
+            # Convert .NET Dictionary to Python dict
+            if hasattr(level_mappings, "Keys"):
+                self.level_mappings_cache = {
+                    k: level_mappings[k] for k in level_mappings.Keys
+                }
+            else:
+                self.level_mappings_cache = level_mappings
 
         # Build sorted keys list for range expansion
         # Uses natural sort to handle "3" < "10" and compound keys like "B1-03"
@@ -207,9 +207,15 @@ class PDSOLevelMappingService(object):
             if not segment:
                 continue
 
+            # A key may contain a hyphen itself ("B1-03"). A segment that is
+            # a key is that key, not a range.
+            if segment in self.level_mappings_cache:
+                keys.append(segment)
+                continue
+
             if "-" in segment:
-                # Range notation (e.g., "03-05" or "A07-A09")
-                parts = segment.split("-")
+                # Range notation (e.g., "03-05", "A07-A09" or "B1-03-B1-05")
+                parts = self._split_range(segment)
                 if len(parts) == 2:
                     start_key = parts[0].strip()
                     end_key = parts[1].strip()
@@ -293,6 +299,31 @@ class PDSOLevelMappingService(object):
                 unique_keys.append(key)
 
         return unique_keys, errors
+
+    def _split_range(self, segment):
+        """Split a range "start-end" where the keys may contain hyphens.
+
+        Each hyphen is tried as the separator. A split where both sides are
+        mapping keys wins ("B1-03-B1-05" gives "B1-03" and "B1-05"). If no
+        split has two known keys, a segment with one hyphen is split there
+        (the caller reports the unknown key); otherwise the parts of a plain
+        split are returned, which the caller reports as an invalid format.
+
+        Returns:
+            list: [start, end], or the parts of segment.split("-")
+        """
+        parts = segment.split("-")
+        if len(parts) == 2:
+            return parts
+        matches = []
+        for index in range(1, len(parts)):
+            start = "-".join(parts[:index]).strip()
+            end = "-".join(parts[index:]).strip()
+            if start in self.level_mappings_cache and end in self.level_mappings_cache:
+                matches.append([start, end])
+        if len(matches) == 1:
+            return matches[0]
+        return parts
 
     def map_keys_to_levels(self, keys, ext_level_collection):
         """Map list of keys to ExtendedLevel objects.

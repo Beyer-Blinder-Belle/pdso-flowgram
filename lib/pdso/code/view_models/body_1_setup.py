@@ -406,99 +406,100 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             # Get config context manager
             config = self.ext_storage_service.get_document_config()
             if config:
-                with config as c:
-                    # Load simple fields
-                    self.data_silo_family_name = c.data_silo_family_name or ""
-                    self.uid_pattern = c.uid_pattern or ""
-                    self.program_volume_family_name_prefix = (
-                        c.program_volume_family_name_prefix or ""
+                # Read without "with": its exit writes the config back
+                c = config
+                # Load simple fields
+                self.data_silo_family_name = c.data_silo_family_name or ""
+                self.uid_pattern = c.uid_pattern or ""
+                self.program_volume_family_name_prefix = (
+                    c.program_volume_family_name_prefix or ""
+                )
+                self.program_volume_extrusion_height = (
+                    c.program_volume_extrusion_height or 8.0
+                )
+
+                # Load worksets dictionary and split into discrete properties
+                worksets = c.worksets or {}
+                # Convert .NET Dictionary to Python dict
+                if worksets and hasattr(worksets, "Keys"):
+                    worksets_dict = {k: worksets[k] for k in worksets.Keys}
+                else:
+                    worksets_dict = worksets
+
+                self.data_silo_workset = worksets_dict.get(
+                    "data-silos", "Not enforced"
+                )
+                self.program_volume_workset = worksets_dict.get(
+                    "program-volumes", "Not enforced"
+                )
+                self.area_workset = worksets_dict.get("areas", "Not enforced")
+
+                # Load area scheme mappings
+                self.area_scheme_mappings = []
+                area_mappings = c.area_scheme_mappings or {}
+                # Convert .NET Dictionary to Python dict
+                if area_mappings and hasattr(area_mappings, "Keys"):
+                    area_mappings = {
+                        k: area_mappings[k] for k in area_mappings.Keys
+                    }
+
+                if area_mappings:
+                    # Stored as {PDSO parameter: Revit area scheme} (see
+                    # docs/agent/architecture.md). Rows on this screen are
+                    # (area scheme, parameter), so swap on the way in.
+                    for stored_key, stored_value in area_mappings.items():
+                        if (
+                            stored_key not in standard_pdso_parameters
+                            and stored_value in standard_pdso_parameters
+                        ):
+                            # Saved by an older Project Config, which wrote
+                            # {scheme: parameter}. Saving again fixes it.
+                            scheme, parameter = stored_key, stored_value
+                        else:
+                            scheme, parameter = stored_value, stored_key
+                        item = ConfigMappingItem(scheme, parameter, self)
+                        self.area_scheme_mappings.append(item)
+                else:
+                    # Create default mappings if none exist
+                    default_mappings = [
+                        ("PDSO - GSF", "PDSO - GSF"),
+                        ("PDSO - NSF", "PDSO - NSF"),
+                        ("PDSO - ZFA", "PDSO - ZFA"),
+                    ]
+                    for key, value in default_mappings:
+                        item = ConfigMappingItem(key, value, self)
+                        self.area_scheme_mappings.append(item)
+
+                # Subcategory mappings removed - will be auto-generated from area schemes
+
+                # Load level mappings
+                self.levels_mappings = []
+                level_mappings = c.levels_mapping or {}
+                # Convert .NET Dictionary to Python dict
+                if level_mappings and hasattr(level_mappings, "Keys"):
+                    level_mappings = {
+                        k: level_mappings[k] for k in level_mappings.Keys
+                    }
+
+                # Create mapping items
+                for key, element_id in level_mappings.items():
+                    item = ConfigMappingItem(key, element_id, self)
+                    self.levels_mappings.append(item)
+
+                # Sort by key using natural sort
+                self.levels_mappings.sort(
+                    key=lambda item: ConfigMappingItem.natural_sort_key(item.key)
+                )
+
+                self.logger.info("Configuration loaded successfully")
+                self.logger.debug(
+                    "Loaded {} area scheme mappings".format(
+                        len(self.area_scheme_mappings)
                     )
-                    self.program_volume_extrusion_height = (
-                        c.program_volume_extrusion_height or 8.0
-                    )
-
-                    # Load worksets dictionary and split into discrete properties
-                    worksets = c.worksets or {}
-                    # Convert .NET Dictionary to Python dict
-                    if worksets and hasattr(worksets, "Keys"):
-                        worksets_dict = {k: worksets[k] for k in worksets.Keys}
-                    else:
-                        worksets_dict = worksets
-
-                    self.data_silo_workset = worksets_dict.get(
-                        "data-silos", "Not enforced"
-                    )
-                    self.program_volume_workset = worksets_dict.get(
-                        "program-volumes", "Not enforced"
-                    )
-                    self.area_workset = worksets_dict.get("areas", "Not enforced")
-
-                    # Load area scheme mappings
-                    self.area_scheme_mappings = []
-                    area_mappings = c.area_scheme_mappings or {}
-                    # Convert .NET Dictionary to Python dict
-                    if area_mappings and hasattr(area_mappings, "Keys"):
-                        area_mappings = {
-                            k: area_mappings[k] for k in area_mappings.Keys
-                        }
-
-                    if area_mappings:
-                        # Stored as {PDSO parameter: Revit area scheme} (see
-                        # docs/agent/architecture.md). Rows on this screen are
-                        # (area scheme, parameter), so swap on the way in.
-                        for stored_key, stored_value in area_mappings.items():
-                            if (
-                                stored_key not in standard_pdso_parameters
-                                and stored_value in standard_pdso_parameters
-                            ):
-                                # Saved by an older Project Config, which wrote
-                                # {scheme: parameter}. Saving again fixes it.
-                                scheme, parameter = stored_key, stored_value
-                            else:
-                                scheme, parameter = stored_value, stored_key
-                            item = ConfigMappingItem(scheme, parameter, self)
-                            self.area_scheme_mappings.append(item)
-                    else:
-                        # Create default mappings if none exist
-                        default_mappings = [
-                            ("PDSO - GSF", "PDSO - GSF"),
-                            ("PDSO - NSF", "PDSO - NSF"),
-                            ("PDSO - ZFA", "PDSO - ZFA"),
-                        ]
-                        for key, value in default_mappings:
-                            item = ConfigMappingItem(key, value, self)
-                            self.area_scheme_mappings.append(item)
-
-                    # Subcategory mappings removed - will be auto-generated from area schemes
-
-                    # Load level mappings
-                    self.levels_mappings = []
-                    level_mappings = c.levels_mapping or {}
-                    # Convert .NET Dictionary to Python dict
-                    if level_mappings and hasattr(level_mappings, "Keys"):
-                        level_mappings = {
-                            k: level_mappings[k] for k in level_mappings.Keys
-                        }
-
-                    # Create mapping items
-                    for key, element_id in level_mappings.items():
-                        item = ConfigMappingItem(key, element_id, self)
-                        self.levels_mappings.append(item)
-
-                    # Sort by key using natural sort
-                    self.levels_mappings.sort(
-                        key=lambda item: ConfigMappingItem.natural_sort_key(item.key)
-                    )
-
-                    self.logger.info("Configuration loaded successfully")
-                    self.logger.debug(
-                        "Loaded {} area scheme mappings".format(
-                            len(self.area_scheme_mappings)
-                        )
-                    )
-                    self.logger.debug(
-                        "Loaded {} level mappings".format(len(self.levels_mappings))
-                    )
+                )
+                self.logger.debug(
+                    "Loaded {} level mappings".format(len(self.levels_mappings))
+                )
 
         except Exception as e:
             self.logger.error("Error loading configuration: {}".format(e))

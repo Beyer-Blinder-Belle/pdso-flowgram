@@ -65,6 +65,19 @@ SYNC_OPTIONS = {
 }
 
 
+def _workset_name(worksets, key, legacy_key):
+    """The workset name a config sets for one kind of element, or None.
+
+    Project Config and the API save the keys "data-silos", "program-volumes"
+    and "areas" (config_service.WORKSET_KEYS). Older code read "Data Silo",
+    "Program Volume" and "Area"; those are still read if present.
+    """
+    name = worksets.get(key) or worksets.get(legacy_key)
+    if not name or name == "Not enforced":
+        return None
+    return name
+
+
 def _set_pinned(elements, pinned):
     """Pin or unpin elements one by one.
 
@@ -89,6 +102,10 @@ def _set_pinned(elements, pinned):
 
 class PDSOSyncError(Exception):
     """A condition that stops a sync phase."""
+
+
+class _PhaseSkipped(Exception):
+    """A phase that cannot run because an earlier phase did not finish."""
 
 
 class PDSOSyncService(object):
@@ -264,7 +281,10 @@ class PDSOSyncService(object):
                 "  PV Data Update: {}".format(self._program_volume_data_update_option)
             )
 
-            # Phase 1: Area Harvest (0-33%)
+            # Phase 1: Area Harvest (0-33%). Phases 2 and 3 use its collections:
+            # if it fails, they are skipped.
+            ext_data_silo_collection = None
+            ext_level_collection = None
             try:
                 self.logger.info("\n" + "=" * 80)
                 self.logger.info("PHASE 1: AREA HARVEST")
@@ -294,10 +314,18 @@ class PDSOSyncService(object):
                 self.errors.append("Phase 1: {}".format(str(e)))
                 self.phases[0] = "error"
                 self.logger.error(traceback.format_exc())
-                # Continue to next phase
+
+            if ext_data_silo_collection is None:
+                self.logger.error(
+                    "Phases 2 and 3 were skipped because phase 1 did not finish."
+                )
+                self.phases[1] = "skipped"
+                self.phases[2] = "skipped"
 
             # Phase 2: Family Geometry (33-66%)
             try:
+                if ext_data_silo_collection is None:
+                    raise _PhaseSkipped()
                 self.logger.info("\n" + "=" * 80)
                 self.logger.info("PHASE 2: FAMILY GEOMETRY UPDATES")
                 self.logger.info("=" * 80)
@@ -317,6 +345,8 @@ class PDSOSyncService(object):
                 if self.phases[1] != "skipped":
                     self.phases[1] = "complete"
                 self.logger.info("✓ Phase 2 complete")
+            except _PhaseSkipped:
+                pass
             except Exception as e:
                 self.logger.error("Phase 2 error: {}".format(str(e)))
                 self.errors.append("Phase 2: {}".format(str(e)))
@@ -326,6 +356,8 @@ class PDSOSyncService(object):
 
             # Phase 3: Instance Updates (66-100%)
             try:
+                if ext_data_silo_collection is None:
+                    raise _PhaseSkipped()
                 self.logger.info("\n" + "=" * 80)
                 self.logger.info("PHASE 3: INSTANCE DATA UPDATES")
                 self.logger.info("=" * 80)
@@ -346,6 +378,8 @@ class PDSOSyncService(object):
                 if self.phases[2] != "skipped":
                     self.phases[2] = "complete"
                 self.logger.info("✓ Phase 3 complete")
+            except _PhaseSkipped:
+                pass
             except Exception as e:
                 self.logger.error("Phase 3 error: {}".format(str(e)))
                 self.errors.append("Phase 3: {}".format(str(e)))
@@ -356,7 +390,13 @@ class PDSOSyncService(object):
             self.completed = True
             self.current_step = "Complete!"
             self.progress_status = "Sync process completed"
-            self.completion_message = "✓ Data synchronization completed!"
+            if self.errors:
+                self.completion_message = (
+                    "✗ Sync finished with errors:\n{}\nCheck the console for "
+                    "details.".format("\n".join(self.errors))
+                )
+            else:
+                self.completion_message = "✓ Data synchronization completed!"
             self.completion_message_visible = True
 
             self.logger.info("\n" + "=" * 80)
@@ -367,7 +407,11 @@ class PDSOSyncService(object):
             if (
                 self.validation_warning_message
             ):
-                warning_summary = "\n\nWARNING: Some data silos had level mapping errors and were skipped.\nCheck console for details."
+                warning_summary = (
+                    "\n\nWARNING: Some programs have stacking errors. Their "
+                    "Program Volumes on levels that did not resolve were kept "
+                    "as they are.\nCheck console for details."
+                )
                 if self.completion_message:
                     self.completion_message += warning_summary
                 else:
@@ -587,10 +631,10 @@ class PDSOSyncService(object):
                         self.logger.info("Enforcing worksets for PDSOs and Areas")
 
                         # Get workset names from config
-                        worksets_dict = dict(config.worksets) if config.worksets else {}
+                        worksets_dict = _as_dict(config.worksets) if self.doc.IsWorkshared else {}
 
                         # Assign data silos to workset
-                        data_silo_workset = worksets_dict.get("Data Silo")
+                        data_silo_workset = _workset_name(worksets_dict, "data-silos", "Data Silo")
                         if data_silo_workset and data_silo_workset != "Not enforced":
                             workset = workset_coordinator.get_workset_by_name(
                                 data_silo_workset
@@ -615,7 +659,7 @@ class PDSOSyncService(object):
                                 )
 
                         # Assign areas to workset
-                        area_workset = worksets_dict.get("Area")
+                        area_workset = _workset_name(worksets_dict, "areas", "Area")
                         if area_workset and area_workset != "Not enforced":
                             workset = workset_coordinator.get_workset_by_name(
                                 area_workset
@@ -724,7 +768,7 @@ class PDSOSyncService(object):
                 continue
             # The geometry is not rebuilt, so its instances must stay where
             # the geometry was built: at the Data Silo point of the last build.
-            # (Reading .entity opens a transaction: this runs outside one.)
+            # (.entity is read without a transaction.)
             family.geometry_not_rebuilt = True
             entity = family.entity
             basepoints = _as_dict(getattr(entity, "area_basepoint", None))
@@ -862,11 +906,11 @@ class PDSOSyncService(object):
 
             try:
                 # Get workset name from config
-                worksets_dict = dict(config.worksets) if config.worksets else {}
+                worksets_dict = _as_dict(config.worksets) if self.doc.IsWorkshared else {}
                 self.logger.debug(
                     "[DEBUG] Config worksets dict (Phase 2): {}".format(worksets_dict)
                 )
-                pv_workset = worksets_dict.get("Program Volume")
+                pv_workset = _workset_name(worksets_dict, "program-volumes", "Program Volume")
                 self.logger.debug(
                     "[DEBUG] Retrieved pv_workset value (Phase 2): '{}'".format(
                         pv_workset
@@ -1109,11 +1153,11 @@ class PDSOSyncService(object):
 
             try:
                 # Get workset name from config
-                worksets_dict = dict(config.worksets) if config.worksets else {}
+                worksets_dict = _as_dict(config.worksets) if self.doc.IsWorkshared else {}
                 self.logger.debug(
                     "[DEBUG] Config worksets dict: {}".format(worksets_dict)
                 )
-                pv_workset = worksets_dict.get("Program Volume")
+                pv_workset = _workset_name(worksets_dict, "program-volumes", "Program Volume")
                 self.logger.debug(
                     "[DEBUG] Retrieved pv_workset value: '{}'".format(pv_workset)
                 )

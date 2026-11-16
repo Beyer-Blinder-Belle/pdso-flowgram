@@ -91,38 +91,49 @@ class PDSOFamilyManagerService(object):
         ):
             self.logger.debug("Processing Data Silo '{}'...".format(ext_data_silo.Id))
 
-            # Every Data Silo has an Extended_Program_Volume_Family wrapper, but the actual Family (rpw.Element) inside may be None
+            # A correlated Data Silo has a family wrapper, but the Family
+            # (rpw.Element) inside may be None. A Data Silo with no UID, or one
+            # that correlation could not pair, has no wrapper and is skipped.
             ext_program_volume_family = ext_data_silo.related_program_volume_family
+            uid = ext_data_silo.parameters["PDSO - Program UID"].value
 
             desired_family_name = "{}{}".format(
                 ext_program_volume_family_collection.program_volume_family_name_prefix,
-                str(ext_data_silo.parameters["PDSO - Program UID"].value),
+                str(uid),
             )
 
-            # One bad Area boundary must not abort the remaining Data Silos
-            try:
-                self._create_or_update_family_for_data_silo(
-                    ext_data_silo,
-                    ext_program_volume_family,
-                    desired_family_name,
-                    hashing_service,
-                    force_recompute,
-                )
-            except Exception as error:
-                self.logger.error(
-                    ".  Failed to create or update Program Volume family '{}' for Data Silo '{}': {}".format(
-                        desired_family_name, ext_data_silo.Id, error
+            if ext_program_volume_family is None or not uid:
+                self.logger.warning(
+                    ".  Skipping Data Silo '{}': {}".format(
+                        ext_data_silo.Id,
+                        "it has no Program UID"
+                        if not uid
+                        else "it has no Program Volume family (see the errors above)",
                     )
                 )
-                self.logger.debug(traceback.format_exc())
+            else:
+                # One bad Area boundary must not abort the remaining Data Silos
+                try:
+                    self._create_or_update_family_for_data_silo(
+                        ext_data_silo,
+                        ext_program_volume_family,
+                        desired_family_name,
+                        hashing_service,
+                        force_recompute,
+                    )
+                except Exception as error:
+                    self.logger.error(
+                        ".  Failed to create or update Program Volume family '{}' for Data Silo '{}': {}".format(
+                            desired_family_name, ext_data_silo.Id, error
+                        )
+                    )
+                    self.logger.debug(traceback.format_exc())
 
             # Call progress callback if provided
             if progress_callback:
-                family_name = (
-                    ext_program_volume_family.rpw_element.Name
-                    if ext_program_volume_family.rpw_element
-                    else desired_family_name
-                )
+                family_name = desired_family_name
+                if ext_program_volume_family is not None and ext_program_volume_family.rpw_element:
+                    family_name = ext_program_volume_family.rpw_element.Name
                 progress_callback(index, total_families, family_name)
 
         self.logger.info("Finished creating or updating Program Volume families...")
@@ -234,8 +245,17 @@ class PDSOFamilyManagerService(object):
                 )
             )
 
-            # Load the updated family back into the project
-            wrapped_family = self.load_family_into_document(fdoc)
+            # Load the updated family back into the project, then close the
+            # family document: an open one stays in memory for the session
+            try:
+                wrapped_family = self.load_family_into_document(fdoc)
+            finally:
+                try:
+                    fdoc.Close(False)
+                except Exception as error:
+                    self.logger.debug(
+                        ".  Could not close the family document: {}".format(error)
+                    )
 
             if wrapped_family is not None:
                 self.logger.debug("Successfully updated Program Volume family geometry")
@@ -286,7 +306,7 @@ class PDSOFamilyManagerService(object):
             bool: True if the Area outline, the Data Silo location or the
                 extrusion height differs from what the family was built with.
         """
-        # Read the entity once: each read of .entity opens a transaction
+        # Read the entity once
         entity = ext_program_volume_family.entity
         hashes = _as_dict(getattr(entity, "hashed_area_curve_geometry", None))
         basepoints = _as_dict(getattr(entity, "area_basepoint", None))
