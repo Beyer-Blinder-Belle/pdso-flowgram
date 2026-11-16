@@ -72,17 +72,10 @@ class PDSODataService(object):
             ext_program_volume_instance_collection (ExtendedProgramVolumeInstanceCollection): Collection for validation check.
         """
 
-        # Check validation status before proceeding
-        if not ext_program_volume_instance_collection.validation_passed:
-            self.logger.error(
-                "Cannot queue location updates - level mapping validation failed"
-            )
-            if ext_program_volume_instance_collection.validation_result:
-                self.logger.error(
-                    ext_program_volume_instance_collection.validation_result.get_summary_message()
-                )
-            return
-
+        # A Data Silo with stacking errors still moves its instances on the
+        # levels that did resolve: phase 2 built its geometry around the Data
+        # Silo's current location. Instances on other levels have no
+        # target_level and are not moved (see below).
         self.logger.info("Queueing Program Volume location updates from Data Silos...")
 
         for ext_data_silo in ext_data_silos:
@@ -108,6 +101,12 @@ class PDSODataService(object):
             ) in ext_data_silo.related_program_volume_instances:
                 # Skip instances marked for deletion
                 if ext_program_volume_instance.should_be_deleted:
+                    continue
+
+                # An instance with no target level is on a level that the
+                # stacking does not resolve to. Moving it would put it on the
+                # Data Silo's level (see commit_pending_changes), so it stays.
+                if ext_program_volume_instance.target_level is None:
                     continue
 
                 # Set desired location to Data Silo location (matching family geometry reference point)

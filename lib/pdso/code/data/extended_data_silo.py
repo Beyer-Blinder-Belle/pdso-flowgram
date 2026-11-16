@@ -72,6 +72,15 @@ class ExtendedDataSilo(object):
         # Init Logic
         self.queue_resetting_params()
 
+    @property
+    def has_stacking_errors(self):
+        """True if the stacking did not fully resolve to levels.
+
+        Then required_levels may lack levels that the user meant, and the
+        sync must not delete Program Volume instances on other levels.
+        """
+        return bool(self.parsing_errors or self.missing_level_mappings)
+
     def queue_resetting_params(self):
         """Queue parameter resets for sync operation.
 

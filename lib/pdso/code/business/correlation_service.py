@@ -524,6 +524,31 @@ class PDSOCorrelationService(object):
                 for el in expected_levels
                 if el is not None and el.rpw_level is not None
             )
+
+            # If the stacking did not fully resolve (a typo, or a key with no
+            # level mapping), required_levels is incomplete. An instance on a
+            # level that is missing from it may be on a level the user meant.
+            # Keep every instance of this Data Silo until the stacking is fixed.
+            if ext_data_silo.has_stacking_errors or (
+                canonical_level_id not in required_level_ids
+            ):
+                kept = [
+                    pv
+                    for pv in matching_ext_program_volumes
+                    if pv.LevelId.Value not in required_level_ids
+                ]
+                if kept:
+                    self.logger.warning(
+                        "Data Silo '{}': its stacking has errors, so {} Program "
+                        "Volume instance(s) on other levels were kept, not "
+                        "deleted. Fix the stacking and sync again.".format(
+                            data_silo_uid, len(kept)
+                        )
+                    )
+                for ext_program_volume in matching_ext_program_volumes:
+                    ext_program_volume.parent_data_silo = ext_data_silo
+                continue
+
             for ext_program_volume in matching_ext_program_volumes:
                 # Skip if this is a newly created instance (rpw_element is None)
                 if ext_program_volume.rpw_element is None:

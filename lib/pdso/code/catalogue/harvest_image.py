@@ -44,9 +44,10 @@ from System.Drawing.Imaging import ColorMatrix, ImageAttributes, ImageFormat  # 
 from rpw import DB  # noqa: E402
 from rpw.utils.dotnet import List  # noqa: E402
 
+from pdso.code.catalogue.harvest_features import pdso_kinds  # noqa: E402
+
 IMAGE_PIXELS = 1000  # width of the PNG
 MARGIN = 1.0  # ft of plan kept around the unit: room for its own walls
-DATA_SILO_PARAMETER = "PDSO - Program UID"
 
 # Model categories hidden in the image, besides every annotation category
 HIDDEN_CATEGORIES = (
@@ -202,10 +203,12 @@ class UnitImager(object):
                 except Exception:
                     pass
 
-            # The data silo is the unit's label, not part of its layout
+            # A data silo is the unit's label and a Program Volume is its
+            # generated copy. They are not part of the layout.
+            kind = pdso_kinds(doc)
             silos = List[DB.ElementId]()
             for instance in DB.FilteredElementCollector(doc, copy.Id).OfClass(DB.FamilyInstance):
-                if instance.LookupParameter(DATA_SILO_PARAMETER) is not None:
+                if kind(instance) is not None:
                     if instance.CanBeHidden(copy):
                         silos.Add(instance.Id)
             if silos.Count:

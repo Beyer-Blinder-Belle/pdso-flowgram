@@ -227,3 +227,12 @@ def make_entry_id(program, name):
     """program-name-timestamp, unique enough for a hand-built catalogue."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return "{}--{}--{}".format(slugify(program), slugify(name), stamp)
+
+
+# The form of make_entry_id: slug--slug--YYYYMMDD-HHMMSS
+ENTRY_ID_PATTERN = re.compile(r"^[a-z0-9-]+--[a-z0-9-]+--\d{8}-\d{6}$")
+
+
+def is_entry_id(text):
+    """True if the text is a layout id that make_entry_id made."""
+    return bool(text) and ENTRY_ID_PATTERN.match(text) is not None

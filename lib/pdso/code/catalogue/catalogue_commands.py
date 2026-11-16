@@ -146,14 +146,12 @@ class RoomIndex(object):
 def place(room, layout_id, clear_first):
     """Place a layout, select the placed elements, show the result."""
     doc = revit.doc
-    deleted = 0
-    if clear_first:
-        deleted = catalogue.clear_room_items(doc, room["id"])["deleted"]
     try:
-        result = catalogue.place_layout(doc, room["id"], layout_id)
+        result = catalogue.place_layout(doc, room["id"], layout_id, clear_first)
     except PDSOError as error:
         windows.show_message("The layout was not placed", [(str(error), "bad")], owner())
         return None
+    deleted = result["deleted"]
     ids = List[type(to_element_id("1"))]()
     for element_id in result["placed"]:
         ids.Add(to_element_id(str(element_id)))

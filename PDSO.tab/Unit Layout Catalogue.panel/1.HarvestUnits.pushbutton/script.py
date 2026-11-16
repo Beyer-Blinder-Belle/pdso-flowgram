@@ -28,7 +28,7 @@ from pdso.code.catalogue.catalogue_store import (  # noqa: E402
 from pdso.code.catalogue.catalogue_windows import PROJECT_TYPES  # noqa: E402
 from pdso.code.catalogue.harvest_features import boundary_edges, pdso_value  # noqa: E402
 from pdso.code.catalogue.harvest_image import UnitImager, thumbnail_data_uri  # noqa: E402
-from pdso.code.catalogue.layout_entry import slugify  # noqa: E402
+from pdso.code.catalogue.layout_entry import is_entry_id, slugify  # noqa: E402
 from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
     areas_with_data_silo,
     get_room_department,
@@ -51,7 +51,8 @@ def suggest_program(unit, rooms, fallback):
     """
     for name in ("PDSO - Unit Layout Type", "PDSO - Program Display Name", "PDSO - Program Type"):
         value = pdso_value(unit, name)
-        if value:
+        # A layout id that Pull from Catalogue wrote is not a program name
+        if value and not is_entry_id(str(value).strip()):
             return str(value)
     bedrooms = unit.get("bedrooms", 0)
     if bedrooms or unit.get("bathrooms") or unit.get("kitchens"):
