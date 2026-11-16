@@ -160,6 +160,11 @@ def recommend(entries, target_width, target_depth, target_area, target_outline, 
     recommendations, rejected = [], []
 
     for entry in entries:
+        # An unfurnished unit has nothing to place (and every check of its
+        # items would pass)
+        if not entry.items:
+            rejected.append((entry, "the layout has no items to place"))
+            continue
         placement, spare = best_placement(
             entry, target_width, target_depth, target_outline
         )

@@ -1417,7 +1417,7 @@ def harvest_layout(
 
     Args:
         room: Room number (for example "304"), or the element id of a Room or Area.
-        name: Name of the layout. Use a unique name; a layout with the same program and name replaces the earlier one. Default: "<program> - <area> sf".
+        name: Name of the layout. Default: "<program> - <area> sf". Each harvest makes a new layout (its id ends with the date and time); it never replaces an earlier one. To replace one, delete_layout the old id.
         program: Program that the layout serves. Default: the Room name.
         project_type: For example "Residential", "Office" or "K-12".
         notes: Free text.

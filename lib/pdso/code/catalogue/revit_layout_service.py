@@ -133,6 +133,14 @@ def describe_target(spatial_element):
 # ---------------------------------------------------------------------------
 
 
+def _model_id(doc):
+    """A stable id of the model: the UniqueId of its Project Information."""
+    try:
+        return doc.ProjectInformation.UniqueId
+    except Exception:
+        return ""
+
+
 def is_area_plan(view):
     return isinstance(view, DB.ViewPlan) and view.ViewType == DB.ViewType.AreaPlan
 
@@ -401,6 +409,9 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         "model": doc.Title,
         # The file's name only: a full path carries the user's name and folders
         "model_path": os.path.basename(doc.PathName or ""),
+        # Identifies the model (copies made with Save As keep it). Used to
+        # tell the same unit of the same model from another project's.
+        "model_id": _model_id(doc),
         "project": doc.Title,
         "element_id": str(id_value(spatial_element.Id)),
         "element_kind": "Area" if isinstance(spatial_element, DB.Area) else "Room",
