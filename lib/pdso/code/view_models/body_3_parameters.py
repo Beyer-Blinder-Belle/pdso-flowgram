@@ -209,7 +209,8 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
         super(PDSO_View_Model_3_Parameters, self).setup("3_parameters.xaml")
         self._is_initializing = True
         try:
-            PDSOExtensibleStorageService(revit.doc).ensure_schemas_exist()
+            # Opening the window doesn't change the model; Apply creates the
+            # PDSO configuration if the model has none
             self._load_state()
             self._wire_controls()
             self._refresh_rows_ui()
@@ -227,7 +228,12 @@ class PDSO_View_Model_3_Parameters(PDSO_Base_View_Model):
 
         storage_service = PDSOExtensibleStorageService(doc)
         config = storage_service.get_document_config()
-        self.data_silo_family_name = (config.data_silo_family_name or "") if config else ""
+        if config is not None:
+            self.data_silo_family_name = config.data_silo_family_name or ""
+        else:
+            self.data_silo_family_name = storage_service.default_config_values()[
+                "data_silo_family_name"
+            ]
         self.on_property_changed("add_to_family_label")
 
         registry = get_registry(doc, refresh=True)

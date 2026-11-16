@@ -141,30 +141,8 @@ class PDSOExtensibleStorageService(object):
             # Note: Map fields (dictionaries) are automatically initialized as empty
             # by the extensible storage system. No need to explicitly set to {}
             with PdsoConfigDocumentSchema(self.data_storage_element) as config:
-                # Set default values
-                config.version = "1.0.0"
-                config.last_run_timestamp = {
-                    "AreaHarvest": "Never",
-                    "VolumeGeometry": "Never",
-                    "VolumeData": "Never",
-                }
-                # The shipped Data Silo family for this Revit version (families.json)
-                config.data_silo_family_name = (
-                    "PDSO - Program Data Silo Object - Rvt{}".format(
-                        str(self.document.Application.VersionNumber)[-2:]
-                    )
-                )
-                config.uid_pattern = r"^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$"
-                # area_scheme_mappings - provide default area schemes
-                config.area_scheme_mappings = {
-                    "PDSO - GSF": "PDSO - GSF",
-                    "PDSO - NSF": "PDSO - NSF",
-                    "PDSO - ZFA": "PDSO - ZFA",
-                }
-                config.program_volume_family_name_prefix = "PDSO_ProgramVolume-"
-                config.program_volume_extrusion_height = (
-                    8.0  # Stored as raw value (feet)
-                )
+                for field_name, value in self.default_config_values().items():
+                    setattr(config, field_name, value)
                 # program_volume_generic_model_subcategory is map field - initialized as empty dict by default
                 # tethered_parameters is map field - initialized as empty dict by default
                 # levels_mapping is map field - initialized as empty dict by default
@@ -176,6 +154,33 @@ class PDSOExtensibleStorageService(object):
         except Exception as e:
             logger.error("Failed to initialize document schema: {}".format(e))
             return False
+
+    def default_config_values(self):
+        """The values a new PDSO configuration starts with, as a dict.
+
+        Project Config shows these for a model that has no configuration yet,
+        without saving them; initialize_document_config saves them.
+        """
+        return {
+            "version": "1.0.0",
+            "last_run_timestamp": {
+                "AreaHarvest": "Never",
+                "VolumeGeometry": "Never",
+                "VolumeData": "Never",
+            },
+            # The shipped Data Silo family for this Revit version (families.json)
+            "data_silo_family_name": "PDSO - Program Data Silo Object - Rvt{}".format(
+                str(self.document.Application.VersionNumber)[-2:]
+            ),
+            "uid_pattern": r"^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$",
+            "area_scheme_mappings": {
+                "PDSO - GSF": "PDSO - GSF",
+                "PDSO - NSF": "PDSO - NSF",
+                "PDSO - ZFA": "PDSO - ZFA",
+            },
+            "program_volume_family_name_prefix": "PDSO_ProgramVolume-",
+            "program_volume_extrusion_height": 8.0,  # feet
+        }
 
     def ensure_schemas_exist(self):
         """Check for all schemas and initialize document schema if missing.
@@ -293,6 +298,9 @@ class PDSOExtensibleStorageService(object):
             BaseSchema context manager handles its own transaction via __exit__.
         """
         try:
+            if not self.check_document_pdso_config_schema_exists():
+                # The first save of a model makes the configuration
+                self.ensure_schemas_exist()
             if not self.check_document_pdso_config_schema_exists():
                 logger.error("Cannot update config - schema doesn't exist")
                 return False

@@ -50,6 +50,16 @@ from pdso.code.business.parameter_registry_service import (
 from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
 
 
+class _DefaultConfig(object):
+    """The default configuration values, read like a stored configuration."""
+
+    def __init__(self, values):
+        self.levels_mapping = {}
+        self.worksets = {}
+        for name, value in values.items():
+            setattr(self, name, value)
+
+
 class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
     """ViewModel for Setup and Configuration UI.
 
@@ -133,13 +143,8 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         self.is_initializing = True
 
         try:
-            # Ensure schemas exist and initialize with defaults if needed
-            self.logger.info("Ensuring extensible storage schemas exist...")
-            schema_status = self.ext_storage_service.ensure_schemas_exist()
-
-            if not schema_status["success"]:
-                self.logger.warning("Some schemas missing or failed to initialize")
-
+            # Opening the window doesn't change the model: a model with no
+            # PDSO configuration shows the defaults, and Save creates it.
             # Load configuration from storage
             self._load_config_from_storage()
 
@@ -159,6 +164,9 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             self.logger.error("Error during setup: {}".format(e))
         finally:
             self.is_initializing = False
+            # Defaults shown for a model with no configuration are not saved yet
+            if getattr(self, "_showing_defaults", False):
+                self.has_unsaved_changes = True
 
     # =============================================================================
     # Observable Properties - Simple Fields
@@ -398,13 +406,15 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         self.logger.info("Loading configuration from extensible storage...")
 
         try:
-            # Check if schema exists first
-            if not self.ext_storage_service.check_document_pdso_config_schema_exists():
-                self.logger.warning("Document schema doesn't exist - using defaults")
-                return
-
-            # Get config context manager
-            config = self.ext_storage_service.get_document_config()
+            if self.ext_storage_service.check_document_pdso_config_schema_exists():
+                config = self.ext_storage_service.get_document_config()
+            else:
+                self.logger.info(
+                    "This model has no PDSO configuration yet. Showing the "
+                    "defaults; Save creates it."
+                )
+                config = _DefaultConfig(self.ext_storage_service.default_config_values())
+                self._showing_defaults = True
             if config:
                 # Read without "with": its exit writes the config back
                 c = config

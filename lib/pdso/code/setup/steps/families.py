@@ -45,9 +45,43 @@ def run(ctx, data):
 
 
 def _load_family(ctx, spec):
-    name = ctx.expand(spec.get("name", ""))
+    # "name" may be a list: the first name that is loaded counts (a newer
+    # Revit loads and upgrades the newest shipped family, whose name is kept)
+    names = ctx.expand(spec.get("name", ""))
+    if not isinstance(names, list):
+        names = [names]
+    names = [name for name in names if name]
+    name = names[0] if names else ""
     on_existing = spec.get("on_existing", "skip")
-    family = revit_utils.find_family(ctx.doc, name) if name else None
+    family = next(
+        (
+            found
+            for found in (revit_utils.find_family(ctx.doc, n) for n in names)
+            if found is not None
+        ),
+        None,
+    )
+
+    # Project Config runs before Quick Setup. If it names a Data Silo family
+    # that is loaded and is not this one, that family is the Data Silo family:
+    # the shipped family is not loaded, and the tracked parameters go into the
+    # user's family.
+    if spec.get("use_as_data_silo_family"):
+        chosen = ctx.pdso_config["data_silo_family"]
+        if (
+            chosen
+            and chosen not in names
+            and revit_utils.find_family(ctx.doc, chosen) is not None
+        ):
+            ctx.add(
+                "Project Config",
+                status.SKIPPED,
+                "Keeping the Data Silo family chosen in Project Config ('{}'); "
+                "'{}' was not loaded".format(chosen, name),
+            )
+            if spec.get("add_tracked_parameters", True):
+                _add_tracked_parameters(ctx, chosen)
+            return
 
     candidates = [ctx.resolve_path(path) for path in spec.get("files", [])]
     path = next((p for p in candidates if os.path.isfile(p)), None)
@@ -56,10 +90,18 @@ def _load_family(ctx, spec):
     if family is not None and on_existing == "skip":
         ctx.add(label, status.SKIPPED, "Already loaded")
     elif path is None:
+        hint = ""
+        if spec.get("use_as_data_silo_family"):
+            hint = (
+                " The shipped Data Silo family needs Revit 2026 or later. In an "
+                "older Revit, choose a Data Silo family in Project Config."
+            )
         ctx.add(
             label,
             status.FAILED,
-            "No family file found. Looked for: {}".format("; ".join(candidates)),
+            "No family file found. Looked for: {}.{}".format(
+                "; ".join(candidates), hint
+            ),
         )
     else:
         family_ref = clr.Reference[DB.Family]()

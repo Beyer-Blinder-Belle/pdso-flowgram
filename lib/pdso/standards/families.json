@@ -1,10 +1,14 @@
 {
-  "_comment": "Families to load. 'files' are tried in order and the first that exists is loaded. Relative paths resolve against the folder this file is in.",
+  "_comment": "Families to load. 'files' are tried in order and the first that exists is loaded. 'name' may be a list: the first name that is loaded counts as the family. Relative paths resolve against the folder this file is in. A Revit version newer than the shipped family loads (and upgrades) the newest shipped one.",
   "families": [
     {
-      "name": "PDSO - Program Data Silo Object - Rvt{revit_yy}",
+      "name": [
+        "PDSO - Program Data Silo Object - Rvt{revit_yy}",
+        "PDSO - Program Data Silo Object - Rvt26"
+      ],
       "files": [
-        "{repo_dir}/families/PDSO - Program Data Silo Object - Rvt{revit_yy}.rfa"
+        "{repo_dir}/families/PDSO - Program Data Silo Object - Rvt{revit_yy}.rfa",
+        "{repo_dir}/families/PDSO - Program Data Silo Object - Rvt26.rfa"
       ],
       "on_existing": "skip",
       "use_as_data_silo_family": true

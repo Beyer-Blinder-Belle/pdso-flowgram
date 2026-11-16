@@ -1,6 +1,6 @@
 {
-  "_comment": "View templates to create. on_existing: 'update' re-applies these settings to a template that already exists; 'skip' leaves it alone. See README.md for every option.",
-  "on_existing": "update",
+  "_comment": "View templates to create. on_existing: 'skip' (default) leaves a template that already exists alone, so changes made in the model are kept; 'update' re-applies these settings to it. See README.md for every option.",
+  "on_existing": "skip",
   "view_templates": [
     {
       "name": "PDSO - Area Plan - Working",

@@ -12,7 +12,9 @@ VISIBILITY_MODES = ("unchanged", "visible", "hidden")
 
 
 def run(ctx, data):
-    on_existing = data.get("on_existing", "update")
+    # Like every other step, an existing item is left alone unless the
+    # standards ask for "update"
+    on_existing = data.get("on_existing", "skip")
     for spec in data.get("view_templates", []):
         if not spec.get("enabled", True):
             continue

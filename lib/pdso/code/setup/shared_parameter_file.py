@@ -3,8 +3,8 @@
 
 Revit can only add a shared parameter to a project (Manage > Project Parameters)
 from a shared parameter file, and the GUIDs must match the ones the PDSO tools
-look up. This module writes that file from the same parameters.json that Model
-Setup reads, so the two can't drift apart.
+look up. This module writes that file from parameters.json, which mirrors the
+catalog in shared_parameter_constants.py.
 
 It has no Revit or pyRevit imports, so it also runs with plain Python. Run this
 file to regenerate the shipped default:
