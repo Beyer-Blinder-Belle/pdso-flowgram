@@ -93,6 +93,41 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 - [ ] **R7 → K15.** See K15.
 - [ ] **R8 → K16.** See K16.
 
+### Review of the S, A, U and C fixes
+
+A second review, again by a reviewer with no context from the fixing, ran on the four commits of `fix/audit-lower-priority` and found 13 issues. All are fixed in the follow-up commit.
+
+- [x] **V1 (C4).** `catalogue_lock` looped forever, freezing Revit, when the folder couldn't be written. A run's own lock could also be left behind.
+  *Fixed:* a folder that can't be written is reported, and the handle is always closed.
+- [x] **V2 (A9).** Single-parameter errors came back only as warnings, and `setup_model` dropped them.
+  *Fixed:* any error is a 409 again, and the message says whether the tracked list was saved.
+- [x] **V3 (C4).** In IronPython the "atomic" write deleted the old file before the rename, and a failed rename lost the entry.
+  *Fixed:* `System.IO.File.Replace` / `File.Move`.
+- [x] **V4 (C3).** `model_id` alone could match projects made from the same template.
+  *Fixed:* a match needs the same saved file name too.
+- [x] **V5 (C4).** A long run's lock could be taken as stale. A run could also remove another run's lock, and clock skew between computers counted.
+  *Fixed:* `touch()` per unit, an owner token, and age measured against a probe file in the same folder.
+- [x] **V6 (U2).** On an older Revit, Quick Setup still tried to load the 2026 family.
+  *Fixed:* files for a newer Revit (`RvtNN` > the running version) are skipped, a failed load is caught, and both failures carry the version hint.
+- [x] **V7 (S9).** Workset enforcement could fail the whole worksets-and-pinning transaction on an element another user owns.
+  *Fixed:* such elements are skipped (`WorksharingUtils.GetCheckoutStatus`). **⚠ Revit**
+- [x] **V8 (A8).** NaN and infinity passed `to_number`.
+  *Fixed:* they are refused.
+- [x] **V9 (A12).** The numeric match also applied to text fields ("01" matched "1").
+  *Fixed:* only number fields are compared as numbers.
+- [x] **V10 (A6).** Nested captures that closed out of order left the logger patched.
+  *Fixed:* one shared patch, removed when the last capture closes. Tested with stubs of both pyRevit logger builds.
+- [x] **V11 (A11).** A bad hole loop could roll back the whole `color_areas`.
+  *Fixed:* building the loops is inside the fallback.
+- [x] **V12 (A3).** The acceptance runner sent a write again after a timeout during send. The MCP message didn't mention that the API might not be running behind the tunnel.
+  *Fixed:* both.
+- [x] **V13 (S3).** A failed phase 1 marked phases 2 and 3 "skipped", like a phase the user turned off.
+  *Fixed:* they are marked "not run".
+
+Still open from this review:
+- The workset transaction name inside `WorksetCoordinationService` (K8).
+- `assign_elements_to_workset` for Program Volume families (S9 ⚠ Revit).
+
 ## S. Sync, preflight and audit bugs
 
 - [x] **S1.** Family documents are never closed after a successful `LoadFamily` (`family_manager_service.py:230-247`; `Close` is only called at 357 and 427). Each rebuilt Program Volume leaks an open family document.
@@ -134,7 +169,7 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 - [x] **A8.** Bad numeric input returns 500 with a traceback, not 400: `config_service.py:149`, `model_service.py:39`, `program_service.py:497, 677-678`, `area_drafting_service.py:468, 488, 510, 524`.
   *Done: `revit_helpers.to_number` in config, model, program and area drafting.*
 - [x] **A9.** `parameter_registry.apply()` commits partial bindings, then the API reports 409. A tracked parameter that fails to resolve is silently untracked (`parameter_registry_service.py:509-536`, `parameter_service.py:225-241`).
-  *Done: a previously tracked parameter that fails stays tracked with a warning; once the tracked list is saved, per-parameter errors come back as warnings, not 409.*
+  *Done: a previously tracked parameter that fails stays tracked with a warning. Any error is still a 409, which now says whether the tracked list was saved (review V2).*
 - [x] **A10.** `move_area` and `create_area` can leave a new area plan behind after a failure (`area_drafting_service.py:373-378`).
   *Done: the area plan is made inside the transaction group (create, set outline, move/scale).*
 - [x] **A11.** `color_areas` clears and colors in two undo steps, changes the crop box permanently, and fills over holes (`visualization_service.py:328-361`).
@@ -166,9 +201,9 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 - [x] **C2.** An entry with no items always "fits" (`all([])`), so Pull offers unfurnished units (`layout_recommender.best_placement`). *Partly done with B2: when nothing is placed, no Data Silo is tagged. The recommender still offers empty entries.*
   *Done: the recommender rejects entries with no items.*
 - [x] **C3.** `remove_previous` matches only the model's basename plus element id, or the title "Project1" for unsaved models, so it can delete another project's harvest. It also deletes before the new save succeeds (`catalogue_store.py:115-121`).
-  *Done: `source.model_id`; unsaved models never match; the new entry is saved before the old one is removed.*
+  *Done: entries record `source.model_id`. A match needs the same saved file name and, when both entries have one, the same `model_id` (review V4: projects from one template can share it). Unsaved models never match. The new entry is saved before the old one is removed.*
 - [x] **C4.** Catalogue numbers are counted per folder, but Pull shows several folders together. On a shared drive the numbering races, and the JSON writes aren't atomic (`catalogue_store.py:132-173`).
-  *Done: `_write_text` writes a temporary file then replaces; Harvest All Units holds `catalogue_lock` while it numbers. The same number can still mean different shapes in different folders (Pull shows several): open, see K17.*
+  *Done: `_write_text` writes a temporary file, then replaces the file in one step (`os.replace`, or `File.Replace` in IronPython). Harvest All Units holds `catalogue_lock` while it numbers: the lock carries an owner token, is touched for each unit, and stale locks are judged by the shared folder's clock. The same number can still mean different shapes in different folders, since Pull shows several; that stays open as K17.*
 - [x] **C5.** The MCP `harvest_layout` docstring says a re-harvest replaces the earlier one. It doesn't. Two harvests in the same second overwrite each other (`mcp/pdso_mcp_server.py:1359`, `layout_entry.py:226-229`).
   *Done: `-2`, `-3`... suffix; MCP docstring corrected.*
 - [x] **C6.** `POST catalogue/harvest` takes an undocumented `folder` that can be any path (`catalogue_handlers.py:120-131`).

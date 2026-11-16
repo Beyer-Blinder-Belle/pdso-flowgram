@@ -99,11 +99,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-S12. Phase 1 fails** [S3]
   Model: a model with a PDSO configuration and no Data Silos.
   Steps: sync.
-  Expected: the window says the sync finished with errors and names phase 1. Phases 2 and 3 show as skipped, with no unbound-variable error in the log.
+  Expected: the window says the sync finished with errors and names phase 1. Phases 2 and 3 show as "not run", with no unbound-variable error in the log.
 - [ ] **T-S13. Worksets are enforced** [S9]
   Model: M-S1.
   Steps: put a Data Silo, an Area and a Program Volume on the wrong workset, then sync with the workset options set to "Fix".
   Expected: all three move to the workset named in Project Config. Record whether Program Volume *families* accept the change (they may not).
+- [ ] **T-S15. Worksets with an element owned by someone else** [S9]
+  Model: M-S1, with a second user who has one Data Silo borrowed.
+  Steps: sync with the Area workset option set to "Fix" and pinning set to "Pin".
+  Expected: the other user's Data Silo is skipped; everything else gets its workset and is pinned.
 - [ ] **T-S14. The sync log comes back over the API** [A6]
   Steps: `run_sync` on a model with one warning (for example M-D5).
   Expected: the reply's `log` lists the warning.
@@ -185,11 +189,11 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the empty layout is not offered; `recommend_layouts` lists it under "rejected" with "the layout has no items to place". [Fixed: C2]
 - [ ] **T-C8. Re-harvest replaces only the same unit** [C3]
   Steps: run Harvest All Units twice in one saved model. Then run it once in an unsaved model ("Project1"), and once in another unsaved model with the same unit ids.
-  Expected: the second run in the saved model replaces its first entries. The two unsaved models keep their own entries.
+  Expected: the second run in the saved model replaces its first entries. The two unsaved models keep their own entries. A second project made from the same template, saved under another name, keeps its own entries too.
 - [ ] **T-C9. Two people harvest into one folder** [C4]
   Model: M-S5.
   Steps: two people run Harvest All Units into the shared folder at the same time.
-  Expected: one waits, or gets "Someone else is saving to the catalogue folder". No two shapes share a number, no JSON is half written, and no `.catalogue.lock` is left behind.
+  Expected: one waits, or gets "Someone else is saving to the catalogue folder". No two shapes share a number, no JSON is half written, and no `.catalogue.lock` is left behind. A folder you can't write to gives a message at once, without freezing Revit.
 - [ ] **T-C10. Two harvests in one second** [C5]
   Steps: call `harvest_layout` twice quickly on the same Room with the same name.
   Expected: two layouts; the second id ends in `-2`.
@@ -206,6 +210,9 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S4, a new model.
   Steps: Quick Setup, twice.
   Expected: the Rvt26 family loads (upgraded) and is set as the Data Silo family. The second run skips it.
+- [ ] **T-U2b. Revit 2025** [U2]
+  Steps: run Quick Setup in Revit 2025, if one is available.
+  Expected: the families step fails with the hint that the shipped family needs Revit 2026, and it doesn't try to load the 2026 file.
 - [ ] **T-U3. A chosen Data Silo family** [U3]
   Model: M-S3.
   Steps: Quick Setup.
@@ -237,7 +244,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: programs with 1 (stored as 1.0) are listed.
 - [ ] **T-P6. A parameter that fails stays tracked** [A9]
   Steps: make one tracked parameter fail to set up (for example a name clash with a project parameter), then `create_parameter` for another one.
-  Expected: 200 with "Error: ..." warnings, and the failing parameter is still tracked.
+  Expected: a 409 that names the failing parameter and says the tracked list was saved. The failing parameter is still tracked.
 - [ ] **T-P7. SSH drop during a write** [A3, A4]
   Steps: with `PDSO_SSH_HOST` set, stop the tunnel during a long `run_sync`.
   Expected: the tool says the change may have been made and does not send it again. A timed-out write says Revit may still make it.

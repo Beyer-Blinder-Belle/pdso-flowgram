@@ -290,8 +290,9 @@ def api(
         if not read_only and not _not_sent(error):
             raise ToolError(
                 f"The connection to Revit dropped during '{method} {path}' ({error}). "
-                "Revit may have made the change. Check the model (for example with "
-                "a list tool) before you send it again."
+                "Revit may have made the change, or the API may not be running "
+                "behind the SSH port forward. Check the model (for example with "
+                "get_status or a list tool) before you send it again."
             )
     _open_tunnel()
     try:

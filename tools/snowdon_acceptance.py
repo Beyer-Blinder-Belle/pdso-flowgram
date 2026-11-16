@@ -149,8 +149,10 @@ def api(
             raise SystemExit(f"The PDSO API does not answer at {API_URL}: {error}")
         reason = getattr(error, "reason", error)
         dropped = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+        # A timeout while sending is wrapped too, but the request may have
+        # reached Revit
         not_sent = isinstance(error, urllib.error.URLError) and not isinstance(
-            reason, dropped
+            reason, dropped + (TimeoutError,)
         )
         if method != "GET" and not not_sent:
             raise SystemExit(

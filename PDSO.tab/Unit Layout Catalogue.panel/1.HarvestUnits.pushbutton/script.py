@@ -219,6 +219,7 @@ if __name__ == "__main__":
         replaced = 0
 
         for element in elements:
+            lock.touch()
             try:
                 result = harvest(element, "", "", project_type)
                 if result is None:

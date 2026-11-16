@@ -397,16 +397,16 @@ def _draw_area_colors(doc, view, drawable, labels, color_of, legend, loop_of, el
         color = color_of(value)
 
         # The holes of the Area are holes of the filled region too
-        loops = [loop_of(outline)] + [
-            loop_of(hole) for hole in area.get("holes") or [] if len(hole) >= 3
-        ]
         try:
+            loops = [loop_of(outline)] + [
+                loop_of(hole) for hole in area.get("holes") or [] if len(hole) >= 3
+            ]
             DB.FilledRegion.Create(
                 doc, _region_type(doc, color).Id, view.Id, _curve_loop_list(loops)
             )
         except Exception:
-            # A hole that touches the outline makes an invalid region:
-            # fill the outline alone rather than nothing
+            # A hole with a very short edge, or one that touches the outline,
+            # makes an invalid region: fill the outline alone rather than nothing
             DB.FilledRegion.Create(
                 doc,
                 _region_type(doc, color).Id,

@@ -84,7 +84,7 @@ The paper saves each layout 8 times (rotated and mirrored). Here one copy is sav
 
 **Units.** Every number is in Revit's internal units, and each file says so: `"units": {"length": "ft", "area": "ft2", "angle": "rad"}`. A metric model is harvested in feet too, so entries from any model compare directly.
 
-**Source model.** `source.model` is the Revit file's title, `source.model_path` its file name (not the full path, which would carry the user's folders), and `source.model_id` the UniqueId of the model's Project Information. Harvest All Units replaces an earlier entry of the same unit only when `model_id` matches (or, for older entries, the file name of a saved model).
+**Source model.** `source.model` is the Revit file's title, `source.model_path` its file name (not the full path, which would carry the user's folders), and `source.model_id` the UniqueId of the model's Project Information. Harvest All Units replaces an earlier entry of the same unit only when both models were saved to files with the same name and, if both entries have one, the same `model_id`.
 
 Files written before this (`schema_version` 1) still load; they have empty `features`.
 

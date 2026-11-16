@@ -208,10 +208,18 @@ def list_programs(doc, filters=None):
         if key != "level" and key not in known:
             raise PDSOError("Unknown filter field: '{}'".format(key))
 
+    numeric = set(
+        parameter.field
+        for parameter in parameters
+        if parameter.parameter_type in ("number", "area", "length", "integer")
+    )
     programs = []
     for element in _silo_instances(doc, config["data_silo_family_name"]):
         data = _summary(doc, element, parameters)
-        if all(_filter_matches(data.get(key), value) for key, value in filters.items()):
+        if all(
+            _filter_matches(data.get(key), value, key in numeric)
+            for key, value in filters.items()
+        ):
             programs.append(data)
     return sorted(programs, key=lambda item: (item["level"] or "", item["uid"] or ""))
 
@@ -442,14 +450,17 @@ def _normalize_fields(doc, fields):
     return normalized
 
 
-def _filter_matches(stored, wanted):
+def _filter_matches(stored, wanted, numeric=False):
     """True if a stored field value equals a filter value.
 
-    Query strings are text, so "1" must match a stored 1.0: numbers are
-    compared as numbers. Everything else is compared as text.
+    Query strings are text, so "1" must match a stored 1.0: the values of a
+    number field are compared as numbers. Text fields are compared as text
+    ("01" is not "1").
     """
     if str(stored) == str(wanted):
         return True
+    if not numeric:
+        return False
     try:
         return abs(float(stored) - float(wanted)) < 1e-9
     except (TypeError, ValueError):

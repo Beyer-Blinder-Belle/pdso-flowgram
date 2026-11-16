@@ -78,6 +78,17 @@ def _workset_name(worksets, key, legacy_key):
     return name
 
 
+def _owned_by_other_user(doc, element):
+    """True if another user owns the element in a workshared model."""
+    if not doc.IsWorkshared:
+        return False
+    try:
+        status = DB.WorksharingUtils.GetCheckoutStatus(doc, element.Id)
+        return status == DB.CheckoutStatus.OwnedByOtherUser
+    except Exception:
+        return False
+
+
 def _set_pinned(elements, pinned):
     """Pin or unpin elements one by one.
 
@@ -122,6 +133,7 @@ class PDSOSyncService(object):
         completion_message (str): Message to show when the sync is complete
         errors (list[str]): Errors that stopped a phase
         phases (list[str]): State of each phase: "pending", "complete", "skipped"
+            (turned off), "not run" (an earlier phase failed)
             or "error"
     """
 
@@ -319,8 +331,9 @@ class PDSOSyncService(object):
                 self.logger.error(
                     "Phases 2 and 3 were skipped because phase 1 did not finish."
                 )
-                self.phases[1] = "skipped"
-                self.phases[2] = "skipped"
+                # Not "skipped", which means the user turned the phase off
+                self.phases[1] = "not run"
+                self.phases[2] = "not run"
 
             # Phase 2: Family Geometry (33-66%)
             try:
@@ -641,13 +654,18 @@ class PDSOSyncService(object):
                             )
                             if workset:
                                 for ds in ext_data_silo_collection.extended_data_silos:
+                                    element = ds.rpw_element.unwrap()
+                                    # An element another user owns can't
+                                    # change; it would fail the whole commit
+                                    if _owned_by_other_user(self.doc, element):
+                                        continue
                                     try:
-                                        param = ds.rpw_element.unwrap().get_Parameter(
+                                        param = element.get_Parameter(
                                             DB.BuiltInParameter.ELEM_PARTITION_PARAM
                                         )
                                         if param and not param.IsReadOnly:
                                             param.Set(workset.Id.IntegerValue)
-                                    except:
+                                    except Exception:
                                         pass
                                 self.logger.info(
                                     "Assigned {} PDSOs to workset '{}'".format(
@@ -668,6 +686,10 @@ class PDSOSyncService(object):
                                 area_count = 0
                                 for scheme in area_scheme_objects:
                                     for area in scheme.extended_areas:
+                                        if _owned_by_other_user(
+                                            self.doc, area.rpw_element.unwrap()
+                                        ):
+                                            continue
                                         try:
                                             param = area.rpw_element.unwrap().get_Parameter(
                                                 DB.BuiltInParameter.ELEM_PARTITION_PARAM

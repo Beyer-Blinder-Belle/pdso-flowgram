@@ -10,9 +10,14 @@ handler on the root logger:
 - In older pyRevit, the logger is a ``logging.Logger`` subclass with
   ``propagate = False``.
 
-So LogCapture also wraps the pyRevit logger class for the duration of the
-block: ``_emit`` in the newer runtime, ``handle`` in the older one. The
-original method is put back on exit.
+So while at least one LogCapture is open, the pyRevit logger class is wrapped
+once (``_emit`` in the newer runtime, ``handle`` in the older one). The
+wrapper gives each record to every open capture. When the last capture
+closes, the original method is put back, whatever order captures close in.
+
+The wrapper is on the class, so a capture also gets records that other
+scripts log while it is open. The API runs one request at a time, so in
+practice those are the records of that request.
 """
 
 # Python standard libraries
@@ -47,6 +52,61 @@ def _plain_function(method):
     return getattr(method, "__func__", getattr(method, "im_func", method))
 
 
+# The open captures, and how to undo the wrapper: (class, name, own, original)
+_open_captures = []
+_patch = []
+
+
+def _install():
+    cls = _pyrevit_logger_class()
+    if cls is None:
+        return
+    if hasattr(cls, "_emit"):
+        # Newer pyRevit: the facade bypasses Python logging
+        name = "_emit"
+
+        def make(original):
+            def _emit(logger, level, message, args=(), *rest, **kwargs):
+                for capture in list(_open_captures):
+                    capture._add(level, message, args)
+                return original(logger, level, message, args, *rest, **kwargs)
+
+            return _emit
+
+    elif issubclass(cls, logging.Logger):
+        # Older pyRevit: a Logger that does not propagate to the root
+        name = "handle"
+
+        def make(original):
+            def handle(logger, record):
+                if not logger.propagate:
+                    for capture in list(_open_captures):
+                        if record.levelno >= capture._level:
+                            capture._handler.handle(record)
+                return original(logger, record)
+
+            return handle
+
+    else:
+        return
+    own = name in vars(cls)
+    original = vars(cls)[name] if own else getattr(cls, name)
+    setattr(cls, name, make(_plain_function(original)))
+    _patch.append((cls, name, own, original))
+
+
+def _uninstall():
+    while _patch:
+        cls, name, own, original = _patch.pop()
+        try:
+            if own:
+                setattr(cls, name, original)
+            else:
+                delattr(cls, name)
+        except Exception:
+            pass
+
+
 class LogCapture(object):
     """Context manager that collects the log records at or above a level.
 
@@ -60,7 +120,6 @@ class LogCapture(object):
         self._handler = _ListHandler(level)
         self.records = self._handler.records
         self._level = level
-        self._restore = []
 
     def _add(self, level, message, args):
         if level < self._level:
@@ -73,52 +132,17 @@ class LogCapture(object):
             {"level": logging.getLevelName(level).lower(), "message": "{}".format(text)}
         )
 
-    def _wrap(self, cls, name, make):
-        own = name in vars(cls)
-        original = vars(cls)[name] if own else getattr(cls, name)
-        setattr(cls, name, make(_plain_function(original)))
-        self._restore.append((cls, name, own, original))
-
     def __enter__(self):
         logging.getLogger().addHandler(self._handler)
-        cls = _pyrevit_logger_class()
-        if cls is None:
-            return self
-        capture = self
-        if hasattr(cls, "_emit"):
-            # Newer pyRevit: the facade bypasses Python logging
-
-            def make(original):
-                def _emit(logger, level, message, args=(), *rest, **kwargs):
-                    capture._add(level, message, args)
-                    return original(logger, level, message, args, *rest, **kwargs)
-
-                return _emit
-
-            self._wrap(cls, "_emit", make)
-        elif issubclass(cls, logging.Logger):
-            # Older pyRevit: a Logger that does not propagate to the root
-
-            def make(original):
-                def handle(logger, record):
-                    if not logger.propagate and record.levelno >= capture._level:
-                        capture._handler.handle(record)
-                    return original(logger, record)
-
-                return handle
-
-            self._wrap(cls, "handle", make)
+        if not _open_captures:
+            _install()
+        _open_captures.append(self)
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         logging.getLogger().removeHandler(self._handler)
-        for cls, name, own, original in reversed(self._restore):
-            try:
-                if own:
-                    setattr(cls, name, original)
-                else:
-                    delattr(cls, name)
-            except Exception:
-                pass
-        self._restore = []
+        if self in _open_captures:
+            _open_captures.remove(self)
+        if not _open_captures:
+            _uninstall()
         return False

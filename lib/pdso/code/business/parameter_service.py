@@ -231,18 +231,20 @@ def _apply(doc, desired, removed, unbind_removed=False):
         unbind_removed=unbind_removed,
     )
     errors = [text for level, text in report.messages if level == "error"]
-    warnings = [text for level, text in report.messages if level == "warning"]
-    if not report.tracked:
-        # Nothing was saved to the configuration
+    if errors or not report.success:
+        saved = ""
+        if report.tracked:
+            # The model changed even so: say what was kept
+            saved = " The tracked list was saved with {} parameters.".format(
+                len(report.tracked)
+            )
         raise PDSOError(
-            "The parameters were not set up: {}".format(
-                " ".join(errors) or "unknown error"
+            "The parameters were not all set up: {}{}".format(
+                " ".join(errors) or "unknown error", saved
             ),
             409,
         )
-    # The tracked list was saved, so the model changed: report the errors of
-    # single parameters as warnings instead of failing the whole request
-    return ["Error: {}".format(text) for text in errors] + warnings
+    return [text for level, text in report.messages if level == "warning"]
 
 
 def _require_configured(doc):
