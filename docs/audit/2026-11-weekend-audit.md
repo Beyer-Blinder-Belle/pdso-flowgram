@@ -6,7 +6,7 @@ This file tracks the fixes. Each issue has an ID; use it in commit messages and 
 
 Status: `[ ]` open · `[x]` fixed · `[-]` won't fix (give the reason) · **⚠ Revit** = needs checking in a live Revit after the fix.
 
-**Progress:** B1–B8 are fixed in PR #22 (branch `fix/audit-model-damage`, API 1.6), and so are R1–R6, the review's findings on those fixes. Only R1 has been checked in Revit so far. The Revit test cases, and the test model they need, are listed in [docs/testing/test-cases.md](../testing/test-cases.md).
+**Progress:** B1–B8 and R1–R6 are fixed in PR #22 (merged; API 1.6). S1–S9, A1–A12, U1–U6 and C1–C6 are fixed on branch `fix/audit-lower-priority` (API 1.7). S4 is partly fixed, and U7 is won't-fix. Only R1 has been checked in Revit so far. The Revit test cases, and the test model they need, are listed in [docs/testing/test-cases.md](../testing/test-cases.md).
 
 Paths are relative to the repo root. Line numbers are as of `6e89d07`.
 
@@ -95,49 +95,85 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 
 ## S. Sync, preflight and audit bugs
 
-- [ ] **S1.** Family documents are never closed after a successful `LoadFamily` (`family_manager_service.py:230-247`; `Close` is only called at 357 and 427). Each rebuilt Program Volume leaks an open family document.
-- [ ] **S2.** Data Silos with no UID make correlation expect a family named `"<prefix>None"`. Phase 2's progress callback then raises AttributeError (`family_manager_service.py:95,119-126`), which aborts phase 2: no renames and no hashes are stored.
-- [ ] **S3.** If phase 1 raises, phases 2 and 3 fail with an unbound-local error, and the window still shows "✓ completed" (`sync_service.py:255-338`).
+- [x] **S1.** Family documents are never closed after a successful `LoadFamily` (`family_manager_service.py:230-247`; `Close` is only called at 357 and 427). Each rebuilt Program Volume leaks an open family document.
+  *Done: the family document is closed after it is loaded.*
+- [x] **S2.** Data Silos with no UID make correlation expect a family named `"<prefix>None"`. Phase 2's progress callback then raises AttributeError (`family_manager_service.py:95,119-126`), which aborts phase 2: no renames and no hashes are stored.
+  *Done: correlation and phase 2 skip a Data Silo with no UID and warn; the progress callback no longer fails on a missing wrapper.*
+- [x] **S3.** If phase 1 raises, phases 2 and 3 fail with an unbound-local error, and the window still shows "✓ completed" (`sync_service.py:255-338`).
+  *Done: phases 2 and 3 are skipped when phase 1 fails, and the window shows the errors instead of "completed".*
 - [ ] **S4.** Reads write to the model. The vendored `BaseSchema.__exit__` always runs `SetEntity` in an "Update Entity" transaction. Preflight and the audit also call `CheckoutElements`. Refresh runs preflight from a WPF click with no ExternalEvent (`body_2_harvest_areas.py:337`). **⚠ Revit**
-- [ ] **S5.** The arc bounding-box pre-check uses curve endpoints only, so points inside an arc's bulge are rejected (`correlation_service.py:677-720`).
-- [ ] **S6.** One failed instance rolls back the whole "Update Program Volume Instances" transaction, deletions included (`extended_program_volume_instance_collection.py:322-331`).
-- [ ] **S7.** A level key that contains a hyphen (`B1-03-A2`, the format Project Config suggests) can't be used in stacking (`level_mapping_service.py:210-282`).
-- [ ] **S8.** The audit counts placeholder wrappers as "Families without geometry hashes", so the number is too high (`audit_service.py:1342-1346`).
+  *Partly done: config and family entities are read without the vendored `with` block, so reading no longer writes (preflight, audit, Project Config, level mapping). Still open: preflight and audit call `WorksharingUtils.CheckoutElements`, and Refresh runs preflight from a WPF click with no ExternalEvent. **⚠ Revit***
+- [x] **S5.** The arc bounding-box pre-check uses curve endpoints only, so points inside an arc's bulge are rejected (`correlation_service.py:677-720`).
+  *Done: the bounding box is built from the sampled arc points.*
+- [x] **S6.** One failed instance rolls back the whole "Update Program Volume Instances" transaction, deletions included (`extended_program_volume_instance_collection.py:322-331`).
+  *Done: a failed instance is logged and counted; the rest of the transaction commits.*
+- [x] **S7.** A level key that contains a hyphen (`B1-03-A2`, the format Project Config suggests) can't be used in stacking (`level_mapping_service.py:210-282`).
+  *Done: a segment that is a key is that key; a range is split at the hyphen where both sides are keys (`B1-03-B1-05`). Tested against seven sample inputs in CPython.*
+- [x] **S8.** The audit counts placeholder wrappers as "Families without geometry hashes", so the number is too high (`audit_service.py:1342-1346`).
+
+  *Done: placeholder wrappers (no family) are not counted.*
+- [x] **S9. (new) Workset enforcement never ran.** The sync read the worksets under "Data Silo", "Area" and "Program Volume", but Project Config and the API save "data-silos", "areas" and "program-volumes" (`sync_service.py`).
+  *Done: `_workset_name` reads the saved keys (the old ones still work), and worksets are skipped in a model that is not workshared. **⚠ Revit:** families may refuse a workset change; check the log.*
 
 ## A. HTTP API and MCP bugs
 
-- [ ] **A1.** After `set_target_document`, `list_programs` and `select_programs` fail with "Unknown filter field: 'document'", and `render_plan` draws no programs. `GET programs` passes the whole query as filters (`handlers.py:358-360`, `program_service.py:207-209`).
-- [ ] **A2.** `show_view`, `show_program_volumes` and `select_elements` look up ids in the target document, then act on the active one, so the wrong elements can be selected (`mcp/pdso_mcp_server.py:202-205`, `handlers.py:179-183, 430-435`).
-- [ ] **A3.** On an SSH tunnel reconnect, the request is sent again even if it's a write (`mcp/pdso_mcp_server.py:276-286`, `tools/snowdon_acceptance.py:136-146`).
-- [ ] **A4.** A write that times out is reported as "Cannot reach Revit" but stays queued and runs later (`mcp/pdso_mcp_server.py:281`, `startup.py:88-98`).
-- [ ] **A5.** `PUT config` rejects a `document` field in the body (`handlers.py:216-219`, `config_service.py:131`).
-- [ ] **A6.** The `log` in the `run_sync` reply is probably always empty: `LogCapture` hooks the root logger, and pyRevit loggers don't propagate to it (`log_capture.py:36`).
-- [ ] **A7.** A bad `uid_pattern` is saved without a compile check, and every program create or update then returns 500 (`config_service.py:139-146`, `program_service.py:449`). `re.match` also doesn't anchor at the end of the string.
-- [ ] **A8.** Bad numeric input returns 500 with a traceback, not 400: `config_service.py:149`, `model_service.py:39`, `program_service.py:497, 677-678`, `area_drafting_service.py:468, 488, 510, 524`.
-- [ ] **A9.** `parameter_registry.apply()` commits partial bindings, then the API reports 409. A tracked parameter that fails to resolve is silently untracked (`parameter_registry_service.py:509-536`, `parameter_service.py:225-241`).
-- [ ] **A10.** `move_area` and `create_area` can leave a new area plan behind after a failure (`area_drafting_service.py:373-378`).
-- [ ] **A11.** `color_areas` clears and colors in two undo steps, changes the crop box permanently, and fills over holes (`visualization_service.py:328-361`).
-- [ ] **A12.** `list_programs` compares filters as strings, so a filter of `1` doesn't match `1.0` (`program_service.py:210`).
+- [x] **A1.** After `set_target_document`, `list_programs` and `select_programs` fail with "Unknown filter field: 'document'", and `render_plan` draws no programs. `GET programs` passes the whole query as filters (`handlers.py:358-360`, `program_service.py:207-209`).
+  *Done: `document` is removed from the filters.*
+- [x] **A2.** `show_view`, `show_program_volumes` and `select_elements` look up ids in the target document, then act on the active one, so the wrong elements can be selected (`mcp/pdso_mcp_server.py:202-205`, `handlers.py:179-183, 430-435`).
+  *Done: the window routes call `ctx.require_active_doc()` and return 409 for another document; `show_program_volumes` still returns its image (with `not_shown_reason`).*
+- [x] **A3.** On an SSH tunnel reconnect, the request is sent again even if it's a write (`mcp/pdso_mcp_server.py:276-286`, `tools/snowdon_acceptance.py:136-146`).
+  *Done: a write is sent again only if urllib wrapped a connect error (not a reset); same in the acceptance runner.*
+- [x] **A4.** A write that times out is reported as "Cannot reach Revit" but stays queued and runs later (`mcp/pdso_mcp_server.py:281`, `startup.py:88-98`).
+  *Done: a timeout gets its own message saying Revit may still make the change.*
+- [x] **A5.** `PUT config` rejects a `document` field in the body (`handlers.py:216-219`, `config_service.py:131`).
+  *Done.*
+- [x] **A6.** The `log` in the `run_sync` reply is probably always empty: `LogCapture` hooks the root logger, and pyRevit loggers don't propagate to it (`log_capture.py:36`).
+  *Done: `LogCapture` wraps the pyRevit logger class (`_emit` in the newer runtime, `handle` in the older) and restores it. Tested with stubs of both in CPython.*
+- [x] **A7.** A bad `uid_pattern` is saved without a compile check, and every program create or update then returns 500 (`config_service.py:139-146`, `program_service.py:449`). `re.match` also doesn't anchor at the end of the string.
+  *Done: `config_service.check_uid_pattern` on save, `uid_matches` (whole-UID match) in the API and preflight. A UID that only began with a match (`CL-02-ABX`) now fails.*
+- [x] **A8.** Bad numeric input returns 500 with a traceback, not 400: `config_service.py:149`, `model_service.py:39`, `program_service.py:497, 677-678`, `area_drafting_service.py:468, 488, 510, 524`.
+  *Done: `revit_helpers.to_number` in config, model, program and area drafting.*
+- [x] **A9.** `parameter_registry.apply()` commits partial bindings, then the API reports 409. A tracked parameter that fails to resolve is silently untracked (`parameter_registry_service.py:509-536`, `parameter_service.py:225-241`).
+  *Done: a previously tracked parameter that fails stays tracked with a warning; once the tracked list is saved, per-parameter errors come back as warnings, not 409.*
+- [x] **A10.** `move_area` and `create_area` can leave a new area plan behind after a failure (`area_drafting_service.py:373-378`).
+  *Done: the area plan is made inside the transaction group (create, set outline, move/scale).*
+- [x] **A11.** `color_areas` clears and colors in two undo steps, changes the crop box permanently, and fills over holes (`visualization_service.py:328-361`).
+  *Done: clear and draw are one undo step; holes are holes of the filled region. The crop change is kept: the MCP `color_areas` docstring promises it.*
+- [x] **A12.** `list_programs` compares filters as strings, so a filter of `1` doesn't match `1.0` (`program_service.py:210`).
 
+  *Done: numbers compare as numbers.*
 ## U. Setup and ribbon bugs
 
-- [ ] **U1.** Project Config and Sync Data share the window Uid `bbbtools-pdso-window`. With one open, the other button just brings it to the front (`0.Config` and `3.RunScripts` `script.py:30`, `xaml/0_window.xaml:7`).
-- [ ] **U2.** `families.json` builds the file name as `Rvt{revit_yy}`, and only the Rvt26 family ships, so Quick Setup fails on Revit 2027. README.md:208 says the code was tested on 2027.
-- [ ] **U3.** When Project Config names another Data Silo family, the families step still loads the shipped family and never adds the tracked parameters to the user's family (`setup/steps/families.py:117-162`).
-- [ ] **U4.** The shipped shared parameter file has `USERMODIFIABLE=1` and empty descriptions for all 20 parameters, including the harvested SF parameters and Last Synced (`standards/parameters.json`, `PDSO Shared Parameters.txt`).
-- [ ] **U5.** Opening Project Config writes the default config before the user clicks Save (`body_1_setup.py:136`).
-- [ ] **U6.** The 3D template's `on_existing: "update"` overwrites the user's category visibility on every Quick Setup run (`view_templates.json:3`).
-- [ ] **U7.** `ElementId.Value` in `setup/revit_utils.py:320` needs Revit 2024 or later.
+- [x] **U1.** Project Config and Sync Data share the window Uid `bbbtools-pdso-window`. With one open, the other button just brings it to the front (`0.Config` and `3.RunScripts` `script.py:30`, `xaml/0_window.xaml:7`).
+  *Done: `bbbtools-pdso-config-window` and `bbbtools-pdso-sync-window`; window titles now match the ribbon.*
+- [x] **U2.** `families.json` builds the file name as `Rvt{revit_yy}`, and only the Rvt26 family ships, so Quick Setup fails on Revit 2027. README.md:208 says the code was tested on 2027.
+  *Done: families.json falls back to the Rvt26 file and name; on an older Revit the failure says the family needs Revit 2026. **⚠ Revit 2027***
+- [x] **U3.** When Project Config names another Data Silo family, the families step still loads the shipped family and never adds the tracked parameters to the user's family (`setup/steps/families.py:117-162`).
+  *Done: a loaded Project Config family is kept, the shipped one is not loaded, and the tracked parameters go into the chosen family.*
+- [x] **U4.** The shipped shared parameter file has `USERMODIFIABLE=1` and empty descriptions for all 20 parameters, including the harvested SF parameters and Last Synced (`standards/parameters.json`, `PDSO Shared Parameters.txt`).
+  *Done: parameters.json and the regenerated `.txt` lock the four parameters; GUIDs unchanged.*
+- [x] **U5.** Opening Project Config writes the default config before the user clicks Save (`body_1_setup.py:136`).
+  *Done: Project Config shows `default_config_values()` for a model without a configuration and Save creates it; Parameter Manager no longer writes on open.*
+- [x] **U6.** The 3D template's `on_existing: "update"` overwrites the user's category visibility on every Quick Setup run (`view_templates.json:3`).
+  *Done: `on_existing` defaults to `skip`.*
+- [-] **U7.** `ElementId.Value` in `setup/revit_utils.py:320` needs Revit 2024 or later.
 
+  *Won't fix: the whole codebase uses the Revit 2024+ `ElementId.Value`, and the Data Silo family needs Revit 2026.*
 ## C. Catalogue bugs
 
-- [ ] **C1.** `harvest_image.py:189-257`: an exception between `Start()` and `Commit()` leaves the transaction open, and the swallowed group `RollBack` leaves the group open. Every later export then fails. GDI objects also leak for each unit (`:85-133`).
-- [ ] **C2.** An entry with no items always "fits" (`all([])`), so Pull offers unfurnished units (`layout_recommender.best_placement`). *Partly done with B2: when nothing is placed, no Data Silo is tagged. The recommender still offers empty entries.*
-- [ ] **C3.** `remove_previous` matches only the model's basename plus element id, or the title "Project1" for unsaved models, so it can delete another project's harvest. It also deletes before the new save succeeds (`catalogue_store.py:115-121`).
-- [ ] **C4.** Catalogue numbers are counted per folder, but Pull shows several folders together. On a shared drive the numbering races, and the JSON writes aren't atomic (`catalogue_store.py:132-173`).
-- [ ] **C5.** The MCP `harvest_layout` docstring says a re-harvest replaces the earlier one. It doesn't. Two harvests in the same second overwrite each other (`mcp/pdso_mcp_server.py:1359`, `layout_entry.py:226-229`).
-- [ ] **C6.** `POST catalogue/harvest` takes an undocumented `folder` that can be any path (`catalogue_handlers.py:120-131`).
+- [x] **C1.** `harvest_image.py:189-257`: an exception between `Start()` and `Commit()` leaves the transaction open, and the swallowed group `RollBack` leaves the group open. Every later export then fails. GDI objects also leak for each unit (`:85-133`).
+  *Done: `_roll_back` on failure in the constructor and in `export`; GDI objects disposed.*
+- [x] **C2.** An entry with no items always "fits" (`all([])`), so Pull offers unfurnished units (`layout_recommender.best_placement`). *Partly done with B2: when nothing is placed, no Data Silo is tagged. The recommender still offers empty entries.*
+  *Done: the recommender rejects entries with no items.*
+- [x] **C3.** `remove_previous` matches only the model's basename plus element id, or the title "Project1" for unsaved models, so it can delete another project's harvest. It also deletes before the new save succeeds (`catalogue_store.py:115-121`).
+  *Done: `source.model_id`; unsaved models never match; the new entry is saved before the old one is removed.*
+- [x] **C4.** Catalogue numbers are counted per folder, but Pull shows several folders together. On a shared drive the numbering races, and the JSON writes aren't atomic (`catalogue_store.py:132-173`).
+  *Done: `_write_text` writes a temporary file then replaces; Harvest All Units holds `catalogue_lock` while it numbers. The same number can still mean different shapes in different folders (Pull shows several): open, see K17.*
+- [x] **C5.** The MCP `harvest_layout` docstring says a re-harvest replaces the earlier one. It doesn't. Two harvests in the same second overwrite each other (`mcp/pdso_mcp_server.py:1359`, `layout_entry.py:226-229`).
+  *Done: `-2`, `-3`... suffix; MCP docstring corrected.*
+- [x] **C6.** `POST catalogue/harvest` takes an undocumented `folder` that can be any path (`catalogue_handlers.py:120-131`).
 
+  *Done: the route ignores `folder`.*
 ## K. Consistency
 
 - [ ] **K1. The ribbon and the API make different models.** `bootstrap_service.py:165-213, 444-614` still does three things itself: it builds a placeholder family, adds NSF and ZFA plans (which `views.json` disables), and falls back to a hardcoded "plain" plan that hides views.json errors. Also, `show_program_volumes` creates "PDSO - Program Volumes" while Quick Setup makes "PDSO - Program Volumes - 3D".
@@ -180,6 +216,8 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 - [ ] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
 - [ ] **K16.** `move_area` picks the programs to move with a point-in-polygon test on the outer outline only, so it also moves the Data Silo of an island Area inside a hole. This was already on main.
 
+- [ ] **K17.** Catalogue numbers are per folder, but Pull shows layouts from the sample, local and chosen folders together, so one number can mean two shapes (left over from C4).
+
 ## F. Unfinished work
 
 - [ ] **F1.** `fix/place-on-rac` is unmerged and conflicts with main in `1.HarvestUnits.pushbutton/script.py`. It overlaps with B1 and B2.
@@ -190,7 +228,7 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 - [ ] **F6.** Unused schema fields: `config.last_run_timestamp` is never written after "Never"; `hashed_parameters`, `parameter_names_hash` and `parameter_values_hash` are never used.
 - [ ] **F7.** `extended_data_silo.py:126` TODO: the multi-area fallback.
 - [ ] **F8.** Quick Setup doesn't check that Project Config and Parameter Manager ran first.
-- [ ] **F9.** `parameters.json` keeps keys (`categories`, `binding`, `group`, `required`) that nothing reads.
+- [x] **F9.** `parameters.json` keeps keys (`categories`, `binding`, `group`, `required`) that nothing reads.
 - [ ] **F10.** The acceptance runner doesn't cover `catalogue/*`, `documents/*`, `selection`, `views/activate` or `color-areas`.
 - [ ] **F11.** The Exterior Space and Exterior Space Type parameters aren't built (`docs/parameter-reference.md`).
 
@@ -211,7 +249,7 @@ An adversarial review of `df04ac4`, by a reviewer with no context from this work
 
 - [ ] **N1.** The Sync Data window is titled "Harvest Areas", and its files are `body_2_harvest_areas` and `2_harvest_areas.xaml`. The Project Config window is titled "Setup".
 - [ ] **N2.** Tooltips: "Program Mass" and the typo "configuation". `4.Audit` has an empty `help_url`, and `extension.json` has an empty `image`.
-- [ ] **N3.** The shipped shared parameter file still says "Model Setup"; regenerating it changes the file.
+- [x] **N3.** The shipped shared parameter file still says "Model Setup"; regenerating it changes the file.
 - [ ] **N4.** Two catalogue buttons share the prefix `1.`. Their `config.py` files are identical copies.
 
 ## Checked and clean
