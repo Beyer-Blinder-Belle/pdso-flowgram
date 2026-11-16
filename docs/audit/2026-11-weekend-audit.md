@@ -6,7 +6,7 @@ This file tracks the fixes. Each issue has an ID; use it in commit messages and 
 
 Status: `[ ]` open · `[x]` fixed · `[-]` won't fix (give the reason) · **⚠ Revit** = needs checking in a live Revit after the fix.
 
-**Progress:** B1–B8 fixed on branch `fix/audit-model-damage` (API 1.6). None of them has been tested in Revit yet; see "Test in Revit" under each one.
+**Progress:** B1–B8 are fixed in PR #22 (branch `fix/audit-model-damage`, API 1.6), and so are R1–R6, the review's findings on those fixes. None of them has been tested in Revit yet; see "Test in Revit" under each item.
 
 Paths are relative to the repo root. Line numbers are as of `6e89d07`.
 
@@ -73,6 +73,25 @@ Paths are relative to the repo root. Line numbers are as of `6e89d07`.
   - New `layout_entry.is_entry_id`.
   - Harvest All Units ignores a layout id when it suggests the program name.
   - *Team decision still open:* should the layout id get its own parameter instead?
+
+### Review of the B fixes (PR #22)
+
+An adversarial review of `df04ac4`, by a reviewer with no context from this work, found 8 issues. R1–R6 are fixed in the follow-up commit.
+
+- [x] **R1 (B6 regression).** With geometry "No", Program Volumes were moved to the Data Silo's new location, although their geometry was not rebuilt around it.
+  *Fixed:* `_link_existing_families` reads the build point stored in the family (`area_basepoint`) into `ExtendedProgramVolumeFamily.built_basepoint`, and instances go there. If no point is stored, existing instances aren't moved.
+- [x] **R2 (B7 regression).** Duplicate instances on one level had no `target_level`, so they no longer moved with their Data Silo.
+  *Fixed:* each duplicate gets its level, location and primary flag, and the sync warns about it. Removing duplicates is still F4.
+- [x] **R3 (B1 incomplete).** With `clear_first`, the furniture was deleted even when nothing could be placed (families not loaded).
+  *Fixed:* `place_layout` raises a 409 in that case, which rolls the whole transaction back.
+- [x] **R4 (B8 incomplete).** `is_entry_id` missed the sample's `program--name` ids and Harvest All Units' `-2` suffix.
+  *Fixed:* the pattern accepts both.
+- [x] **R5 (B3/B7 claim not met).** `commit_pending_changes` still skipped every instance of a Data Silo with stacking errors, so the levels that resolved were not updated either.
+  *Fixed:* the skip is removed. B3 already keeps instances on unresolved levels from being deleted, and they aren't moved.
+- [x] **R6 (B4 new behaviour).** `set_area_outline` kept a hole's lines even when the new outline no longer contained the hole.
+  *Fixed:* a hole is kept only if it lies wholly inside the new outline; otherwise its own lines are removed, with a warning.
+- [ ] **R7 → K15.** See K15.
+- [ ] **R8 → K16.** See K16.
 
 ## S. Sync, preflight and audit bugs
 
@@ -158,6 +177,8 @@ Paths are relative to the repo root. Line numbers are as of `6e89d07`.
 - [ ] **K12.** No minimum pyRevit version is stated or checked. On 6.1 the API ignores query parameters (filters, `document`, `_rid`).
 - [ ] **K13.** `remove_previous` and every Pull row reload the whole catalogue folder, and Pull runs full-model collectors for each row.
 - [ ] **K14.** The workset option "Warn (if configured)" does nothing in phases 1–3 (`sync_service.py`); only "Fix" is acted on. Also, `pdso_kinds` (from B2) swallows a config read error and falls back to the default names.
+- [ ] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
+- [ ] **K16.** `move_area` picks the programs to move with a point-in-polygon test on the outer outline only, so it also moves the Data Silo of an island Area inside a hole. This was already on main.
 
 ## F. Unfinished work
 

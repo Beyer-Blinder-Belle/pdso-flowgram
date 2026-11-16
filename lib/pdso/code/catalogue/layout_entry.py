@@ -229,10 +229,18 @@ def make_entry_id(program, name):
     return "{}--{}--{}".format(slugify(program), slugify(name), stamp)
 
 
-# The form of make_entry_id: slug--slug--YYYYMMDD-HHMMSS
-ENTRY_ID_PATTERN = re.compile(r"^[a-z0-9-]+--[a-z0-9-]+--\d{8}-\d{6}$")
+# The forms of a layout id: program--name (the sample catalogue),
+# program--name--YYYYMMDD-HHMMSS (make_entry_id), and that with -2, -3...
+# (Harvest All Units, when two units get the same id). Each part is a slug.
+ENTRY_ID_PATTERN = re.compile(
+    r"^[a-z0-9]+(-[a-z0-9]+)*--[a-z0-9]+(-[a-z0-9]+)*(--\d{8}-\d{6}(-\d+)?)?$"
+)
 
 
 def is_entry_id(text):
-    """True if the text is a layout id that make_entry_id made."""
+    """True if the text has the form of a layout id (see ENTRY_ID_PATTERN).
+
+    Text a user types in "PDSO - Unit Layout Type" ("2BR - Type A") has
+    capitals or spaces and is not an id.
+    """
     return bool(text) and ENTRY_ID_PATTERN.match(text) is not None

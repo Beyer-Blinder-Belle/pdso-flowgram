@@ -55,6 +55,11 @@ class ExtendedProgramVolumeFamily(object):
         self.entity_fields_to_update = {}  # Dict[str (Field Name), Any (New Value)]
         self.parent_data_silo = None
         self.desired_family_name = None
+        # Set when the geometry update is skipped: the geometry was not rebuilt
+        # this sync, so its instances go where it was built (built_basepoint,
+        # the Data Silo point stored at the last build), not to the Data Silo
+        self.geometry_not_rebuilt = False
+        self.built_basepoint = None  # XYZ, or None if the family has none stored
         # self.family_needs_creation = False
         # self.family_needs_rename = False
         # self.family_needs_update = False

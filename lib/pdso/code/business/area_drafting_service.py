@@ -369,17 +369,15 @@ def _draw_outline(doc, view, level, outline):
     return _draw_curves(doc, view, level, lines)
 
 
-def _exclusive_line_ids(doc, area, outer_only=False):
+def _exclusive_line_ids(doc, area, loops=None):
     """Ids of the boundary lines that bound this Area and no other Area.
 
     Args:
-        outer_only (bool): Only the lines of the outer loop. The lines of the
-            holes are not included.
+        loops (list): Only the lines of these loops (from _loops). Default:
+            every loop of the Area, holes included.
     """
-    loops = _loops(area)
-    if outer_only:
-        outer = _outer_loop(loops)
-        loops = [outer] if outer is not None else []
+    if loops is None:
+        loops = _loops(area)
     own = set()
     for loop in loops:
         own.update(loop["line_ids"])
@@ -438,12 +436,32 @@ def create_area(doc, scheme, level, points, name=None, number=None):
     return info
 
 
+def _inside_outline(loop_points, outline):
+    """True if a loop lies wholly inside an outline (no point out, no crossing)."""
+    if not all(point_in_polygon(x, y, outline) for x, y in loop_points):
+        return False
+    count = len(loop_points)
+    outline_count = len(outline)
+    for i in range(count):
+        for j in range(outline_count):
+            if _segments_cross(
+                loop_points[i],
+                loop_points[(i + 1) % count],
+                outline[j],
+                outline[(j + 1) % outline_count],
+            ):
+                return False
+    return True
+
+
 def set_area_outline(doc, area_id, points):
     """Replace the outer outline of an Area.
 
     The boundary lines of the outer outline that only this Area uses are
-    deleted. New straight lines are drawn along the points. The holes of the
-    Area keep their lines. If the Area's location point is outside the new
+    deleted. New straight lines are drawn along the points. A hole that lies
+    wholly inside the new outline keeps its lines; a hole that the new outline
+    leaves or crosses is removed like the old outline (lines it shares with
+    another Area stay). If the Area's location point is outside the new
     outline, the Area moves into it.
 
     Returns:
@@ -460,10 +478,23 @@ def set_area_outline(doc, area_id, points):
     if location is None:
         raise PDSOError("The Area is not placed. Delete it and create a new Area.")
 
+    loops = _loops(area)
+    outer = _outer_loop(loops)
+    to_remove = [outer] if outer is not None else []
     warnings = []
+    for loop in loops:
+        if loop is outer or len(loop["points"]) < 3:
+            continue
+        if not _inside_outline(loop["points"], outline):
+            to_remove.append(loop)
+            warnings.append(
+                "A hole of the Area was outside or across the new outline. "
+                "Its boundary lines were removed."
+            )
+
     with TransactionGroup(doc, "PDSO - Set Area Outline"):
         with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
-            old_lines = _exclusive_line_ids(doc, area, outer_only=True)
+            old_lines = _exclusive_line_ids(doc, area, to_remove)
             if old_lines:
                 doc.Delete(id_list(old_lines))
                 doc.Regenerate()
@@ -530,7 +561,9 @@ def _transform_area(doc, area, transform, name):
 
     Each boundary curve keeps its kind: an arc stays an arc. The lines that
     only this Area uses are deleted; lines that it shares with another Area
-    stay, so that Area does not change.
+    stay. Known issue (audit K15): the moved copy of a shared line is drawn
+    too, so it can split the neighbouring Area, and the moved Area stays
+    bounded by the kept line.
 
     Args:
         transform (DB.Transform): A move, or a uniform scale (conformal).

@@ -257,16 +257,18 @@ class ExtendedProgramVolumeInstanceCollection(object):
 
         Notes:
             Continues processing even if some data silos have validation errors.
-            Only skips instances from data silos with validation errors.
+            A data silo with stacking errors gets instances on the levels that
+            did resolve. Its instances on other levels are kept (correlation
+            does not mark them for deletion) and are not moved; they still get
+            the data silo's data.
         """
         # Check validation status and log warnings
         if not self.validation_passed:
             self.logger.warning(
-                "Level mapping validation failed - continuing with valid data silos"
+                "Level mapping validation failed - continuing with the levels that resolved"
             )
             if self.validation_result:
                 self.logger.warning(self.validation_result.get_summary_message())
-            self.logger.warning("Instances from data silos with errors will be skipped")
 
         # Commit parameter updates on valid instances
         skipped_count = 0
@@ -289,23 +291,6 @@ class ExtendedProgramVolumeInstanceCollection(object):
                 )
                 skipped_count += 1
                 continue
-
-            # Skip instances from data silos with validation errors
-            if not self.validation_passed and self.validation_result:
-                data_silo_uid = (
-                    ext_program_volume_instance.parent_data_silo.parameters[
-                        "PDSO - Program UID"
-                    ].value
-                    or "UNKNOWN"
-                )
-                if self.validation_result.has_errors_for_data_silo(data_silo_uid):
-                    self.logger.debug(
-                        "Skipping instance from Data Silo '{}' due to validation errors".format(
-                            data_silo_uid
-                        )
-                    )
-                    skipped_count += 1
-                    continue
 
             try:
                 # Track if this is a new instance (rpw_element was None before commit)
@@ -339,7 +324,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
 
         if skipped_count > 0:
             self.logger.warning(
-                "Skipped {} instances due to validation errors or missing data".format(
+                "Skipped {} instances with no parent Data Silo".format(
                     skipped_count
                 )
             )

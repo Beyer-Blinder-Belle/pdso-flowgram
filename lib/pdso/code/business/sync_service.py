@@ -32,7 +32,7 @@ from ..data.extended_program_volume_family_collection import (
 )
 from .correlation_service import PDSOCorrelationService
 from .data_service import PDSODataService
-from .family_manager_service import PDSOFamilyManagerService
+from .family_manager_service import GEOMETRY_KEY, PDSOFamilyManagerService, _as_dict
 from .workset_coordination_service import WorksetCoordinationService
 from .extensible_storage_service import PDSOExtensibleStorageService
 from .level_mapping_service import PDSOLevelMappingService
@@ -701,7 +701,9 @@ class PDSOSyncService(object):
         """Link each Data Silo to its Program Volume family, without changing it.
 
         Used when the geometry update is off. Phase 3 then updates the data of
-        the instances of families that are in the model. Only a family with
+        the instances of families that are in the model, and keeps them at the
+        point the geometry was built around (see built_basepoint), not at the
+        Data Silo's current location. Only a family with
         the expected name (prefix + UID) is linked: a family that phase 2
         would rename or build is not, and that Data Silo is skipped with a
         warning in phase 3.
@@ -720,6 +722,13 @@ class PDSOSyncService(object):
             family = by_name.get("{}{}".format(prefix, uid))
             if family is None or family.parent_data_silo is not None:
                 continue
+            # The geometry is not rebuilt, so its instances must stay where
+            # the geometry was built: at the Data Silo point of the last build.
+            # (Reading .entity opens a transaction: this runs outside one.)
+            family.geometry_not_rebuilt = True
+            entity = family.entity
+            basepoints = _as_dict(getattr(entity, "area_basepoint", None))
+            family.built_basepoint = basepoints.get(GEOMETRY_KEY)
             ext_data_silo.related_program_volume_family = family
             family.parent_data_silo = ext_data_silo
             linked += 1

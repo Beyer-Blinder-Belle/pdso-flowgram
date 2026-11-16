@@ -607,6 +607,21 @@ def place_layout(doc, reference, entry_id, clear_first=False):
                 doc.Delete(id_list(ids))
             deleted = len(ids)
         result = layout_service.create(element, entry, chosen.placement)
+        # create() skips items whose family is not loaded. If it placed
+        # nothing, the room must not stay emptied: roll everything back.
+        if clear_first and deleted and not result.placed:
+            reasons = list(result.warnings)
+            if result.missing:
+                reasons.append(
+                    "Families not loaded in this model: {}".format(
+                        ", ".join(sorted(result.missing))
+                    )
+                )
+            raise PDSOError(
+                "No item of layout '{}' could be placed, so the furniture in the "
+                "room was not deleted. {}".format(entry_id, " ".join(reasons)).strip(),
+                409,
+            )
     return {
         "deleted": deleted,
         "target": _spatial_info(element),

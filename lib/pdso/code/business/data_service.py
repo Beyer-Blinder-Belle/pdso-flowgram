@@ -72,22 +72,29 @@ class PDSODataService(object):
             ext_program_volume_instance_collection (ExtendedProgramVolumeInstanceCollection): Collection for validation check.
         """
 
-        # A Data Silo with stacking errors still moves its instances on the
-        # levels that did resolve: phase 2 built its geometry around the Data
-        # Silo's current location. Instances on other levels have no
+        # Instances on levels that the stacking does not resolve to have no
         # target_level and are not moved (see below).
         self.logger.info("Queueing Program Volume location updates from Data Silos...")
 
         for ext_data_silo in ext_data_silos:
             self.logger.debug(".  Processing Data Silo ID: {}".format(ext_data_silo.Id))
 
-            # Get the location of the associated Data Silo (reference point for family geometry)
+            # The family geometry is built around the Data Silo's location, so
+            # its instances go to that point. If the geometry was not rebuilt
+            # this sync (geometry update "No"), they go to the point it was
+            # built around, which is stored in the family.
             data_silo_location = ext_data_silo.rpw_element.Location.Point
-            self.logger.debug(
-                ".  Data Silo location: ({:.2f}, {:.2f}, {:.2f})".format(
-                    data_silo_location.X, data_silo_location.Y, data_silo_location.Z
+            family = ext_data_silo.related_program_volume_family
+            if family is not None and family.geometry_not_rebuilt:
+                data_silo_location = family.built_basepoint
+            if data_silo_location is None:
+                # No stored build point: existing instances stay where they
+                # are, and new ones go to the Data Silo (set in correlation)
+                self.logger.debug(
+                    ".  Family of Data Silo {} has no stored build point; "
+                    "existing instances are not moved".format(ext_data_silo.Id)
                 )
-            )
+                continue
 
             # Queue location updates for related Program Volume Instances
             self.logger.debug(
