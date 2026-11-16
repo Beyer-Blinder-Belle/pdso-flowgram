@@ -6,7 +6,7 @@ This file tracks the fixes. Each issue has an ID; use it in commit messages and 
 
 Status: `[ ]` open · `[x]` fixed · `[-]` won't fix (give the reason) · **⚠ Revit** = needs checking in a live Revit after the fix.
 
-**Progress:** B1–B8 are fixed in PR #22 (branch `fix/audit-model-damage`, API 1.6), and so are R1–R6, the review's findings on those fixes. None of them has been tested in Revit yet; see "Test in Revit" under each item.
+**Progress:** B1–B8 are fixed in PR #22 (branch `fix/audit-model-damage`, API 1.6), and so are R1–R6, the review's findings on those fixes. Only R1 has been checked in Revit so far. The Revit test cases, and the test model they need, are listed in [docs/testing/test-cases.md](../testing/test-cases.md).
 
 Paths are relative to the repo root. Line numbers are as of `6e89d07`.
 
@@ -79,7 +79,7 @@ Paths are relative to the repo root. Line numbers are as of `6e89d07`.
 An adversarial review of `df04ac4`, by a reviewer with no context from this work, found 8 issues. R1–R6 are fixed in the follow-up commit.
 
 - [x] **R1 (B6 regression).** With geometry "No", Program Volumes were moved to the Data Silo's new location, although their geometry was not rebuilt around it.
-  *Fixed:* `_link_existing_families` reads the build point stored in the family (`area_basepoint`) into `ExtendedProgramVolumeFamily.built_basepoint`, and instances go there. If no point is stored, existing instances aren't moved.
+  *Fixed:* `_link_existing_families` reads the build point stored in the family (`area_basepoint`) into `ExtendedProgramVolumeFamily.built_basepoint`, and instances go there. If no point is stored, existing instances aren't moved. **Checked in Revit on 2026-11-16 (test T-S3).**
 - [x] **R2 (B7 regression).** Duplicate instances on one level had no `target_level`, so they no longer moved with their Data Silo.
   *Fixed:* each duplicate gets its level, location and primary flag, and the sync warns about it. Removing duplicates is still F4.
 - [x] **R3 (B1 incomplete).** With `clear_first`, the furniture was deleted even when nothing could be placed (families not loaded).
