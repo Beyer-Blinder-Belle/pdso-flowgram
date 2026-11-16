@@ -491,8 +491,25 @@ class PDSOCorrelationService(object):
 
                 # There are too many matching instances on this level - keep the best, delete others
                 elif len(matching_instances_on_level) > 1:
-                    # To do - figure out deletion
-                    continue
+                    # To do - figure out deletion (audit F4). Until then every
+                    # duplicate is kept and treated like a single instance, so
+                    # it still moves with its Data Silo and gets its data.
+                    self.logger.warning(
+                        "Data Silo '{}' has {} Program Volume instances on level "
+                        "'{}'. All are kept; delete the extra ones.".format(
+                            data_silo_uid,
+                            len(matching_instances_on_level),
+                            expected_level.rpw_level.Name,
+                        )
+                    )
+                    for duplicate in matching_instances_on_level:
+                        duplicate.desired_instance_location = (
+                            duplicate.rpw_element.Location.Point
+                        )
+                        duplicate.target_level = expected_level
+                        duplicate.is_primary_instance = (
+                            expected_level.rpw_level.Id.Value == canonical_level_id
+                        )
 
                 # Exactly one matching instance on this level - set its desired location
                 else:
@@ -524,6 +541,31 @@ class PDSOCorrelationService(object):
                 for el in expected_levels
                 if el is not None and el.rpw_level is not None
             )
+
+            # If the stacking did not fully resolve (a typo, or a key with no
+            # level mapping), required_levels is incomplete. An instance on a
+            # level that is missing from it may be on a level the user meant.
+            # Keep every instance of this Data Silo until the stacking is fixed.
+            if ext_data_silo.has_stacking_errors or (
+                canonical_level_id not in required_level_ids
+            ):
+                kept = [
+                    pv
+                    for pv in matching_ext_program_volumes
+                    if pv.LevelId.Value not in required_level_ids
+                ]
+                if kept:
+                    self.logger.warning(
+                        "Data Silo '{}': its stacking has errors, so {} Program "
+                        "Volume instance(s) on other levels were kept, not "
+                        "deleted. Fix the stacking and sync again.".format(
+                            data_silo_uid, len(kept)
+                        )
+                    )
+                for ext_program_volume in matching_ext_program_volumes:
+                    ext_program_volume.parent_data_silo = ext_data_silo
+                continue
+
             for ext_program_volume in matching_ext_program_volumes:
                 # Skip if this is a newly created instance (rpw_element is None)
                 if ext_program_volume.rpw_element is None:

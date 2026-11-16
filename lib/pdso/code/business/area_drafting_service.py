@@ -311,21 +311,35 @@ def _uncovered_intervals(start, end, segments):
     return [(t1, t2) for t1, t2 in intervals if t2 - t1 > POINT_TOLERANCE]
 
 
-def _draw_outline(doc, view, level, outline):
-    """Create the area boundary lines of an outline. Return their ids.
+def _draw_curves(doc, view, level, curves):
+    """Create area boundary lines along curves (lines, arcs, ...). Return their ids.
 
     Two boundary lines on top of each other make Revit report 0 SF. Thus the
-    parts of an edge that a boundary line in the view covers are not drawn.
+    parts of a straight edge that a boundary line in the view covers are not
+    drawn. A curve that is not straight is drawn as it is.
     """
     elevation = level.ProjectElevation
     sketch_plane = view.SketchPlane
     existing = _existing_boundary_segments(doc, view)
     line_ids = []
-    count = len(outline)
-    for index in range(count):
-        start = outline[index]
-        end = outline[(index + 1) % count]
+    for curve in curves:
+        # Boundary lines must be in the plane of the level
+        z = curve.GetEndPoint(0).Z
+        if abs(z - elevation) > 1e-9:
+            curve = curve.CreateTransformed(
+                DB.Transform.CreateTranslation(DB.XYZ(0, 0, elevation - z))
+            )
+        if not isinstance(curve, DB.Line):
+            boundary = doc.Create.NewAreaBoundaryLine(sketch_plane, curve, view)
+            line_ids.append(boundary.Id)
+            continue
+        start_point = curve.GetEndPoint(0)
+        end_point = curve.GetEndPoint(1)
+        start = (start_point.X, start_point.Y)
+        end = (end_point.X, end_point.Y)
         length = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
+        if length <= POINT_TOLERANCE:
+            continue
         ux = (end[0] - start[0]) / length
         uy = (end[1] - start[1]) / length
         for t1, t2 in _uncovered_intervals(start, end, existing):
@@ -338,10 +352,34 @@ def _draw_outline(doc, view, level, outline):
     return line_ids
 
 
-def _exclusive_line_ids(doc, area):
-    """Ids of the boundary lines that bound this Area and no other Area."""
+def _draw_outline(doc, view, level, outline):
+    """Create the area boundary lines of a polygon outline. Return their ids."""
+    elevation = level.ProjectElevation
+    count = len(outline)
+    lines = []
+    for index in range(count):
+        start = outline[index]
+        end = outline[(index + 1) % count]
+        lines.append(
+            DB.Line.CreateBound(
+                DB.XYZ(start[0], start[1], elevation),
+                DB.XYZ(end[0], end[1], elevation),
+            )
+        )
+    return _draw_curves(doc, view, level, lines)
+
+
+def _exclusive_line_ids(doc, area, loops=None):
+    """Ids of the boundary lines that bound this Area and no other Area.
+
+    Args:
+        loops (list): Only the lines of these loops (from _loops). Default:
+            every loop of the Area, holes included.
+    """
+    if loops is None:
+        loops = _loops(area)
     own = set()
-    for loop in _loops(area):
+    for loop in loops:
         own.update(loop["line_ids"])
     scheme_name = _scheme_name(area)
     for other in _all_areas(doc):
@@ -398,12 +436,33 @@ def create_area(doc, scheme, level, points, name=None, number=None):
     return info
 
 
-def set_area_outline(doc, area_id, points):
-    """Replace the outline of an Area.
+def _inside_outline(loop_points, outline):
+    """True if a loop lies wholly inside an outline (no point out, no crossing)."""
+    if not all(point_in_polygon(x, y, outline) for x, y in loop_points):
+        return False
+    count = len(loop_points)
+    outline_count = len(outline)
+    for i in range(count):
+        for j in range(outline_count):
+            if _segments_cross(
+                loop_points[i],
+                loop_points[(i + 1) % count],
+                outline[j],
+                outline[(j + 1) % outline_count],
+            ):
+                return False
+    return True
 
-    The boundary lines that only this Area uses are deleted. New lines are
-    drawn. If the Area's location point is outside the new outline, the Area
-    moves into it.
+
+def set_area_outline(doc, area_id, points):
+    """Replace the outer outline of an Area.
+
+    The boundary lines of the outer outline that only this Area uses are
+    deleted. New straight lines are drawn along the points. A hole that lies
+    wholly inside the new outline keeps its lines; a hole that the new outline
+    leaves or crosses is removed like the old outline (lines it shares with
+    another Area stay). If the Area's location point is outside the new
+    outline, the Area moves into it.
 
     Returns:
         dict: The Area after the change (see area_info), plus "previous_area"
@@ -419,10 +478,23 @@ def set_area_outline(doc, area_id, points):
     if location is None:
         raise PDSOError("The Area is not placed. Delete it and create a new Area.")
 
+    loops = _loops(area)
+    outer = _outer_loop(loops)
+    to_remove = [outer] if outer is not None else []
     warnings = []
+    for loop in loops:
+        if loop is outer or len(loop["points"]) < 3:
+            continue
+        if not _inside_outline(loop["points"], outline):
+            to_remove.append(loop)
+            warnings.append(
+                "A hole of the Area was outside or across the new outline. "
+                "Its boundary lines were removed."
+            )
+
     with TransactionGroup(doc, "PDSO - Set Area Outline"):
         with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
-            old_lines = _exclusive_line_ids(doc, area)
+            old_lines = _exclusive_line_ids(doc, area, to_remove)
             if old_lines:
                 doc.Delete(id_list(old_lines))
                 doc.Regenerate()
@@ -431,12 +503,102 @@ def set_area_outline(doc, area_id, points):
         with Transaction(doc, "PDSO - Check Area") as transaction:
             if not point_in_polygon(location.X, location.Y, outline):
                 x, y = polygon_interior_point(outline)
-                was_pinned = area.Pinned
-                if was_pinned:
-                    area.Pinned = False
-                area.Location.Move(DB.XYZ(x - location.X, y - location.Y, 0))
-                if was_pinned:
-                    area.Pinned = True
+                _move_location(area, location, x, y)
+            doc.Regenerate()
+            if area.Area <= 0:
+                raise PDSOError(
+                    "Revit did not enclose the Area with the new outline (0 SF)."
+                    " No change was made."
+                )
+        warnings.extend(transaction.warnings)
+    info = area_info(doc, area)
+    info["previous_area"] = previous_area
+    info["warnings"] = warnings
+    return info
+
+
+def _move_location(area, location, x, y):
+    """Move the location point of an Area to (x, y). A pinned Area stays pinned."""
+    was_pinned = area.Pinned
+    if was_pinned:
+        area.Pinned = False
+    area.Location.Move(DB.XYZ(x - location.X, y - location.Y, 0))
+    if was_pinned:
+        area.Pinned = True
+
+
+def _number(value, name):
+    """A caller's number as a float, or a PDSOError."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise PDSOError("{} must be a number. Got: {!r}".format(name, value))
+
+
+def _polygon_centroid(points):
+    """Centroid of a polygon (the vertex average if it has no area)."""
+    area_sum = 0.0
+    cx = 0.0
+    cy = 0.0
+    count = len(points)
+    for index in range(count):
+        x1, y1 = points[index][0], points[index][1]
+        x2, y2 = points[(index + 1) % count][0], points[(index + 1) % count][1]
+        cross = x1 * y2 - x2 * y1
+        area_sum += cross
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+    if abs(area_sum) < 1e-9:
+        return (
+            sum(point[0] for point in points) / count,
+            sum(point[1] for point in points) / count,
+        )
+    return cx / (3.0 * area_sum), cy / (3.0 * area_sum)
+
+
+def _transform_area(doc, area, transform, name):
+    """Move or scale an Area with a transform: its outline, holes and location.
+
+    Each boundary curve keeps its kind: an arc stays an arc. The lines that
+    only this Area uses are deleted; lines that it shares with another Area
+    stay. Known issue (audit K15): the moved copy of a shared line is drawn
+    too, so it can split the neighbouring Area, and the moved Area stays
+    bounded by the kept line.
+
+    Args:
+        transform (DB.Transform): A move, or a uniform scale (conformal).
+        name (str): Name of the undo step.
+
+    Returns:
+        dict: The Area after the change (see area_info), plus "previous_area"
+            and "warnings"
+    """
+    location = getattr(area.Location, "Point", None)
+    if location is None:
+        raise PDSOError("The Area is not placed. Delete it and create a new Area.")
+    level = doc.GetElement(area.LevelId)
+    view = _area_plan(doc, _scheme_name(area), level)
+    previous_area = area.Area
+
+    curves = []
+    for loop in area.GetBoundarySegments(DB.SpatialElementBoundaryOptions()) or []:
+        for segment in loop:
+            curves.append(segment.GetCurve().CreateTransformed(transform))
+    if not curves:
+        raise PDSOError("The Area has no closed outline.", 409)
+    new_location = transform.OfPoint(location)
+
+    warnings = []
+    with TransactionGroup(doc, name):
+        with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
+            old_lines = _exclusive_line_ids(doc, area)
+            if old_lines:
+                doc.Delete(id_list(old_lines))
+                doc.Regenerate()
+            _draw_curves(doc, view, level, curves)
+        warnings.extend(transaction.warnings)
+        with Transaction(doc, "PDSO - Check Area") as transaction:
+            _move_location(area, location, new_location.X, new_location.Y)
             doc.Regenerate()
             if area.Area <= 0:
                 raise PDSOError(
@@ -458,19 +620,27 @@ def _current_outline(doc, area):
 
 
 def move_area_vertex(doc, area_id, index, x, y):
-    """Move one point of the outline of an Area to a new position."""
+    """Move one point of the outer outline of an Area to a new position.
+
+    The index is a point of "outline" in area_info. The outer outline is
+    redrawn with straight lines, so an arc in it becomes straight segments.
+    The holes are kept.
+    """
     area = get_area(doc, area_id)
     outline = _current_outline(doc, area)
     if not isinstance(index, int) or index < 0 or index >= len(outline):
         raise PDSOError(
             "Vertex index must be 0 to {}. Got: {!r}".format(len(outline) - 1, index)
         )
-    outline[index] = [float(x), float(y)]
+    outline[index] = [_number(x, "x"), _number(y, "y")]
     return set_area_outline(doc, area_id, outline)
 
 
 def move_area(doc, area_id, dx, dy, move_programs=True):
-    """Move an Area and its outline by (dx, dy) feet.
+    """Move an Area, its outline and its holes by (dx, dy) feet.
+
+    The Area and its programs move in one undo step. If a program cannot be
+    moved, nothing changes.
 
     Args:
         doc: Revit Document
@@ -482,11 +652,10 @@ def move_area(doc, area_id, dx, dy, move_programs=True):
     Returns:
         dict: The Area after the change (see area_info), plus "moved_programs"
     """
+    dx = _number(dx, "dx")
+    dy = _number(dy, "dy")
     area = get_area(doc, area_id)
     old_outline = _current_outline(doc, area)
-    new_outline = [
-        [point[0] + float(dx), point[1] + float(dy)] for point in old_outline
-    ]
 
     programs = []
     if move_programs and config_service.config_exists(doc):
@@ -500,39 +669,44 @@ def move_area(doc, area_id, dx, dy, move_programs=True):
             ):
                 programs.append(program)
 
-    info = set_area_outline(doc, area_id, new_outline)
+    transform = DB.Transform.CreateTranslation(DB.XYZ(dx, dy, 0))
     moved = []
-    for program in programs:
-        location = program["location"]
-        program_service.update_program(
-            doc,
-            program["id"],
-            x=location["x"] + float(dx),
-            y=location["y"] + float(dy),
-        )
-        moved.append(program["id"])
+    with TransactionGroup(doc, "PDSO - Move Area"):
+        info = _transform_area(doc, area, transform, "PDSO - Move Area Outline")
+        for program in programs:
+            location = program["location"]
+            program_service.update_program(
+                doc,
+                program["id"],
+                x=location["x"] + dx,
+                y=location["y"] + dy,
+            )
+            moved.append(program["id"])
     info["moved_programs"] = moved
     return info
 
 
 def scale_area(doc, area_id, factor):
-    """Scale the outline of an Area about its centroid.
+    """Scale an Area (its outline and holes) about the centroid of its outline.
 
     Args:
         factor (float): Linear scale factor. 2.0 makes the area four times larger.
     """
-    factor = float(factor)
+    factor = _number(factor, "factor")
     if factor <= 0:
         raise PDSOError("The scale factor must be more than 0.")
     area = get_area(doc, area_id)
     outline = _current_outline(doc, area)
-    cx = sum(point[0] for point in outline) / len(outline)
-    cy = sum(point[1] for point in outline) / len(outline)
-    scaled = [
-        [cx + (point[0] - cx) * factor, cy + (point[1] - cy) * factor]
-        for point in outline
-    ]
-    return set_area_outline(doc, area_id, scaled)
+    cx, cy = _polygon_centroid(outline)
+    level = doc.GetElement(area.LevelId)
+    center = DB.XYZ(cx, cy, level.ProjectElevation)
+    # Move the centre to the origin, scale, and move it back
+    transform = (
+        DB.Transform.CreateTranslation(center)
+        .Multiply(DB.Transform.Identity.ScaleBasisAndOrigin(factor))
+        .Multiply(DB.Transform.CreateTranslation(center.Negate()))
+    )
+    return _transform_area(doc, area, transform, "PDSO - Scale Area")
 
 
 def update_area(doc, area_id, name=None, number=None):

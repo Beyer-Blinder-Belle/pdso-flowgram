@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.5"
+EXPECTED_API_VERSION = "1.6"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -1408,17 +1408,18 @@ def find_similar_rooms(
 
 
 @mcp.tool()
-def place_layout(room: str, layout_id: str) -> dict:
-    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field. If the layout does not fit, nothing is placed.
+def place_layout(room: str, layout_id: str, clear_first: bool = False) -> dict:
+    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
 
     Args:
         room: Room number, or the element id of a Room or Area.
         layout_id: Id of the layout.
+        clear_first: Delete the furniture in the room first (as clear_room_items does), in the same undo step as the placement. If the placement fails, nothing is deleted. Ask the user before you set it.
     """
     return api(
         "POST",
         "catalogue/place",
-        {"room": room, "layout_id": layout_id},
+        {"room": room, "layout_id": layout_id, "clear_first": clear_first},
         timeout=LONG_TIMEOUT,
     )
 

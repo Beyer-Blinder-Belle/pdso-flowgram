@@ -29,6 +29,7 @@ from pdso.code.business.revit_helpers import (
 )
 from pdso.code.catalogue import revit_layout_service as layout_service
 from pdso.code.catalogue.catalogue_settings import catalogue_folders, get_catalogue_folder
+from pdso.code.catalogue.harvest_features import pdso_kinds
 from pdso.code.catalogue.catalogue_store import (
     ENTRY_EXTENSION,
     IMAGE_EXTENSION,
@@ -243,6 +244,7 @@ def _room_instances(element):
     for category in layout_service.HARVEST_CATEGORIES:
         categories.Add(category)
     instances = []
+    pdso_kind = pdso_kinds(doc)
     for instance in (
         DB.FilteredElementCollector(doc)
         .OfClass(DB.FamilyInstance)
@@ -251,6 +253,10 @@ def _room_instances(element):
     ):
         location = instance.Location
         if not isinstance(location, DB.LocationPoint):
+            continue
+        # PDSO data silos and Program Volumes are not furniture. They must
+        # not be listed, counted or deleted.
+        if pdso_kind(instance) is not None:
             continue
         point = location.Point
         if not point_in_polygon((point.X, point.Y), outline):
@@ -393,6 +399,7 @@ def rooms_overview(doc):
     categories = layout_service.List[DB.BuiltInCategory]()
     for category in layout_service.HARVEST_CATEGORIES:
         categories.Add(category)
+    pdso_kind = pdso_kinds(doc)
     for instance in (
         DB.FilteredElementCollector(doc)
         .OfClass(DB.FamilyInstance)
@@ -401,6 +408,8 @@ def rooms_overview(doc):
     ):
         location = instance.Location
         if not isinstance(location, DB.LocationPoint) or instance.SuperComponent is not None:
+            continue
+        if pdso_kind(instance) is not None:
             continue
         host = instance.Host
         if (host is not None and not isinstance(host, DB.Level)) or instance.HostFace is not None:
@@ -557,16 +566,22 @@ def recommend_layouts(doc, reference, program=None, limit=10):
     }
 
 
-def place_layout(doc, reference, entry_id):
+def place_layout(doc, reference, entry_id, clear_first=False):
     """Place a catalogue layout into a target Room or Area.
 
     The recommender selects the orientation. If the layout fits in no
     orientation, nothing is placed.
 
+    Args:
+        clear_first (bool): Delete the free-standing families in the target
+            first (as clear_room_items does). The delete and the placement
+            are one transaction: if the placement fails, nothing is deleted.
+
     Returns:
         dict: {"target": {...}, "layout_id", "placement", "placed": [element
             ids], "missing": {"Family : Type": count}, "tagged_programs":
-            [element ids], "warnings": [str]}
+            [element ids], "deleted": number of elements deleted first,
+            "warnings": [str]}
     """
     element = get_spatial_element(doc, reference)
     entry = get_entry(entry_id)
@@ -584,9 +599,31 @@ def place_layout(doc, reference, entry_id):
             409,
         )
     chosen = recommendations[0]
+    deleted = 0
     with Transaction(doc, "PDSO - Place Unit Layout") as transaction:
+        if clear_first:
+            ids = [instance.Id for instance in _room_instances(element)]
+            if ids:
+                doc.Delete(id_list(ids))
+            deleted = len(ids)
         result = layout_service.create(element, entry, chosen.placement)
+        # create() skips items whose family is not loaded. If it placed
+        # nothing, the room must not stay emptied: roll everything back.
+        if clear_first and deleted and not result.placed:
+            reasons = list(result.warnings)
+            if result.missing:
+                reasons.append(
+                    "Families not loaded in this model: {}".format(
+                        ", ".join(sorted(result.missing))
+                    )
+                )
+            raise PDSOError(
+                "No item of layout '{}' could be placed, so the furniture in the "
+                "room was not deleted. {}".format(entry_id, " ".join(reasons)).strip(),
+                409,
+            )
     return {
+        "deleted": deleted,
         "target": _spatial_info(element),
         "layout_id": entry.id,
         "score": chosen.score,

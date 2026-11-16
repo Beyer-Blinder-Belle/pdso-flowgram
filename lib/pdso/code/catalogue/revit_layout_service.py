@@ -24,14 +24,15 @@ from rpw import DB
 from rpw.utils.dotnet import List
 
 from pdso.code.catalogue.harvest_features import (
-    DATA_SILO_PARAMETER,
+    DATA_SILO,
+    pdso_kinds,
     boundary_edges,
     build_features,
     id_value,
     nearest_edge,
     type_name,
 )
-from pdso.code.catalogue.layout_entry import LayoutEntry, LayoutItem
+from pdso.code.catalogue.layout_entry import LayoutEntry, LayoutItem, is_entry_id
 from pdso.code.catalogue.layout_geometry import (
     RoomFrame,
     orient_angle,
@@ -143,8 +144,9 @@ def areas_with_data_silo(doc, view):
         tuple: (areas, without). without is the placed Areas with no silo.
     """
     silos = []
+    kind = pdso_kinds(doc)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
-        if instance.LookupParameter(DATA_SILO_PARAMETER) is None:
+        if kind(instance) != DATA_SILO:
             continue
         location = instance.Location
         if isinstance(location, DB.LocationPoint):
@@ -304,6 +306,7 @@ def harvest(spatial_element, name, program, project_type, notes=""):
     )
 
     items, skipped, hosted_items, nested_items = [], [], [], []
+    pdso_kind = pdso_kinds(doc)
     for instance in candidates:
         location = instance.Location
         if not isinstance(location, DB.LocationPoint):
@@ -314,8 +317,9 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         if _instance_level_id(instance) != level.Id:
             continue
 
-        # The PDSO data silo is the unit's label, not part of its layout
-        if instance.LookupParameter(DATA_SILO_PARAMETER) is not None:
+        # A PDSO data silo is the unit's label and a Program Volume is its
+        # generated copy. They are not part of the layout.
+        if pdso_kind(instance) is not None:
             continue
 
         local_x, local_y = frame.to_local((point.X, point.Y))
@@ -560,26 +564,41 @@ def create(spatial_element, entry, placement):
 
         result.placed.append(instance.Id)
 
-    result.tagged_silos = tag_data_silos(spatial_element, entry.id)
+    # A layout of which nothing was placed is not the layout of the target
+    if result.placed:
+        result.tagged_silos, kept = tag_data_silos(spatial_element, entry.id)
+        for value in kept:
+            result.warnings.append(
+                "The program keeps its Unit Layout Type '{}'. It was not "
+                "replaced with the layout id.".format(value)
+            )
     return result
 
 
 def tag_data_silos(spatial_element, entry_id):
     """Write the catalogue key into PDSO data silos standing in the target.
 
-    A data silo is any family instance on the target's level that carries the
-    "PDSO - Unit Layout Type" parameter and stands inside the outline. Must be
-    called inside an open transaction.
+    A data silo (see harvest_features.pdso_kinds) on the target's level that
+    carries the "PDSO - Unit Layout Type" parameter and stands inside the
+    outline. A Program Volume is not written to: the sync owns its data.
+
+    "PDSO - Unit Layout Type" is a field that users fill in (for example
+    "2BR - Type A"). A value that a user typed is kept; only an empty field or
+    a layout id from an earlier placement is replaced. Must be called inside
+    an open transaction.
 
     Returns:
-        list: ElementIds of the silos updated.
+        tuple: (ElementIds of the silos updated, values that were kept)
     """
     doc = spatial_element.Document
     outline = get_outline(spatial_element)
     level_id = spatial_element.LevelId
-    tagged = []
+    tagged, kept = [], []
+    kind = pdso_kinds(doc)
 
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
+        if kind(instance) != DATA_SILO:
+            continue
         parameter = instance.LookupParameter(UNIT_LAYOUT_PARAMETER)
         if parameter is None or parameter.IsReadOnly:
             continue
@@ -590,7 +609,11 @@ def tag_data_silos(spatial_element, entry_id):
             continue
         if not point_in_polygon((location.Point.X, location.Point.Y), outline):
             continue
+        current = parameter.AsString() or ""
+        if current.strip() and not is_entry_id(current.strip()):
+            kept.append(current)
+            continue
         parameter.Set(entry_id)
         tagged.append(instance.Id)
 
-    return tagged
+    return tagged, kept

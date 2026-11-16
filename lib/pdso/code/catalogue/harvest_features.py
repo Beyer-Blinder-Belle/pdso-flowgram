@@ -77,6 +77,60 @@ KITCHEN_WORDS = ("kitchen",)
 PDSO_PREFIX = "PDSO - "
 DATA_SILO_PARAMETER = "PDSO - Program UID"
 
+# Used when a model has no PDSO configuration
+DEFAULT_DATA_SILO_FAMILY_PREFIX = "PDSO - Program Data Silo Object"
+DEFAULT_PROGRAM_VOLUME_PREFIX = "PDSO_ProgramVolume-"
+
+DATA_SILO = "data silo"
+PROGRAM_VOLUME = "program volume"
+
+
+def pdso_kinds(doc):
+    """A function that says if a family instance is a PDSO object.
+
+    "PDSO - Program UID" is bound to the Generic Models category, so each
+    generic model (a potted plant, a Program Volume) has the parameter. Thus
+    the parameter alone does not make an instance a data silo.
+
+    Returns:
+        function: instance -> DATA_SILO, PROGRAM_VOLUME or None
+            A Program Volume is an instance of a family whose name starts
+            with the configured prefix. A data silo is an instance of the
+            configured Data Silo family, or an instance that has a value in
+            "PDSO - Program UID" and is not a Program Volume.
+    """
+    silo_family = None
+    volume_prefix = DEFAULT_PROGRAM_VOLUME_PREFIX
+    try:
+        from pdso.code.business.config_service import get_config
+
+        config = get_config(doc)
+        if config.get("exists"):
+            silo_family = config.get("data_silo_family_name") or None
+            volume_prefix = (
+                config.get("program_volume_family_name_prefix") or volume_prefix
+            )
+    except Exception:
+        pass
+
+    def kind(instance):
+        try:
+            family_name = instance.Symbol.Family.Name
+        except Exception:
+            return None
+        if family_name.startswith(volume_prefix):
+            return PROGRAM_VOLUME
+        if silo_family is not None and family_name == silo_family:
+            return DATA_SILO
+        if family_name.startswith(DEFAULT_DATA_SILO_FAMILY_PREFIX):
+            return DATA_SILO
+        parameter = instance.LookupParameter(DATA_SILO_PARAMETER)
+        if parameter is not None and parameter.HasValue and parameter.AsString():
+            return DATA_SILO
+        return None
+
+    return kind
+
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -669,8 +723,7 @@ def _rooms_inside(doc, spatial_element, level, outline, frame):
 def _unit_data(doc, level, outline, rooms):
     """What kind of unit this is: room counts, and the PDSO data silo's values.
 
-    The data silo is the family instance carrying "PDSO - Program UID" that
-    stands inside the unit. All of its "PDSO - ..." parameters (program type,
+    The data silo (see pdso_kinds) is the one that stands inside the unit. All of its "PDSO - ..." parameters (program type,
     market segment, bedroom count...) are kept, set or not, as a list of
     {key, value, display}: value is the stored value (None when empty; numbers
     in Revit's internal units), display is how Revit shows it, with its unit.
@@ -683,8 +736,9 @@ def _unit_data(doc, level, outline, rooms):
         "pdso": [],
     }
 
+    kind = pdso_kinds(doc)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
-        if instance.LookupParameter(DATA_SILO_PARAMETER) is None:
+        if kind(instance) != DATA_SILO:
             continue
         if instance.LevelId != level.Id:
             continue

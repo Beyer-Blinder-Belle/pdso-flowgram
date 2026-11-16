@@ -32,7 +32,7 @@ from ..data.extended_program_volume_family_collection import (
 )
 from .correlation_service import PDSOCorrelationService
 from .data_service import PDSODataService
-from .family_manager_service import PDSOFamilyManagerService
+from .family_manager_service import GEOMETRY_KEY, PDSOFamilyManagerService, _as_dict
 from .workset_coordination_service import WorksetCoordinationService
 from .extensible_storage_service import PDSOExtensibleStorageService
 from .level_mapping_service import PDSOLevelMappingService
@@ -63,6 +63,28 @@ SYNC_OPTIONS = {
     "program_volume_geometry_pinning": ("Pin", ["Pin", "Maintain", "Unpin"]),
     "program_volume_data_update": ("Yes", ["Yes", "No"]),
 }
+
+
+def _set_pinned(elements, pinned):
+    """Pin or unpin elements one by one.
+
+    An element that cannot be changed (unplaced, redundant, in a group) is
+    skipped, so it does not stop the others.
+
+    Returns:
+        tuple: (number changed, number skipped)
+    """
+    changed = 0
+    skipped = 0
+    for element in elements:
+        if element is None:
+            continue
+        try:
+            element.Pinned = pinned
+            changed += 1
+        except Exception:
+            skipped += 1
+    return changed, skipped
 
 
 class PDSOSyncError(Exception):
@@ -549,9 +571,9 @@ class PDSOSyncService(object):
             )
 
         # Apply workset enforcement and pinning together in single transaction
-        if (
-            self._area_harvest_workset_option == "Fix"
-            or self._area_harvest_pinning_option == "Pin"
+        # "Maintain" leaves each element pinned or unpinned as it is
+        if self._area_harvest_workset_option == "Fix" or (
+            self._area_harvest_pinning_option in ("Pin", "Unpin")
         ):
             self.current_step = "Enforcing worksets and pinning elements"
             self.progress_status = "PDSOs and Areas"
@@ -618,33 +640,36 @@ class PDSOSyncService(object):
                                 )
 
                     # Pinning (directly set Pinned property, don't use collection method)
-                    if self._area_harvest_pinning_option == "Pin":
-                        self.logger.info("Pinning PDSOs and Areas")
+                    if self._area_harvest_pinning_option in ("Pin", "Unpin"):
+                        pinned = self._area_harvest_pinning_option == "Pin"
+                        verb = "Pinned" if pinned else "Unpinned"
+                        self.logger.info("{} PDSOs and Areas".format(verb))
 
-                        # Pin data silos directly
-                        for ds in ext_data_silo_collection.extended_data_silos:
-                            ds.rpw_element.Pinned = True
+                        silo_count, silo_skipped = _set_pinned(
+                            [
+                                ds.rpw_element
+                                for ds in ext_data_silo_collection.extended_data_silos
+                            ],
+                            pinned,
+                        )
                         self.logger.info(
-                            "Pinned {} PDSOs".format(
-                                len(ext_data_silo_collection.extended_data_silos)
+                            "{} {} PDSOs ({} skipped)".format(
+                                verb, silo_count, silo_skipped
                             )
                         )
 
-                        # Pin areas directly (with individual error handling)
-                        area_pinned_count = 0
-                        area_failed_count = 0
-                        for area_scheme in area_scheme_objects:
-                            for ext_area in area_scheme.extended_areas:
-                                try:
-                                    ext_area.rpw_area.Pinned = True
-                                    area_pinned_count += 1
-                                except Exception:
-                                    area_failed_count += 1
-                                    # Skip areas that can't be pinned (unplaced, redundant, etc.)
-
+                        # Unplaced or redundant Areas are skipped
+                        area_count, area_skipped = _set_pinned(
+                            [
+                                ext_area.rpw_area
+                                for area_scheme in area_scheme_objects
+                                for ext_area in area_scheme.extended_areas
+                            ],
+                            pinned,
+                        )
                         self.logger.info(
-                            "Pinned {} Areas ({} skipped)".format(
-                                area_pinned_count, area_failed_count
+                            "{} {} Areas ({} skipped)".format(
+                                verb, area_count, area_skipped
                             )
                         )
 
@@ -672,6 +697,45 @@ class PDSOSyncService(object):
 
         self._notify()
 
+    def _link_existing_families(self, config, ext_data_silo_collection):
+        """Link each Data Silo to its Program Volume family, without changing it.
+
+        Used when the geometry update is off. Phase 3 then updates the data of
+        the instances of families that are in the model, and keeps them at the
+        point the geometry was built around (see built_basepoint), not at the
+        Data Silo's current location. Only a family with
+        the expected name (prefix + UID) is linked: a family that phase 2
+        would rename or build is not, and that Data Silo is skipped with a
+        warning in phase 3.
+        """
+        prefix = config.program_volume_family_name_prefix
+        families = ExtendedProgramVolumeFamilyCollection(self.doc, prefix)
+        by_name = {}
+        for family in families.extended_program_volume_families:
+            if family.rpw_element is not None:
+                by_name[family.rpw_element.Name] = family
+        linked = 0
+        for ext_data_silo in ext_data_silo_collection.extended_data_silos:
+            uid = ext_data_silo.parameters["PDSO - Program UID"].value
+            if not uid:
+                continue
+            family = by_name.get("{}{}".format(prefix, uid))
+            if family is None or family.parent_data_silo is not None:
+                continue
+            # The geometry is not rebuilt, so its instances must stay where
+            # the geometry was built: at the Data Silo point of the last build.
+            # (Reading .entity opens a transaction: this runs outside one.)
+            family.geometry_not_rebuilt = True
+            entity = family.entity
+            basepoints = _as_dict(getattr(entity, "area_basepoint", None))
+            family.built_basepoint = basepoints.get(GEOMETRY_KEY)
+            ext_data_silo.related_program_volume_family = family
+            family.parent_data_silo = ext_data_silo
+            linked += 1
+        self.logger.info(
+            "Linked {} PDSOs to their existing Program Volume families".format(linked)
+        )
+
     def _execute_phase_2_family_geometry(
         self,
         storage_service,
@@ -696,6 +760,8 @@ class PDSOSyncService(object):
         if self._program_volume_geometry_update_option == "No":
             self.logger.info("Skipping family geometry updates (per UI setting)")
             self.phases[1] = "skipped"
+            # Phase 3 still needs each Data Silo's existing family
+            self._link_existing_families(config, ext_data_silo_collection)
             return
 
         # Get families collection (but use existing data silo collection from Phase 1)
@@ -827,10 +893,14 @@ class PDSOSyncService(object):
             except Exception as e:
                 self.logger.error("Workset enforcement failed: {}".format(str(e)))
 
-        # Apply pinning if configured
-        if self._program_volume_geometry_pinning_option == "Pin":
-            self.current_step = "Pinning Program Volume families"
-            self.progress_status = "Pinning {} families".format(
+        # Apply pinning if configured. "Maintain" leaves each family as it is.
+        if self._program_volume_geometry_pinning_option in ("Pin", "Unpin"):
+            pinned = self._program_volume_geometry_pinning_option == "Pin"
+            verb = "Pinned" if pinned else "Unpinned"
+            self.current_step = "{} Program Volume families".format(
+                "Pinning" if pinned else "Unpinning"
+            )
+            self.progress_status = "{} families".format(
                 len(
                     ext_program_volume_families_collection.extended_program_volume_families
                 )
@@ -838,19 +908,17 @@ class PDSOSyncService(object):
             self.progress_value = 100
             self._notify()
 
-            self.logger.info("Pinning Program Volume families")
-
             try:
                 with db.Transaction("PDSO - Pin Families", doc=self.doc):
-                    # Pin families directly
-                    pinned_count = 0
-                    for pvf in ext_program_volume_families_collection.extended_program_volume_families:
-                        if pvf.rpw_element is None:
-                            continue
-                        pvf.rpw_element.Pinned = True
-                        pinned_count += 1
+                    count, skipped = _set_pinned(
+                        [
+                            pvf.rpw_element
+                            for pvf in ext_program_volume_families_collection.extended_program_volume_families
+                        ],
+                        pinned,
+                    )
                     self.logger.info(
-                        "Pinned {} families".format(pinned_count)
+                        "{} {} families ({} skipped)".format(verb, count, skipped)
                     )
             except Exception as e:
                 self.logger.error("Pinning failed: {}".format(str(e)))
@@ -941,10 +1009,10 @@ class PDSOSyncService(object):
                 # Store validation message for UI display
                 self.validation_warning_message = ext_program_volume_instance_collection.validation_result.get_summary_message()
             self.logger.warning(
-                "Continuing with sync - PDSOs with complete level mappings will process normally"
+                "Continuing with sync. Data Silos with stacking errors get "
+                "Program Volumes on the levels that resolved; their instances "
+                "on other levels are kept, not deleted, until the stacking is fixed."
             )
-            # Store validation message for UI display
-            self.validation_warning_message = ext_program_volume_instance_collection.validation_result.get_summary_message()
             # Continue processing instead of aborting
 
         self.logger.info(
@@ -987,7 +1055,9 @@ class PDSOSyncService(object):
         self.progress_value = 50
         self._notify()
 
+        # Remember which instances were pinned, for the "Maintain" option
         self.logger.info("Unpinning Program Volume instances for updates")
+        pinned_before = []
         with db.Transaction("PDSO - Unpin Instances", doc=self.doc):
             for ext_instance in (
                 ext_program_volume_instance_collection.extended_program_volume_instances
@@ -995,9 +1065,11 @@ class PDSOSyncService(object):
                 if ext_instance.rpw_element is None:
                     continue  # Skip instances that don't exist yet
                 try:
+                    if ext_instance.rpw_element.Pinned:
+                        pinned_before.append(ext_instance)
                     ext_instance.rpw_element.Pinned = False
-                except:
-                    pass  # Ignore if already unpinned
+                except Exception:
+                    pass  # An instance that cannot be unpinned is left as it is
 
         # Commit changes (creates new instances, updates locations, and deletes orphans)
         self.current_step = "Committing Program Volume instance updates"
@@ -1100,14 +1172,23 @@ class PDSOSyncService(object):
             except Exception as e:
                 self.logger.error("Workset enforcement failed: {}".format(str(e)))
 
-        # Apply pinning if configured
-        if self._program_volume_geometry_pinning_option == "Pin":
+        # Apply pinning. The instances were unpinned for the update above.
+        # "Pin" pins every instance, "Maintain" pins again the instances that
+        # were pinned before, "Unpin" leaves them unpinned.
+        pinning = self._program_volume_geometry_pinning_option
+        if pinning == "Pin":
+            to_pin = [
+                pvi
+                for pvi in ext_program_volume_instance_collection.extended_program_volume_instances
+                if not pvi.should_be_deleted
+            ]
+        elif pinning == "Maintain":
+            to_pin = [pvi for pvi in pinned_before if not pvi.should_be_deleted]
+        else:
+            to_pin = []
+        if to_pin:
             self.current_step = "Pinning Program Volume instances"
-            self.progress_status = "Pinning {} instances".format(
-                len(
-                    ext_program_volume_instance_collection.extended_program_volume_instances
-                )
-            )
+            self.progress_status = "Pinning {} instances".format(len(to_pin))
             self.progress_value = 100
             self._notify()
 
@@ -1115,15 +1196,11 @@ class PDSOSyncService(object):
 
             try:
                 with db.Transaction("PDSO - Pin Instances", doc=self.doc):
-                    # Pin instances directly
-                    pinned_count = 0
-                    for pvi in ext_program_volume_instance_collection.extended_program_volume_instances:
-                        if pvi.rpw_element is None:
-                            continue
-                        pvi.rpw_element.Pinned = True
-                        pinned_count += 1
+                    count, skipped = _set_pinned(
+                        [pvi.rpw_element for pvi in to_pin], True
+                    )
                     self.logger.info(
-                        "Pinned {} instances".format(pinned_count)
+                        "Pinned {} instances ({} skipped)".format(count, skipped)
                     )
             except Exception as e:
                 self.logger.error("Pinning failed: {}".format(str(e)))

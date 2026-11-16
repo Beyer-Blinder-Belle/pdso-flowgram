@@ -144,11 +144,12 @@ def recommend_layouts(ctx):
 
 @route("POST", "catalogue/place")
 def place_layout(ctx):
-    """Place a layout into a target Room or Area. Body: room, layout_id"""
+    """Place a layout into a target Room or Area. Body: room, layout_id, clear_first?"""
     return catalogue.place_layout(
         ctx.require_doc(),
         ctx.arg("room", required=True),
         ctx.arg("layout_id", required=True),
+        _flag(ctx.arg("clear_first")),
     )
 
 
