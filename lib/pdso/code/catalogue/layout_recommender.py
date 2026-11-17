@@ -24,12 +24,16 @@ from pdso.code.catalogue.layout_geometry import (
     orient_size,
     outline_mismatch,
     point_in_or_near_polygon,
+    point_in_polygon,
 )
 
 # How much larger than the target rectangle a layout may be (ft). Room
 # boundaries are measured to finish faces or wall centrelines, so a few inches
 # of difference between source and target is normal.
 FIT_TOLERANCE = 0.5
+
+# Positions on each axis that refine_placement tries between two sides
+REFINE_STEPS = 8
 
 AREA_WEIGHT = 0.6
 SNUG_WEIGHT = 0.4
@@ -141,6 +145,55 @@ def best_placement(entry, target_width, target_depth, target_outline):
     if best is None:
         return None, None
     return best[1], best[2]
+
+
+def refine_placement(entry, placement, target_width, target_depth, target_outline):
+    """Move a placement to where the layout outline agrees best with the target.
+
+    best_placement puts the layout in the middle of the target rectangle. If
+    the target is larger than the layout (for example a wall jog makes its
+    rectangle deeper), the items are then away from the walls that they were
+    against. This function tries a grid of positions between the sides of the
+    target rectangle and keeps the one with the smallest outline mismatch.
+    A position is used only if it puts no more insertion points outside the
+    target outline than the middle position does.
+
+    Returns:
+        Placement: The same orientation; the shift can be different.
+    """
+    if not target_outline or not entry.boundary:
+        return placement
+    width, depth = orient_size(entry.width, entry.depth, placement.turns)
+
+    def shifts(spare, middle):
+        # A layout that is larger than the target (in the tolerance) stays centred
+        if spare <= 0.01:
+            return [middle]
+        return [spare * step / float(REFINE_STEPS) for step in range(REFINE_STEPS + 1)]
+
+    def outside(candidate):
+        return len(
+            [
+                1
+                for _, point in oriented_items(entry, candidate)
+                if not point_in_polygon(point, target_outline)
+            ]
+        )
+
+    best = placement
+    best_mismatch = outline_mismatch(oriented_outline(entry, placement), target_outline)
+    allowed = outside(placement)
+    for shift_x in shifts(target_width - width, placement.shift[0]):
+        for shift_y in shifts(target_depth - depth, placement.shift[1]):
+            candidate = Placement(placement.turns, placement.mirror, (shift_x, shift_y))
+            if outside(candidate) > allowed:
+                continue
+            mismatch = outline_mismatch(
+                oriented_outline(entry, candidate), target_outline
+            )
+            if mismatch < best_mismatch - 0.01:
+                best, best_mismatch = candidate, mismatch
+    return best
 
 
 def recommend(entries, target_width, target_depth, target_area, target_outline, program):

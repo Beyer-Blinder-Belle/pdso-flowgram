@@ -221,6 +221,19 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Steps: Pull for a Room that gets layouts from the sample and the local folder.
   Expected: each row says "catalogue N, sample" or "catalogue N, local".
 
+- [ ] **T-C13. Place into a model without the families** [F1]
+  Steps: harvest a unit in model A. In model B, which doesn't have the furniture families, Pull that layout into an Area. Repeat with A closed.
+  Expected: the families are loaded and the items placed; the result lists "Families loaded into this model". With A closed, they still load from the catalogue's families/ folder. The preview said "N families will be loaded".
+- [ ] **T-C14. Furniture stays against its wall** [F1]
+  Steps: Pull a layout into a target that is deeper than the source (a wall jog).
+  Expected: the items stay against the wall they were against in the source, not centred.
+- [ ] **T-C15. Mirrored placement of a family with no flip control** [F1]
+  Steps: Pull a layout whose best placement is mirrored, with a family that has no flip controls.
+  Expected: that item is mirrored like the others.
+- [ ] **T-C16. One harvest pipeline** [K2]
+  Steps: harvest the same unit with Harvest Layout, then with Harvest All Units, then with the MCP's `harvest_units`.
+  Expected: the same name style, catalogue number and family files each time. Harvest Layout adds a new entry; the other two replace the earlier entry of that unit.
+
 ### Setup and ribbon
 
 - [ ] **T-U1. Two windows** [U1]
@@ -288,7 +301,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.8 with no version warning.
+  Expected: API 1.9 with no version warning.
 - [ ] **T-P8. Colored 3D view** [K1]
   Model: one where `show_program_volumes` ran before (it has "PDSO - Program Volumes").
   Steps: `show_program_volumes`.

@@ -227,7 +227,8 @@ Still open from this review:
   *Partly done:*
   - `documents/*` now go through `model_service`, and `documents/open` answers dialogs (K7).
   - The sync gate and option checks are in `sync_service.run_with_preflight` and `check_options`; the handler only adds the Program Volume summary.
-  - Still open: Harvest All Units' logic, and the MCP's Room→Area outline, setup default levels and crossing-items check. They touch the files of the unmerged branches F1 (`fix/place-on-rac`: Harvest All Units and the catalogue services) and F2 (`feature/mcp-pull-from-catalogue`: the MCP server).
+  - Harvest All Units: done with F1. `catalogue_api_service.harvest_units` does naming, ids, catalogue numbers under the lock, replacement, family files and plan images. The button, Harvest Layout (`harvest_layout`, which never replaces) and the new `POST catalogue/harvest-units` / MCP `harvest_units` all use it. API 1.9.
+  - Still open: the MCP's Room→Area outline, setup default levels and crossing-items check. PDSO uses Areas only, so these are being reviewed from first principles rather than moved as they are.
 - [x] **K3.** Project Config bypasses `config_service`, so its saves skip the service's validation. It also repeats `run_model_checks` (`body_1_setup.py:643-766, 1306-1365`).
   *Done: Save calls `config_service.update_config`, so the window gets the API's checks: UID pattern, extrusion height, level keys and levels, and area scheme mapping parameters. A refused save names the problem and saves nothing. The window's copy of the model checks had no button or bindings in its XAML, so it is removed.*
 - [x] **K4.** There are four point-in-polygon implementations; only `correlation_service` handles holes. The others are `program_service._outline`, `visualization_service.program_by_area` and `area_drafting_service`, plus the MCP's `_inside`.
@@ -303,7 +304,8 @@ Still open from this review:
 
 ## F. Unfinished work
 
-- [ ] **F1.** `fix/place-on-rac` is unmerged and conflicts with main in `1.HarvestUnits.pushbutton/script.py`. It overlaps with B1 and B2.
+- [x] **F1.** `fix/place-on-rac` is unmerged and conflicts with main in `1.HarvestUnits.pushbutton/script.py`. It overlaps with B1 and B2.
+  *Done: ported onto main by hand on `fix/catalogue-harvest-place`. The parts B1/B2 had already done differently (`pdso_kinds`, PDSO objects not furniture, tagging only when placed) were left out. Kept: family files saved at harvest and loaded at place (`save_family_files`, `load_missing_families`, `loadable_families`, with `FamilyLoadOptions(keep_existing=True)`), `refine_placement`, and the mirror fix. The branch can be deleted.*
 - [ ] **F2.** `feature/mcp-pull-from-catalogue` is finished but unmerged, and conflicts with F1 in the `place_layout` docstring. Its delete and place aren't atomic, and `limit: 200` hides layouts ranked lower.
 - [ ] **F3.** `feature/lodging-unit-harvest` is a prototype that has never been run in Revit. It repeats the catalogue's heuristics, reports m², and calls `os.startfile`.
 - [ ] **F4.** Duplicate Program Volume instances on one level are skipped (`correlation_service.py:492`, "To do - figure out deletion").

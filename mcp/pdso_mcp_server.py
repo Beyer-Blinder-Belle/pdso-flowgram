@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.8"
+EXPECTED_API_VERSION = "1.9"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -1432,12 +1432,12 @@ def harvest_layout(
     project_type: str = "Other",
     notes: str = "",
 ) -> dict:
-    """Save the layout of a Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. Returns the JSON entry and its file path.
+    """Save the layout of one Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. PDSO data silos and Program Volumes are not part of a layout. The family of each item is saved as a file in the families folder of the catalogue folder (family_files), so that place_layout can load it into a model that doesn't have it. The layout gets a catalogue number: the same shape keeps its number. Returns the JSON entry and its file path. To harvest every unit of an area plan, use harvest_units.
 
     Args:
         room: Room number (for example "304"), or the element id of a Room or Area.
-        name: Name of the layout. Default: "<program> - <area> sf". Each harvest makes a new layout (its id ends with the date and time); it never replaces an earlier one. To replace one, delete_layout the old id.
-        program: Program that the layout serves. Default: the Room name.
+        name: Name of the layout. Default: "<program> - <area> sf - <Area or Room> <number>". Each harvest_layout makes a new layout (its id ends with the date and time); it never replaces an earlier one. To replace one, delete_layout the old id.
+        program: Program that the layout serves. Default: from the unit's data silo, else read from the rooms inside (bedroom count), else the Room name.
         project_type: For example "Residential", "Office" or "K-12".
         notes: Free text.
     """
@@ -1451,6 +1451,23 @@ def harvest_layout(
         }
     )
     return api("POST", "catalogue/harvest", body, timeout=LONG_TIMEOUT)
+
+
+@mcp.tool()
+def harvest_units(
+    view: str | None = None,
+    areas: list[int] | None = None,
+    project_type: str = "Other",
+) -> dict:
+    """Harvest units into the catalogue, as the Harvest All Units button does: every Area of an area plan that has a PDSO data silo inside, or the given Areas. Each gets a name, a catalogue number (the same shape keeps its number), its family files and a plan image from the view. Running again replaces the earlier harvest of the same units. This writes files to the catalogue folder; the model does not change.
+
+    Args:
+        view: Name or id of the area plan. Default: the active view.
+        areas: Element ids of the Areas to harvest. Default: every Area in the view with a data silo inside.
+        project_type: For example "Residential", "Office" or "K-12".
+    """
+    body = _clean({"view": view, "areas": areas, "project_type": project_type})
+    return api("POST", "catalogue/harvest-units", body, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
@@ -1489,7 +1506,7 @@ def find_similar_rooms(
 
 @mcp.tool()
 def place_layout(room: str, layout_id: str, clear_first: bool = False) -> dict:
-    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
+    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation, then moves the layout to where its outline agrees best with the target, so furniture stays against its walls. A family the model doesn't have is loaded first (its own undo step), from the family files harvest saved or from another open model (see loaded_families). Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
 
     Args:
         room: Room number, or the element id of a Room or Area.
@@ -2128,6 +2145,8 @@ def _fit_text_line(preview: dict) -> tuple[str, str]:
         if crossing:
             text += f", but {crossing} item{' goes' if crossing == 1 else 's go'} across the Room outline"
             state = "warn"
+        if match.get("families_to_load"):
+            text += f"; {len(match['families_to_load'])} families will be loaded"
         if match["items_not_loaded"]:
             text += f"; {match['items_not_loaded']} items: family not loaded"
             state = "warn"

@@ -11,8 +11,12 @@ active document.
 """
 
 from pdso.code.api import handlers
+from pdso.code.api.dispatcher import ApiError
 from pdso.code.api.handlers import _flag
+from pdso.code.business import model_service
+from pdso.code.business.revit_helpers import id_value
 from pdso.code.catalogue import catalogue_api_service as catalogue
+from pdso.code.catalogue import revit_layout_service as layout_service
 
 
 def route(method, pattern):
@@ -55,6 +59,43 @@ def harvest_layout(ctx):
         # caller must not choose where files are written. Harvests go to the
         # catalogue folder set in Revit (Shift+Click Harvest Layout).
     )
+
+
+@route("POST", "catalogue/harvest-units")
+def harvest_units(ctx):
+    """Harvest units as the Harvest All Units button does. Body: view?, areas?, project_type?
+
+    Without "areas", every Area of the area plan "view" (default: the active
+    view) that has a PDSO data silo inside. Plan images come from "view".
+    Running again replaces the earlier harvest of the same units.
+    """
+    doc = ctx.require_doc()
+    view = model_service.find_view(doc, ctx.arg("view"))
+    references = ctx.arg("areas")
+    without = []
+    if references:
+        if not isinstance(references, list):
+            references = [references]
+        elements = [catalogue.get_spatial_element(doc, ref) for ref in references]
+    else:
+        elements, without = catalogue.units_in_view(doc, view)
+    if not elements:
+        raise ApiError(
+            "No Area with a PDSO data silo inside is in '{}'. {} placed Area(s) "
+            "have no silo.".format(view.Name, len(without)),
+            404,
+        )
+    report = catalogue.public_report(
+        catalogue.harvest_units(
+            doc, elements, ctx.arg("project_type", "Other"), view=view
+        )
+    )
+    report["view"] = view.Name
+    report["without_silo"] = [
+        {"id": id_value(area.Id), "name": layout_service.get_room_name(area), "area": area.Area}
+        for area in without
+    ]
+    return report
 
 
 @route("POST", "catalogue/recommend")

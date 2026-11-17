@@ -17,6 +17,7 @@ Example Usage:
 import base64
 import math
 import os
+from datetime import datetime
 
 from rpw import DB
 
@@ -30,14 +31,20 @@ from pdso.code.business.revit_helpers import (
 )
 from pdso.code.catalogue import revit_layout_service as layout_service
 from pdso.code.catalogue.catalogue_settings import catalogue_folders, get_catalogue_folder
-from pdso.code.catalogue.harvest_features import pdso_kinds
+from pdso.code.catalogue.harvest_features import boundary_edges, pdso_kinds, pdso_value
+from pdso.code.catalogue.harvest_image import UnitImager
+from pdso.code.catalogue.layout_entry import is_entry_id, slugify
 from pdso.code.catalogue.catalogue_store import (
     ENTRY_EXTENSION,
     IMAGE_EXTENSION,
     SKETCH_EXTENSION,
+    assign_catalogue,
+    catalogue_lock,
+    catalogue_numbers,
     default_local_folder,
     entry_to_svg,
     load_catalogue,
+    remove_previous,
     sample_folder,
     save_entry,
 )
@@ -58,6 +65,7 @@ from pdso.code.catalogue.layout_recommender import (
     oriented_items,
     oriented_outline,
     recommend,
+    refine_placement,
 )
 
 # Number of sample points on each side of the grid that compares two outlines
@@ -499,51 +507,271 @@ def layout_sketches():
 # =============================================================================
 
 
+def suggest_program(unit, rooms, fallback):
+    """The program of a harvested unit, when none is given.
+
+    The data silo's Unit Layout Type, Program Display Name or Program Type,
+    else read from the rooms inside: a dwelling (it has a bedroom, bathroom or
+    kitchen) is named by its bedroom count, and a unit that is one room takes
+    that room's name (a classroom). Else the fallback, else "Unit".
+    """
+    for key in (
+        "PDSO - Unit Layout Type",
+        "PDSO - Program Display Name",
+        "PDSO - Program Type",
+    ):
+        value = pdso_value(unit, key)
+        # A layout id that Pull from Catalogue wrote is not a program name
+        if value and not is_entry_id(str(value).strip()):
+            return str(value)
+    bedrooms = unit.get("bedrooms", 0)
+    if bedrooms or unit.get("bathrooms") or unit.get("kitchens"):
+        return "Studio" if bedrooms == 0 else "{} Bedroom".format(bedrooms)
+    if len(rooms) == 1 and rooms[0].get("name"):
+        return rooms[0]["name"].title()
+    return fallback or "Unit"
+
+
+def units_in_view(doc, view):
+    """The units of an area plan: its Areas that have a PDSO data silo inside.
+
+    Returns:
+        tuple: (areas, without): the Areas with a silo, and the placed Areas
+            with none
+    """
+    if not layout_service.is_area_plan(view):
+        raise PDSOError(
+            "'{}' is not an area plan. Harvest All Units works on the Areas of "
+            "an area plan.".format(view.Name)
+        )
+    return layout_service.areas_with_data_silo(doc, view)
+
+
+def harvest_units(
+    doc,
+    elements,
+    project_type="Other",
+    view=None,
+    name=None,
+    program=None,
+    notes="",
+    folder=None,
+    replace_previous=True,
+):
+    """Save the layout of each Room or Area into the catalogue.
+
+    Every harvest goes through here (Harvest Layout, Harvest All Units and the
+    API), so their entries are made the same way:
+    - program: the one given, else suggest_program;
+    - name: the one given (one element only), else
+      "<program> - <area> sf - <Area or Room> <number>";
+    - id: unique in the folder;
+    - catalogue number: a shape keeps its number in the folder. Numbers are
+      given while the folder is locked (catalogue_lock);
+    - with replace_previous, an earlier harvest of the same unit is removed,
+      after the new entry is saved;
+    - the family of each item is saved in the folder's families/ folder, so
+      the layout can go into a model that doesn't have it;
+    - with a view (a plan), a PNG plan image of each unit is saved beside it.
+
+    Must be called with no open transaction.
+
+    Returns:
+        dict: "folder", "units" (one dict per saved unit: element_id,
+            element_kind, layout_id, name, program, catalogue_number, file,
+            image, family_files, skipped, layout), "failures" ([{"id",
+            "reason"}]), "replaced", "images", "image_error". Each unit also
+            has "_element", "_entry" and "_result" for the ribbon; public_report
+            leaves them out.
+    """
+    if (name or program) and len(elements) != 1:
+        raise PDSOError("A name or a program can be given for one Room or Area only.")
+    folder = folder or get_catalogue_folder()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    used_ids = set()
+    units, failures, replaced = [], [], 0
+
+    lock = catalogue_lock(folder)
+    try:
+        lock.__enter__()
+    except RuntimeError as error:
+        raise PDSOError(str(error), 409)
+    try:
+        numbers = catalogue_numbers(folder)
+        for element in elements:
+            lock.touch()
+            try:
+                result = layout_service.harvest(element, "", "", project_type, notes)
+                if result is None:
+                    failures.append(
+                        {
+                            "id": id_value(element.Id),
+                            "reason": "The Room or Area is not placed or not "
+                            "enclosed. It has no boundary.",
+                        }
+                    )
+                    continue
+                entry = result.entry
+                features = entry.features
+                source = entry.source
+                entry.program = program or suggest_program(
+                    features.get("unit", {}),
+                    features.get("rooms", []),
+                    layout_service.get_room_name(element)
+                    or layout_service.get_room_department(element),
+                )
+                label = (
+                    source.get("room_number")
+                    or source.get("room_name")
+                    or source["element_id"]
+                )
+                entry.name = name or "{} - {:.0f} sf - {} {}".format(
+                    entry.program, entry.area, source["element_kind"], label
+                )
+                base = "{}--{}--{}".format(
+                    slugify(entry.program), slugify(entry.name), stamp
+                )
+                entry.id, count = base, 1
+                while entry.id in used_ids or os.path.exists(
+                    os.path.join(folder, entry.id + ENTRY_EXTENSION)
+                ):
+                    count += 1
+                    entry.id = "{}-{}".format(base, count)
+                used_ids.add(entry.id)
+
+                number = assign_catalogue(entry, numbers)
+                # Save first: a failed save must not leave the unit with no entry
+                path = save_entry(entry, folder)
+                if replace_previous:
+                    replaced += remove_previous(folder, source, keep=path)
+                units.append(
+                    {
+                        "_element": element,
+                        "_entry": entry,
+                        "_result": result,
+                        "file": path,
+                        "catalogue_number": number,
+                        "image": None,
+                    }
+                )
+            except Exception as error:
+                failures.append(
+                    {
+                        "id": id_value(element.Id),
+                        "reason": "{}: {}".format(type(error).__name__, error),
+                    }
+                )
+    finally:
+        lock.__exit__(None, None, None)
+
+    # The family files: outside the lock, since each takes a while. A file
+    # that is there is kept, so a family is saved once per folder.
+    for unit in units:
+        try:
+            unit["family_files"] = layout_service.save_family_files(
+                doc, unit["_entry"], folder
+            )
+        except Exception as error:
+            unit["family_files"] = {"saved": [], "failed": {"(all)": str(error)}}
+
+    # A plan image of each unit, from a temporary copy of the view with tags
+    # and Area lines hidden. The copy is undone; the model does not change.
+    images, image_error = 0, ""
+    if view is not None and units:
+        imager = UnitImager(doc, view)
+        try:
+            for unit in units:
+                entry = unit["_entry"]
+                outline = [start for start, _, _ in boundary_edges(unit["_element"])]
+                image_path = unit["file"][: -len(ENTRY_EXTENSION)] + IMAGE_EXTENSION
+                if imager.export(outline, image_path):
+                    entry.features["image"] = entry.id + IMAGE_EXTENSION
+                    save_entry(entry, folder)
+                    unit["image"] = image_path
+                    images += 1
+        finally:
+            image_error = imager.error
+            imager.close()
+
+    for unit in units:
+        entry, element = unit["_entry"], unit["_element"]
+        unit.update(
+            {
+                "element_id": id_value(element.Id),
+                "element_kind": entry.source.get("element_kind"),
+                "layout_id": entry.id,
+                "name": entry.name,
+                "program": entry.program,
+                "skipped": [
+                    {"id": id_value(element_id), "label": label, "reason": reason}
+                    for element_id, label, reason in unit["_result"].skipped
+                ],
+                "layout": entry_summary(entry),
+            }
+        )
+    return {
+        "folder": folder,
+        "units": units,
+        "failures": failures,
+        "replaced": replaced,
+        "images": images,
+        "image_error": image_error,
+    }
+
+
+def public_report(report):
+    """A harvest_units report without its Revit objects, for JSON."""
+    report = dict(report)
+    report["units"] = [
+        dict((key, value) for key, value in unit.items() if not key.startswith("_"))
+        for unit in report["units"]
+    ]
+    return report
+
+
 def harvest_layout(
     doc, reference, name=None, program=None, project_type="Other", notes="", folder=None
 ):
-    """Save the layout of a Room or Area into the catalogue.
+    """Save the layout of one Room or Area into the catalogue (see harvest_units).
+
+    Each call makes a new layout; it doesn't replace an earlier harvest of the
+    same Room or Area.
 
     Args:
         doc: Revit Document
         reference: Element id of a Room or Area, or a Room number
-        name (str): Name of the layout. Default: "<program> - <area> sf"
-        program (str): Program that the layout serves. Default: the Room name
+        name (str): Name of the layout. Default: "<program> - <area> sf - ..."
+        program (str): Program that the layout serves. Default: suggest_program
         project_type (str): For example "Residential" or "K-12"
         notes (str): Free text
         folder (str): Folder for the files. Default: the configured folder
 
     Returns:
         dict: {"layout": summary, "file": path of the JSON file, "entry": the
-            stored JSON, "skipped": [{"id", "label", "reason"}]}
+            stored JSON, "skipped": [{"id", "label", "reason"}],
+            "catalogue_number", "family_files"}
     """
     element = get_spatial_element(doc, reference)
-    program = program or layout_service.get_room_name(element)
-    if not program:
-        raise PDSOError("Give a program. The Room has no name.")
-    name = name or "{} - {:.0f} sf".format(program, element.Area)
-
-    result = layout_service.harvest(element, name, program, project_type, notes)
-    if result is None:
-        raise PDSOError(
-            "The Room or Area is not placed or not enclosed. It has no boundary.", 409
-        )
-    target_folder = folder or get_catalogue_folder()
-    # The id has a time stamp to the second. A second harvest in the same
-    # second gets "-2", "-3"... instead of overwriting the first.
-    base, count = result.entry.id, 1
-    while os.path.exists(os.path.join(target_folder, result.entry.id + ENTRY_EXTENSION)):
-        count += 1
-        result.entry.id = "{}-{}".format(base, count)
-    path = save_entry(result.entry, target_folder)
+    report = harvest_units(
+        doc,
+        [element],
+        project_type,
+        name=name,
+        program=program,
+        notes=notes,
+        folder=folder,
+        replace_previous=False,
+    )
+    if report["failures"]:
+        raise PDSOError(report["failures"][0]["reason"], 409)
+    unit = report["units"][0]
     return {
-        "layout": entry_summary(result.entry),
-        "file": path,
-        "entry": result.entry.to_dict(),
-        "skipped": [
-            {"id": id_value(element_id), "label": label, "reason": reason}
-            for element_id, label, reason in result.skipped
-        ],
+        "layout": unit["layout"],
+        "file": unit["file"],
+        "entry": unit["_entry"].to_dict(),
+        "skipped": unit["skipped"],
+        "catalogue_number": unit["catalogue_number"],
+        "family_files": unit["family_files"],
     }
 
 
@@ -625,7 +853,8 @@ def place_layout(doc, reference, entry_id, clear_first=False):
 
     Returns:
         dict: {"target": {...}, "layout_id", "placement", "placed": [element
-            ids], "missing": {"Family : Type": count}, "tagged_programs":
+            ids], "missing": {"Family : Type": count}, "loaded_families":
+            {family name: where it came from}, "tagged_programs":
             [element ids], "deleted": number of elements deleted first,
             "warnings": [str]}
     """
@@ -645,6 +874,12 @@ def place_layout(doc, reference, entry_id, clear_first=False):
             409,
         )
     chosen = recommendations[0]
+    placement = refine_placement(
+        entry, chosen.placement, frame.width, frame.depth, local_outline
+    )
+    # Families the model hasn't got are loaded first (their own undo step):
+    # from the family files of the catalogue, or from another open model
+    families = layout_service.load_missing_families(doc, entry, catalogue_folders())
     deleted = 0
     with Transaction(doc, "PDSO - Place Unit Layout") as transaction:
         if clear_first:
@@ -652,7 +887,7 @@ def place_layout(doc, reference, entry_id, clear_first=False):
             if ids:
                 doc.Delete(id_list(ids))
             deleted = len(ids)
-        result = layout_service.create(element, entry, chosen.placement)
+        result = layout_service.create(element, entry, placement)
         # create() skips items whose family is not loaded. If it placed
         # nothing, the room must not stay emptied: roll everything back.
         if clear_first and deleted and not result.placed:
@@ -673,9 +908,10 @@ def place_layout(doc, reference, entry_id, clear_first=False):
         "target": _spatial_info(element),
         "layout_id": entry.id,
         "score": chosen.score,
-        "placement": _placement_info(chosen.placement),
+        "placement": _placement_info(placement),
         "placed": [id_value(element_id) for element_id in result.placed],
         "missing": result.missing,
+        "loaded_families": families["loaded"],
         "tagged_programs": [id_value(element_id) for element_id in result.tagged_silos],
         "warnings": list(result.warnings) + list(transaction.warnings),
     }
@@ -1008,7 +1244,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
     shape, shape_orientation = shape_match(entry, frame, local_outline)
     area_score = area_match(entry, area)
     if recommendations:
-        placement = recommendations[0].placement
+        placement = refine_placement(
+            entry, recommendations[0].placement, frame.width, frame.depth, local_outline
+        )
         orientation_from = "placement"
     else:
         turns, mirror = shape_orientation
@@ -1021,6 +1259,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
     if "symbols" not in lookups:
         lookups["symbols"] = layout_service._symbol_lookup(doc)
     symbols = lookups["symbols"]
+    # Families that place_layout would load first count as loaded
+    loadable = layout_service.loadable_families(doc, entry, catalogue_folders())
+    to_load = 0
     boxes = lookups.setdefault("boxes", {})
     missing = set(item.symbol_key for item in entry.items) - set(boxes)
     if missing:
@@ -1038,6 +1279,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
         )
         inside = point_in_or_near_polygon(local_point, local_outline, FIT_TOLERANCE)
         loaded = item.symbol_key in symbols
+        if not loaded and item.family in loadable:
+            loaded = True
+            to_load += 1
         outside += 0 if inside else 1
         not_loaded += 0 if loaded else 1
         known = boxes.get(item.symbol_key)
@@ -1107,6 +1351,8 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
             "items_outside": outside,
             "items_across_outline": across,
             "items_not_loaded": not_loaded,
+            "items_to_load": to_load,
+            "families_to_load": sorted(loadable),
         },
         "layout_outline": [
             list(frame.to_world(point))

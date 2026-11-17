@@ -40,6 +40,7 @@ from pdso.code.catalogue.layout_geometry import (
     polygon_area,
 )
 from pdso.code.catalogue.layout_recommender import oriented_items
+from pdso.code.setup.revit_utils import FamilyLoadOptions
 
 # Categories a layout is made of
 HARVEST_CATEGORIES = [
@@ -439,6 +440,176 @@ def harvest(spatial_element, name, program, project_type, notes=""):
 
 
 # ---------------------------------------------------------------------------
+# Family files: a layout can go into a model that does not have its families
+# ---------------------------------------------------------------------------
+
+FAMILY_FOLDER = "families"
+FAMILY_EXTENSION = ".rfa"
+
+
+def family_file_name(family_name):
+    """File name of a family in the families folder of a catalogue folder."""
+    safe = "".join(
+        character if character not in '\\/:*?"<>|' else "_" for character in family_name
+    )
+    return safe.strip() + FAMILY_EXTENSION
+
+
+def _families_by_name(doc):
+    families = {}
+    for family in DB.FilteredElementCollector(doc).OfClass(DB.Family):
+        families[family.Name] = family
+    return families
+
+
+def save_family_files(doc, entry, folder):
+    """Save the family of each layout item as a file beside the layout.
+
+    The files go to <folder>/families/<family name>.rfa. A file that is there
+    is kept. Must be called outside a transaction.
+
+    Returns:
+        dict: {"saved": [family names], "failed": {family name: reason}}
+    """
+    saved, failed = [], {}
+    names = sorted(set(item.family for item in entry.items))
+    if not names:
+        return {"saved": saved, "failed": failed}
+    target = os.path.join(folder, FAMILY_FOLDER)
+    if not os.path.isdir(target):
+        os.makedirs(target)
+    families = _families_by_name(doc)
+    for name in names:
+        path = os.path.join(target, family_file_name(name))
+        if os.path.exists(path):
+            continue
+        family = families.get(name)
+        if family is None or not family.IsEditable or family.IsInPlace:
+            failed[name] = "the family cannot be saved as a file"
+            continue
+        family_doc = None
+        try:
+            family_doc = doc.EditFamily(family)
+            options = DB.SaveAsOptions()
+            options.OverwriteExistingFile = True
+            family_doc.SaveAs(path, options)
+            saved.append(name)
+        except Exception as error:
+            failed[name] = str(error)
+        finally:
+            if family_doc is not None:
+                family_doc.Close(False)
+    return {"saved": saved, "failed": failed}
+
+
+def loadable_families(doc, entry, folders):
+    """The families of a layout that the model has not, but that can be loaded.
+
+    This is a read-only forecast of load_missing_families.
+
+    Returns:
+        set: Family names
+    """
+    symbols = _symbol_lookup(doc)
+    present = _families_by_name(doc)
+    names = set(
+        item.family
+        for item in entry.items
+        if item.symbol_key not in symbols and item.family not in present
+    )
+    found = set()
+    if not names:
+        return found
+    for name in names:
+        for folder in folders:
+            if os.path.exists(os.path.join(folder, FAMILY_FOLDER, family_file_name(name))):
+                found.add(name)
+    for other in doc.Application.Documents:
+        if len(found) == len(names):
+            break
+        if other.IsFamilyDocument or other.Equals(doc):
+            continue
+        for name, family in _families_by_name(other).items():
+            if name in names and family.IsEditable and not family.IsInPlace:
+                found.add(name)
+    return found
+
+
+def load_missing_families(doc, entry, folders):
+    """Load the families of a layout that the model does not have.
+
+    A family comes from the families folder of a catalogue folder, or from a
+    different open model that has it. Must be called outside a transaction.
+
+    Returns:
+        dict: {"loaded": {family name: where it came from},
+            "not_found": [family names]}
+    """
+    loaded, not_found = {}, []
+    symbols = _symbol_lookup(doc)
+    names = sorted(
+        set(item.family for item in entry.items if item.symbol_key not in symbols)
+    )
+    if not names:
+        return {"loaded": loaded, "not_found": not_found}
+    present = _families_by_name(doc)
+    options = FamilyLoadOptions(keep_existing=True)
+
+    for name in names:
+        if name in present:
+            # The family is loaded, but not this type. A file or a different
+            # model cannot add a type to it without a change of the family.
+            not_found.append(name)
+            continue
+
+        path = None
+        for folder in folders:
+            candidate = os.path.join(folder, FAMILY_FOLDER, family_file_name(name))
+            if os.path.exists(candidate):
+                path = candidate
+        if path is not None:
+            try:
+                transaction = DB.Transaction(doc, "PDSO - Load Layout Family")
+                transaction.Start()
+                try:
+                    done = doc.LoadFamily(path, options)
+                    transaction.Commit()
+                except Exception:
+                    transaction.RollBack()
+                    raise
+                if done or name in _families_by_name(doc):
+                    loaded[name] = "file " + os.path.basename(path)
+                    continue
+            except Exception:
+                pass
+
+        source_title = None
+        for other in doc.Application.Documents:
+            if other.IsFamilyDocument or other.Equals(doc):
+                continue
+            family = _families_by_name(other).get(name)
+            if family is None or not family.IsEditable or family.IsInPlace:
+                continue
+            family_doc = None
+            try:
+                family_doc = other.EditFamily(family)
+                family_doc.LoadFamily(doc, options)
+                source_title = other.Title
+            except Exception:
+                source_title = None
+            finally:
+                if family_doc is not None:
+                    family_doc.Close(False)
+            if source_title is not None:
+                break
+        if source_title is not None and name in _families_by_name(doc):
+            loaded[name] = "open model " + source_title
+        else:
+            not_found.append(name)
+    return {"loaded": loaded, "not_found": not_found}
+
+
+# ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
 
@@ -467,8 +638,11 @@ def _flip(doc, instance, hand):
     """Flip an instance along its hand or its facing direction.
 
     A family with a flip control is flipped with that control. A family with
-    no flip control (its source instance was mirrored) is mirrored in place,
-    about the plane through its location point.
+    no flip control is mirrored in place, about the plane through its location
+    point. Revit reports each mirror of such a family as "facing flipped" with
+    a different rotation, also when the mirror was along the hand direction.
+    Thus the check is that the mirror state changed, not the hand or facing
+    property.
 
     Returns:
         bool: True if the instance is flipped.
@@ -481,6 +655,7 @@ def _flip(doc, instance, hand):
         return True
     try:
         doc.Regenerate()
+        before = bool(instance.Mirrored)
         direction = instance.HandOrientation if hand else instance.FacingOrientation
         plane = DB.Plane.CreateByNormalAndOrigin(direction, instance.Location.Point)
         ids = List[DB.ElementId]()
@@ -489,8 +664,7 @@ def _flip(doc, instance, hand):
         doc.Regenerate()
     except Exception:
         return False
-    flipped = instance.HandFlipped if hand else instance.FacingFlipped
-    return bool(flipped)
+    return bool(instance.Mirrored) != before
 
 
 def create(spatial_element, entry, placement):
@@ -562,11 +736,14 @@ def create(spatial_element, entry, placement):
             axis = DB.Line.CreateBound(point, point + DB.XYZ.BasisZ)
             DB.ElementTransformUtils.RotateElement(doc, instance.Id, axis, angle)
 
-        # A mirrored placement flips each item's handedness
+        # A mirrored placement flips each item's handedness. A new instance
+        # has no flip, so each wanted flip is made one time. The properties of
+        # the instance are not read between the two flips: for a family with
+        # no flip control, a mirror along the hand shows as "facing flipped",
+        # and a second mirror would then undo the first one.
         want_hand = item.hand_flipped != placement.mirror
         for hand, wanted in ((True, want_hand), (False, item.facing_flipped)):
-            flipped = instance.HandFlipped if hand else instance.FacingFlipped
-            if bool(flipped) != wanted and not _flip(doc, instance, hand):
+            if wanted and not _flip(doc, instance, hand):
                 result.warnings.append(
                     "{} : {} could not be flipped; it keeps its original {}".format(
                         item.family, item.type, "hand" if hand else "facing"

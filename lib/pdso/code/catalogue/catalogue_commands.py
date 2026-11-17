@@ -167,6 +167,15 @@ def place(room, layout_id, clear_first):
     ]
     if clear_first:
         lines.append(("{} items that were in the Room were deleted first.".format(deleted), None))
+    if result.get("loaded_families"):
+        lines.append(
+            (
+                "Families loaded into this model: {}".format(
+                    ", ".join(sorted(result["loaded_families"]))
+                ),
+                None,
+            )
+        )
     if missing:
         names = ", ".join(sorted(result["missing"]))
         lines.append(
