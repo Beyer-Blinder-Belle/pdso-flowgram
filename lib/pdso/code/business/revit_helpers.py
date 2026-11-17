@@ -15,6 +15,7 @@ from pyrevit import DB
 
 # Custom Modules
 from .errors import PDSOError
+from pdso.code.catalogue import layout_geometry
 
 
 def to_element_id(value):
@@ -96,19 +97,31 @@ def to_number(value, name):
 
 
 def point_in_polygon(x, y, polygon):
-    """Ray-casting test. ``polygon`` is a list of (x, y)."""
-    inside = False
-    count = len(polygon)
-    j = count - 1
-    for i in range(count):
-        xi, yi = polygon[i][0], polygon[i][1]
-        xj, yj = polygon[j][0], polygon[j][1]
-        if (yi > y) != (yj > y):
-            x_cross = (xj - xi) * (y - yi) / float(yj - yi) + xi
-            if x < x_cross:
-                inside = not inside
-        j = i
-    return inside
+    """Ray-casting test. ``polygon`` is a list of (x, y).
+
+    This ignores holes: to test a point against an Area, use point_in_area.
+    """
+    return layout_geometry.point_in_polygon((x, y), polygon)
+
+
+def point_in_area(x, y, outline, holes=()):
+    """True if the point is inside the outline and not inside any hole."""
+    if not outline or not point_in_polygon(x, y, outline):
+        return False
+    return not any(point_in_polygon(x, y, hole) for hole in holes or ())
+
+
+def outline_and_holes(loops):
+    """Split the point loops of an Area into (outline, holes).
+
+    The loop with the largest area is the outline. Loops of fewer than three
+    points are left out. Returns (None, []) if no loop is left.
+    """
+    loops = [loop for loop in loops if len(loop) >= 3]
+    if not loops:
+        return None, []
+    outline = max(loops, key=lambda points: abs(polygon_area(points)))
+    return outline, [loop for loop in loops if loop is not outline]
 
 
 def polygon_area(polygon):

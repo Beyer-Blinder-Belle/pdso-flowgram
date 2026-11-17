@@ -36,7 +36,7 @@ from .revit_helpers import (
     TransactionGroup,
     id_list,
     id_value,
-    point_in_polygon,
+    point_in_area,
     polygon_interior_point,
 )
 
@@ -297,7 +297,9 @@ def program_by_area(doc, areas, level):
             continue
         for program in programs:
             location = program["location"]
-            if point_in_polygon(location["x"], location["y"], area["outline"]):
+            if point_in_area(
+                location["x"], location["y"], area["outline"], area.get("holes")
+            ):
                 result[area["id"]] = program
                 break
     return result
@@ -444,10 +446,16 @@ def _curve_loop_list(loops):
 # Program Volume 3D view
 # =============================================================================
 
+# Not Quick Setup's "PDSO - Program Volumes - 3D" working view: this one shows
+# the building ghosted around the volumes, so it can't use that view's template
+PROGRAM_VOLUME_VIEW = "PDSO - Program Volumes - Colored"
+# Its name before; a view with this name is renamed to PROGRAM_VOLUME_VIEW
+_OLD_PROGRAM_VOLUME_VIEW = "PDSO - Program Volumes"
+
 
 def ensure_program_volume_view(
     doc,
-    name="PDSO - Program Volumes",
+    name=PROGRAM_VOLUME_VIEW,
     color_by="program_type",
     building="ghost",
     section_box=True,
@@ -467,10 +475,15 @@ def ensure_program_volume_view(
     prefix = config["program_volume_family_name_prefix"]
 
     view = None
+    old_view = None
     for candidate in DB.FilteredElementCollector(doc).OfClass(DB.View3D):
-        if not candidate.IsTemplate and candidate.Name == name:
+        if candidate.IsTemplate:
+            continue
+        if candidate.Name == name:
             view = candidate
             break
+        if name == PROGRAM_VOLUME_VIEW and candidate.Name == _OLD_PROGRAM_VOLUME_VIEW:
+            old_view = candidate
 
     value_by_family = {}
     for program in program_service.list_programs(doc):
@@ -484,6 +497,9 @@ def ensure_program_volume_view(
     colored = 0
     corners = []
     with Transaction(doc, "PDSO - Program Volume View"):
+        if view is None and old_view is not None:
+            view = old_view
+            view.Name = name
         if view is None:
             view_type = next(
                 view_family_type

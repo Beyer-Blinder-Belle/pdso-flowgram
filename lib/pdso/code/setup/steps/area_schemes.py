@@ -14,10 +14,8 @@ renamed. The HTTP API's bootstrap runs this step too.
 from pyrevit import DB
 
 # Custom Modules
+from pdso.code import defaults
 from pdso.code.setup import revit_utils, status
-
-# Used when the model has no Project Config yet (matches extensible_storage_service)
-DEFAULT_AREA_SCHEMES = ["PDSO - GSF", "PDSO - NSF", "PDSO - ZFA"]
 
 
 def run(ctx, data):
@@ -25,7 +23,7 @@ def run(ctx, data):
     if data.get("from_project_config", True):
         mapped = [v for v in ctx.pdso_config["area_scheme_mappings"].values() if v]
         if not mapped:
-            mapped = list(DEFAULT_AREA_SCHEMES)
+            mapped = defaults.area_schemes()
             ctx.add(
                 "Project Config",
                 status.WARNING,

@@ -4,6 +4,10 @@
 The Data Silo family ships with only the required PDSO parameters (Program UID,
 Program Stacking, Last Synced). After loading it, this step adds the parameters
 the model tracks (chosen in the Parameter Manager, which runs before Quick Setup).
+
+If no file of a family can be loaded (an older Revit than the shipped family)
+and its spec has "placeholder_if_missing", a Generic Model with a small square
+marker is built under the family's name instead.
 """
 
 # Python standard libraries
@@ -18,24 +22,6 @@ from pyrevit import DB
 
 # Custom Modules
 from pdso.code.setup import revit_utils, status
-
-
-class _FamilyLoadOptions(DB.IFamilyLoadOptions):
-    """Overwrite an existing family (and optionally its parameter values) when reloading."""
-
-    def __init__(self, overwrite_parameters):
-        self.overwrite_parameters = overwrite_parameters
-
-    def OnFamilyFound(self, family_in_use, overwrite_parameter_values):
-        overwrite_parameter_values.Value = self.overwrite_parameters
-        return True
-
-    def OnSharedFamilyFound(
-        self, shared_family, family_in_use, source, overwrite_parameter_values
-    ):
-        source.Value = DB.FamilySource.Family
-        overwrite_parameter_values.Value = self.overwrite_parameters
-        return True
 
 
 def run(ctx, data):
@@ -90,16 +76,12 @@ def _load_family(ctx, spec):
     path = next((p for p in candidates if os.path.isfile(p)), None)
     label = name or (os.path.basename(path) if path else "(unnamed family)")
 
+    failure = None
     if family is not None and on_existing == "skip":
         ctx.add(label, status.SKIPPED, "Already loaded")
     elif path is None:
-        ctx.add(
-            label,
-            status.FAILED,
-            "No family file this Revit can load. Looked for: {}.{}".format(
-                "; ".join(candidates) or "(only files for a newer Revit)",
-                _version_hint(spec),
-            ),
+        failure = "No family file this Revit can load. Looked for: {}.".format(
+            "; ".join(candidates) or "(only files for a newer Revit)"
         )
     else:
         family_ref = clr.Reference[DB.Family]()
@@ -109,7 +91,9 @@ def _load_family(ctx, spec):
             with ctx.transaction("Load family {}".format(label)):
                 loaded = ctx.doc.LoadFamily(
                     path,
-                    _FamilyLoadOptions(spec.get("overwrite_parameter_values", False)),
+                    revit_utils.FamilyLoadOptions(
+                        spec.get("overwrite_parameter_values", False)
+                    ),
                     family_ref,
                 )
         except Exception as error:
@@ -118,13 +102,7 @@ def _load_family(ctx, spec):
         found = family_ref.Value or revit_utils.find_family(ctx.doc, file_name)
 
         if found is None:
-            ctx.add(
-                label,
-                status.FAILED,
-                "Revit did not load '{}'{}.{}".format(
-                    path, load_error, _version_hint(spec)
-                ),
-            )
+            failure = "Revit did not load '{}'{}.".format(path, load_error)
         else:
             existed = family is not None
             family = found
@@ -137,6 +115,12 @@ def _load_family(ctx, spec):
             else:
                 ctx.add(family.Name, status.SKIPPED, "Already up to date")
 
+    if failure is not None:
+        if family is None and name and spec.get("placeholder_if_missing"):
+            family = _build_placeholder(ctx, name, failure, spec)
+        else:
+            ctx.add(label, status.FAILED, failure + _version_hint(spec))
+
     if family is not None and spec.get("use_as_data_silo_family"):
         _register_data_silo_family(ctx, family.Name)
         if (
@@ -144,6 +128,28 @@ def _load_family(ctx, spec):
             and ctx.pdso_config["data_silo_family"] == family.Name
         ):
             _add_tracked_parameters(ctx, family.Name)
+
+
+def _build_placeholder(ctx, name, failure, spec):
+    """Build the placeholder family (see the module docstring), or report why not."""
+    try:
+        family = revit_utils.build_marker_family(ctx.doc, name)
+    except Exception as error:
+        ctx.add(
+            name,
+            status.FAILED,
+            "{} Couldn't build a placeholder family either: {}.{}".format(
+                failure, error, _version_hint(spec)
+            ),
+        )
+        return None
+    ctx.add(
+        family.Name,
+        status.CREATED,
+        "{} Built a placeholder family instead: a small square marker. To use "
+        "your own family, choose it in Project Config.".format(failure),
+    )
+    return family
 
 
 def _version_hint(spec):

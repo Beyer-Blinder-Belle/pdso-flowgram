@@ -21,7 +21,7 @@ from pyrevit import script, DB
 from ..data.shared_parameter_constants import standard_pdso_parameters
 from . import config_service, parameter_service
 from . import parameter_registry_service
-from .bootstrap_service import find_family
+from pdso.code.setup.revit_utils import find_family
 from .errors import PDSOError
 from .revit_helpers import (
     Transaction,
@@ -29,8 +29,8 @@ from .revit_helpers import (
     get_element,
     id_list,
     id_value,
-    point_in_polygon,
-    polygon_area,
+    outline_and_holes,
+    point_in_area,
     polygon_interior_point,
     to_number,
 )
@@ -248,20 +248,19 @@ def summarize_program_types(doc, group_by="program_type"):
     return sorted(groups.values(), key=lambda group: str(group["value"]))
 
 
-def _outline(area):
-    """Outer loop of an Area as a list of (x, y), or None."""
+def _outline_and_holes(area):
+    """(outline, holes) of an Area as lists of (x, y); (None, []) if unplaced."""
     loops = area.GetBoundarySegments(DB.SpatialElementBoundaryOptions())
-    if loops is None or loops.Count == 0:
-        return None
-    best = None
+    if loops is None:
+        return None, []
+    point_loops = []
     for loop in loops:
         points = []
         for segment in loop:
-            start = segment.GetCurve().GetEndPoint(0)
-            points.append((start.X, start.Y))
-        if len(points) >= 3 and (best is None or len(points) > len(best)):
-            best = points
-    return best
+            for point in list(segment.GetCurve().Tessellate())[:-1]:
+                points.append((point.X, point.Y))
+        point_loops.append(points)
+    return outline_and_holes(point_loops)
 
 
 def containing_areas(doc, element):
@@ -289,8 +288,8 @@ def containing_areas(doc, element):
             continue
         if scheme_name not in scheme_names or result[scheme_name] is not None:
             continue
-        outline = _outline(area)
-        if outline and point_in_polygon(location["x"], location["y"], outline):
+        outline, holes = _outline_and_holes(area)
+        if point_in_area(location["x"], location["y"], outline, holes):
             name_parameter = area.get_Parameter(DB.BuiltInParameter.ROOM_NAME)
             result[scheme_name] = {
                 "id": id_value(area.Id),
@@ -585,13 +584,10 @@ def _area_placement(doc, area_id):
                 area_id
             )
         )
-    outer = max(loops, key=lambda points: abs(polygon_area(points)))
-    holes = [points for points in loops if points is not outer]
+    outer, holes = outline_and_holes(loops)
 
     def usable(x, y):
-        return point_in_polygon(x, y, outer) and not any(
-            point_in_polygon(x, y, hole) for hole in holes
-        )
+        return point_in_area(x, y, outer, holes)
 
     candidates = []
     try:

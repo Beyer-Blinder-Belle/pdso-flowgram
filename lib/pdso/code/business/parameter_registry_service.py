@@ -968,13 +968,10 @@ class PDSOParameterSetupService(object):
                 raise
 
             if changed:
-                # Imported here to avoid a circular import at module load
-                from pdso.code.business.family_manager_service import (
-                    ProgramVolumeFamilyLoadOptions,
-                )
+                from pdso.code.setup.revit_utils import FamilyLoadOptions
 
                 # Overwrite the family but keep instance parameter values in the project
-                family_doc.LoadFamily(doc, ProgramVolumeFamilyLoadOptions(True, False))
+                family_doc.LoadFamily(doc, FamilyLoadOptions(False))
                 report.ok("Reloaded Data Silo family '{}'.".format(family_name))
             else:
                 report.info("Data Silo family '{}' already up to date.".format(family_name))

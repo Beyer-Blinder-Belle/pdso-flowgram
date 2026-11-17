@@ -7,6 +7,7 @@ with default values when they don't exist in the document.
 
 import traceback
 from pyrevit import script
+from pdso.code import defaults
 from pdso.code.data.extensible_storage_schemas import (
     PdsoConfigDocumentSchema,
     PdsoProgramVolumeInstanceSchema,
@@ -170,17 +171,13 @@ class PDSOExtensibleStorageService(object):
                 "VolumeData": "Never",
             },
             # The shipped Data Silo family for this Revit version (families.json)
-            "data_silo_family_name": "PDSO - Program Data Silo Object - Rvt{}".format(
-                str(self.document.Application.VersionNumber)[-2:]
+            "data_silo_family_name": defaults.data_silo_family_name(
+                self.document.Application.VersionNumber
             ),
-            "uid_pattern": r"^[A-Za-z0-9]{2}-\d{2}-[A-Za-z0-9]{2}$",
-            "area_scheme_mappings": {
-                "PDSO - GSF": "PDSO - GSF",
-                "PDSO - NSF": "PDSO - NSF",
-                "PDSO - ZFA": "PDSO - ZFA",
-            },
-            "program_volume_family_name_prefix": "PDSO_ProgramVolume-",
-            "program_volume_extrusion_height": 8.0,  # feet
+            "uid_pattern": defaults.UID_PATTERN,
+            "area_scheme_mappings": dict(defaults.AREA_SCHEME_MAPPINGS),
+            "program_volume_family_name_prefix": defaults.PROGRAM_VOLUME_PREFIX,
+            "program_volume_extrusion_height": defaults.PROGRAM_VOLUME_EXTRUSION_HEIGHT,
         }
 
     def ensure_schemas_exist(self):

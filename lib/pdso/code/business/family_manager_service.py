@@ -9,6 +9,7 @@ from pyrevit import script, DB, HOST_APP
 from rpw.utils.dotnet import List
 
 # Custom Modules
+from pdso.code.setup.revit_utils import FamilyLoadOptions
 from pdso.code.business.hashing_service import PDSOHashingService
 from pdso.code.business.area_boundary_service import (
     PROGRAM_VOLUME_EXTRUSION_HEIGHT,
@@ -603,7 +604,7 @@ class PDSOFamilyManagerService(object):
         )
 
         # Load the family into the project document
-        fam_load_opts = ProgramVolumeFamilyLoadOptions(True, False)
+        fam_load_opts = FamilyLoadOptions(False)
 
         family = family_document.LoadFamily(self.doc, fam_load_opts)
 
@@ -759,27 +760,6 @@ class PDSOFamilyManagerService(object):
                 )
 
         return curve_loop
-
-
-class ProgramVolumeFamilyLoadOptions(DB.IFamilyLoadOptions):
-    def __init__(self, overwrite_family, overwrite_parameters):
-        self.overwrite_family = overwrite_family
-        self.overwrite_parameters = overwrite_parameters
-
-    def OnFamilyFound(self, family_in_use, overwrite_parameter_values):
-        overwrite_parameter_values.Value = (
-            not family_in_use or self.overwrite_parameters
-        )
-        return not family_in_use or self.overwrite_family
-
-    def OnSharedFamilyFound(
-        self, shared_family, family_in_use, source, overwrite_parameter_values
-    ):
-        source.Value = DB.FamilySource.Family
-        overwrite_parameter_values.Value = (
-            not family_in_use or self.overwrite_parameters
-        )
-        return not family_in_use or self.overwrite_family
 
 
 def _as_dict(field_value):

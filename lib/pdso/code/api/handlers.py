@@ -25,13 +25,17 @@ from pdso.code.business.audit_service import RecordingOutput, generate_detailed_
 from pdso.code.business.log_capture import LogCapture
 from pdso.code.business.preflight_service import PDSOPreflightService
 from pdso.code.business.revit_helpers import all_levels, find_level, level_info
-from pdso.code.business.sync_service import SYNC_OPTIONS, PDSOSyncService
+from pdso.code.business.sync_service import (
+    SYNC_OPTIONS,
+    PDSOSyncService,
+    normalize_option,
+)
 
 ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.7"
+API_VERSION = "1.8"
 
 
 def route(method, pattern):
@@ -289,6 +293,7 @@ def run_sync(ctx):
     options = ctx.arg("options") or {}
     if not isinstance(options, dict):
         raise ApiError("'options' must be an object.")
+    options = dict((name, normalize_option(value)) for name, value in options.items())
     for name, value in options.items():
         if name not in SYNC_OPTIONS:
             raise ApiError(
@@ -597,7 +602,7 @@ def program_volume_view(ctx):
     """
     return visualization_service.ensure_program_volume_view(
         ctx.require_doc(),
-        name=ctx.arg("name", "PDSO - Program Volumes"),
+        name=ctx.arg("name", visualization_service.PROGRAM_VOLUME_VIEW),
         color_by=ctx.arg("color_by", "program_type"),
         building=ctx.arg("building", "ghost"),
         section_box=_flag(ctx.arg("section_box"), True),

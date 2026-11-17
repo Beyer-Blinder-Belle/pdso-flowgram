@@ -163,7 +163,7 @@ Save (and sync with central) first. Then click **Sync Data**.
 
    | Setting | Options |
    | --- | --- |
-   | Data Silo Workset Enforcement | Fix (if configured), Warn (if configured), Do Nothing |
+   | Data Silo Workset Enforcement | Fix (if configured) moves Data Silos and Areas to the worksets set in Project Config. Warn (if configured) only lists how many are on another workset. Do Nothing. |
    | Data Silo Pinning | Pin, Unpin, Maintain |
    | Update Geometry | Yes - Use Geometry Cache (only rebuilds families whose Area outline, Data Silo location or extrusion height changed), Yes - Recompute All Geometry (rebuilds every family; slow), No |
    | Program Volume Workset / Pinning | as above |

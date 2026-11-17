@@ -18,7 +18,8 @@ from pyrevit import script, DB
 
 # Custom Modules
 from . import config_service, program_service
-from .bootstrap_service import ensure_area_plan, find_area_plan, find_area_scheme
+from .bootstrap_service import ensure_area_plan, find_area_plan
+from pdso.code.setup.revit_utils import find_area_scheme
 from .errors import PDSOError
 from .revit_helpers import (
     Transaction,
@@ -27,6 +28,7 @@ from .revit_helpers import (
     get_element,
     id_list,
     id_value,
+    point_in_area,
     point_in_polygon,
     polygon_area,
     polygon_interior_point,
@@ -650,6 +652,12 @@ def move_area(doc, area_id, dx, dy, move_programs=True):
     dy = to_number(dy, "dy")
     area = get_area(doc, area_id)
     old_outline = _current_outline(doc, area)
+    # A program in a hole belongs to the island Area there, not to this one
+    old_holes = [
+        loop["points"]
+        for loop in _loops(area)
+        if len(loop["points"]) >= 3 and loop["points"] != old_outline
+    ]
 
     programs = []
     if move_programs and config_service.config_exists(doc):
@@ -659,7 +667,7 @@ def move_area(doc, area_id, dx, dy, move_programs=True):
             if (
                 location
                 and element.LevelId == area.LevelId
-                and point_in_polygon(location["x"], location["y"], old_outline)
+                and point_in_area(location["x"], location["y"], old_outline, old_holes)
             ):
                 programs.append(program)
 

@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.7"
+EXPECTED_API_VERSION = "1.8"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -92,8 +92,8 @@ mcp = MCPServer(
         "the scope before you call setup_model, unless they already said what "
         "they want. The full package (the default) is what the PDSO ribbon's "
         "setup buttons make: the configuration, the 20 built-in parameters, "
-        "area schemes, the Data Silo family, view templates, area plans for "
-        "each scheme and level, a 3D view and two schedules. The minimum to "
+        "area schemes, the Data Silo family, view templates, a GSF area plan "
+        "for each level, a 3D view and two schedules. The minimum to "
         "place programs and run the sync is parts=[\"area_schemes\", "
         "\"families\"] with parameters=\"required\". Offer both, or a scope in "
         "between; the user may not want views or schedules added to a working "
@@ -508,7 +508,7 @@ def setup_model(
     Args:
         levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
-        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": one area plan for each scheme and level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
+        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": the views views.json turns on: by default a GSF area plan for each level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. Area plans of the other schemes are made when Areas are drawn in them. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
         parameters: Used only if the model tracks no parameters yet. "all": the 20 built-in parameters (unit data such as bedroom, bathroom and kitchen counts, use group, load factor). "required": only Program UID, Program Stacking, Last Synced and the area parameters; add others later with create_parameter. With "required", the schedules leave out the columns of untracked parameters and report that in "Warning" rows; that is expected, not an error.
     """
     if not levels:
@@ -1265,7 +1265,7 @@ def show_program_volumes(
     section_box: bool = True,
     show: bool = True,
 ) -> list:
-    """Make (or update) the shaded 3D view "PDSO - Program Volumes", color the Program Volumes by a program field, show the view in the Revit window, and return its image and legend. Program Volumes come from run_sync.
+    """Make (or update) the shaded 3D view "PDSO - Program Volumes - Colored", color the Program Volumes by a program field, show the view in the Revit window, and return its image and legend. Program Volumes come from run_sync.
 
     Args:
         color_by: Program field that gives the color.
@@ -1581,6 +1581,13 @@ def _inside(x: float, y: float, polygon: list[list[float]]) -> bool:
     return inside
 
 
+def _inside_area(x: float, y: float, area: dict) -> bool:
+    """Inside the Area's outline and not in one of its holes."""
+    return _inside(x, y, area["outline"]) and not any(
+        _inside(x, y, hole) for hole in area.get("holes") or []
+    )
+
+
 def _centroid(polygon: list[list[float]]) -> tuple[float, float]:
     area = cx = cy = 0.0
     for i in range(len(polygon)):
@@ -1676,7 +1683,7 @@ def render_plan(
             (
                 p
                 for p in programs
-                if _inside(p["location"]["x"], p["location"]["y"], area["outline"])
+                if _inside_area(p["location"]["x"], p["location"]["y"], area)
             ),
             None,
         )
@@ -1751,9 +1758,7 @@ def render_plan(
     drawn = set()
     for area in areas:
         for program in programs:
-            if _inside(
-                program["location"]["x"], program["location"]["y"], area["outline"]
-            ):
+            if _inside_area(program["location"]["x"], program["location"]["y"], area):
                 drawn.add(program["id"])
     for program in programs:
         if program["id"] in drawn:

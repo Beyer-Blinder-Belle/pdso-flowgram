@@ -108,6 +108,10 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S1, with a second user who has one Data Silo borrowed.
   Steps: sync with the Area workset option set to "Fix" and pinning set to "Pin".
   Expected: the other user's Data Silo is skipped; everything else gets its workset and is pinned.
+- [ ] **T-S16. Workset "Fix" from the ribbon, and "Warn"** [K14]
+  Model: M-S1.
+  Steps: put a Data Silo and an Area on the wrong workset. Sync from the Sync Data window with the Data Silo workset option at "Warn (if configured)", then again at "Fix (if configured)".
+  Expected: "Warn" logs that 1 Data Silo and 1 Area are not on their workset and moves nothing. "Fix" moves both.
 - [ ] **T-S14. The sync log comes back over the API** [A6]
   Steps: `run_sync` on a model with one warning (for example M-D5).
   Expected: the reply's `log` lists the warning.
@@ -149,7 +153,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-A8. Move an Area around an island** [K16]
   Model: M-A6.
   Steps: move the outer Area.
-  Expected (known failing): the island's Data Silo moves too.
+  Expected: the outer Area's Data Silo moves; the island's stays. [Fixed: K16]
 - [ ] **T-A10. A failed create leaves no area plan** [A10]
   Steps: on a level with no area plan for a scheme, `draft_area` with an outline over an existing Area (so Revit gives 0 SF).
   Expected: an error, and no new area plan in the Project Browser.
@@ -212,7 +216,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the Rvt26 family loads (upgraded) and is set as the Data Silo family. The second run skips it.
 - [ ] **T-U2b. Revit 2025** [U2]
   Steps: run Quick Setup in Revit 2025, if one is available.
-  Expected: the families step fails with the hint that the shipped family needs Revit 2026, and it doesn't try to load the 2026 file.
+  Expected: it doesn't try to load the 2026 file. It builds a placeholder Data Silo family (a small square marker) named "... - Rvt25", reports it as Created with the reason, and adds the tracked parameters to it. [U2, K1]
 - [ ] **T-U3. A chosen Data Silo family** [U3]
   Model: M-S3.
   Steps: Quick Setup.
@@ -224,6 +228,12 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S2, and also a configured model.
   Steps: open Project Config and Parameter Manager, close them without saving, then check Undo.
   Expected: nothing to undo. In M-S2, Project Config shows the defaults marked as unsaved, and Save creates the configuration.
+- [ ] **T-U7. The API makes the same model as the ribbon** [K1]
+  Steps: in two new models, run Quick Setup from the ribbon in one, and `setup_model` with the full package in the other. Compare the Project Browser, then call `get_setup_status` on both.
+  Expected: the same views and families. Only GSF area plans, no NSF or ZFA ones. Both report "views" as present.
+- [ ] **T-U8. Area plan for another scheme** [K1]
+  Steps: after T-U7, `draft_area` in the NSF scheme.
+  Expected: an area plan "PDSO - NSF - <level>" with the working template is made.
 - [ ] **T-U6. Quick Setup keeps template changes** [U6]
   Steps: show a hidden category in "PDSO - 3D - Program Volumes", then run Quick Setup again.
   Expected: the template keeps the change, and the report says Skipped.
@@ -250,7 +260,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the tool says the change may have been made and does not send it again. A timed-out write says Revit may still make it.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.7 with no version warning.
+  Expected: API 1.8 with no version warning.
+- [ ] **T-P8. Colored 3D view** [K1]
+  Model: one where `show_program_volumes` ran before (it has "PDSO - Program Volumes").
+  Steps: `show_program_volumes`.
+  Expected: that view is renamed "PDSO - Program Volumes - Colored" and used; no second view. Quick Setup's "PDSO - Program Volumes - 3D" is unchanged.
+- [ ] **T-P9. Programs in an Area with a hole** [K4]
+  Model: M-A6.
+  Steps: `render_plan` and `color_areas` on its level, and `describe_program` for the island's Data Silo.
+  Expected: the island's program is shown in the island Area only, and `describe_program` names the island Area.
 
 ---
 
