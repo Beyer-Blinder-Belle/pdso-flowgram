@@ -13,7 +13,6 @@ Example Usage:
 """
 
 # Python standard libraries
-import re
 
 # 3rd Party Modules
 from pyrevit import script, DB
@@ -33,6 +32,7 @@ from .revit_helpers import (
     point_in_polygon,
     polygon_area,
     polygon_interior_point,
+    to_number,
 )
 
 logger = script.get_logger()
@@ -208,10 +208,18 @@ def list_programs(doc, filters=None):
         if key != "level" and key not in known:
             raise PDSOError("Unknown filter field: '{}'".format(key))
 
+    numeric = set(
+        parameter.field
+        for parameter in parameters
+        if parameter.parameter_type in ("number", "area", "length", "integer")
+    )
     programs = []
     for element in _silo_instances(doc, config["data_silo_family_name"]):
         data = _summary(doc, element, parameters)
-        if all(str(data.get(key)) == str(value) for key, value in filters.items()):
+        if all(
+            _filter_matches(data.get(key), value, key in numeric)
+            for key, value in filters.items()
+        ):
             programs.append(data)
     return sorted(programs, key=lambda item: (item["level"] or "", item["uid"] or ""))
 
@@ -442,11 +450,28 @@ def _normalize_fields(doc, fields):
     return normalized
 
 
+def _filter_matches(stored, wanted, numeric=False):
+    """True if a stored field value equals a filter value.
+
+    Query strings are text, so "1" must match a stored 1.0: the values of a
+    number field are compared as numbers. Text fields are compared as text
+    ("01" is not "1").
+    """
+    if str(stored) == str(wanted):
+        return True
+    if not numeric:
+        return False
+    try:
+        return abs(float(stored) - float(wanted)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
 def _check_uid(doc, config, uid, own_id=None):
     if not uid:
         raise PDSOError("A program must have a 'uid'.")
     pattern = config.get("uid_pattern")
-    if pattern and not re.match(pattern, uid):
+    if not config_service.uid_matches(pattern, uid):
         raise PDSOError(
             "UID '{}' does not match the configured pattern {}".format(uid, pattern)
         )
@@ -494,7 +519,7 @@ def _place_program(doc, symbol, level_element, x, y):
     if not symbol.IsActive:
         symbol.Activate()
         doc.Regenerate()
-    point = DB.XYZ(float(x), float(y), level_element.ProjectElevation)
+    point = DB.XYZ(to_number(x, "x"), to_number(y, "y"), level_element.ProjectElevation)
     element = doc.Create.NewFamilyInstance(
         point, symbol, level_element, DB.Structure.StructuralType.NonStructural
     )
@@ -669,13 +694,15 @@ def update_program(doc, reference, fields=None, x=None, y=None):
     if not fields and x is None and y is None:
         raise PDSOError("Give fields or a position to change.")
 
+    x = None if x is None else to_number(x, "x")
+    y = None if y is None else to_number(y, "y")
     with Transaction(doc, "PDSO - Update Program"):
         _write_fields(doc, element, fields)
         if x is not None or y is not None:
             current = element.Location.Point
             target = DB.XYZ(
-                current.X if x is None else float(x),
-                current.Y if y is None else float(y),
+                current.X if x is None else x,
+                current.Y if y is None else y,
                 current.Z,
             )
             was_pinned = element.Pinned

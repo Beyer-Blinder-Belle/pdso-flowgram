@@ -8,6 +8,7 @@ the model tracks (chosen in the Parameter Manager, which runs before Quick Setup
 
 # Python standard libraries
 import os
+import re
 
 # System Modules
 import clr
@@ -45,11 +46,47 @@ def run(ctx, data):
 
 
 def _load_family(ctx, spec):
-    name = ctx.expand(spec.get("name", ""))
+    # "name" may be a list: the first name that is loaded counts (a newer
+    # Revit loads and upgrades the newest shipped family, whose name is kept)
+    names = ctx.expand(spec.get("name", ""))
+    if not isinstance(names, list):
+        names = [names]
+    names = [name for name in names if name]
+    name = names[0] if names else ""
     on_existing = spec.get("on_existing", "skip")
-    family = revit_utils.find_family(ctx.doc, name) if name else None
+    family = next(
+        (
+            found
+            for found in (revit_utils.find_family(ctx.doc, n) for n in names)
+            if found is not None
+        ),
+        None,
+    )
+
+    # Project Config runs before Quick Setup. If it names a Data Silo family
+    # that is loaded and is not this one, that family is the Data Silo family:
+    # the shipped family is not loaded, and the tracked parameters go into the
+    # user's family.
+    if spec.get("use_as_data_silo_family"):
+        chosen = ctx.pdso_config["data_silo_family"]
+        if (
+            chosen
+            and chosen not in names
+            and revit_utils.find_family(ctx.doc, chosen) is not None
+        ):
+            ctx.add(
+                "Project Config",
+                status.SKIPPED,
+                "Keeping the Data Silo family chosen in Project Config ('{}'); "
+                "'{}' was not loaded".format(chosen, name),
+            )
+            if spec.get("add_tracked_parameters", True):
+                _add_tracked_parameters(ctx, chosen)
+            return
 
     candidates = [ctx.resolve_path(path) for path in spec.get("files", [])]
+    # Revit can't load a family saved in a newer version: skip those files
+    candidates = [p for p in candidates if not _newer_than_revit(ctx, p)]
     path = next((p for p in candidates if os.path.isfile(p)), None)
     label = name or (os.path.basename(path) if path else "(unnamed family)")
 
@@ -59,21 +96,35 @@ def _load_family(ctx, spec):
         ctx.add(
             label,
             status.FAILED,
-            "No family file found. Looked for: {}".format("; ".join(candidates)),
+            "No family file this Revit can load. Looked for: {}.{}".format(
+                "; ".join(candidates) or "(only files for a newer Revit)",
+                _version_hint(spec),
+            ),
         )
     else:
         family_ref = clr.Reference[DB.Family]()
-        with ctx.transaction("Load family {}".format(label)):
-            loaded = ctx.doc.LoadFamily(
-                path,
-                _FamilyLoadOptions(spec.get("overwrite_parameter_values", False)),
-                family_ref,
-            )
+        load_error = ""
+        loaded = False
+        try:
+            with ctx.transaction("Load family {}".format(label)):
+                loaded = ctx.doc.LoadFamily(
+                    path,
+                    _FamilyLoadOptions(spec.get("overwrite_parameter_values", False)),
+                    family_ref,
+                )
+        except Exception as error:
+            load_error = ": {}".format(error)
         file_name = os.path.splitext(os.path.basename(path))[0]
         found = family_ref.Value or revit_utils.find_family(ctx.doc, file_name)
 
         if found is None:
-            ctx.add(label, status.FAILED, "Revit did not load '{}'".format(path))
+            ctx.add(
+                label,
+                status.FAILED,
+                "Revit did not load '{}'{}.{}".format(
+                    path, load_error, _version_hint(spec)
+                ),
+            )
         else:
             existed = family is not None
             family = found
@@ -93,6 +144,25 @@ def _load_family(ctx, spec):
             and ctx.pdso_config["data_silo_family"] == family.Name
         ):
             _add_tracked_parameters(ctx, family.Name)
+
+
+def _version_hint(spec):
+    if not spec.get("use_as_data_silo_family"):
+        return ""
+    return (
+        " The shipped Data Silo family needs Revit 2026 or later. In an older "
+        "Revit, choose a Data Silo family in Project Config."
+    )
+
+
+def _newer_than_revit(ctx, path):
+    """True if a file name says it is for a newer Revit ("... - Rvt27.rfa")."""
+    match = re.search(r"Rvt(\d{2})\.rfa$", os.path.basename(path), re.IGNORECASE)
+    try:
+        running = int(str(ctx.doc.Application.VersionNumber)[-2:])
+    except Exception:
+        return False
+    return match is not None and int(match.group(1)) > running
 
 
 def _add_tracked_parameters(ctx, family_name):

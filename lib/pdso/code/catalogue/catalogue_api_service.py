@@ -489,7 +489,14 @@ def harvest_layout(
         raise PDSOError(
             "The Room or Area is not placed or not enclosed. It has no boundary.", 409
         )
-    path = save_entry(result.entry, folder or get_catalogue_folder())
+    target_folder = folder or get_catalogue_folder()
+    # The id has a time stamp to the second. A second harvest in the same
+    # second gets "-2", "-3"... instead of overwriting the first.
+    base, count = result.entry.id, 1
+    while os.path.exists(os.path.join(target_folder, result.entry.id + ENTRY_EXTENSION)):
+        count += 1
+        result.entry.id = "{}-{}".format(base, count)
+    path = save_entry(result.entry, target_folder)
     return {
         "layout": entry_summary(result.entry),
         "file": path,
@@ -595,7 +602,7 @@ def place_layout(doc, reference, entry_id, clear_first=False):
     )
     if not recommendations:
         raise PDSOError(
-            "Layout '{}' does not fit this target: {}".format(entry_id, rejected[0][1]),
+            "Layout '{}' can't be placed in this target: {}".format(entry_id, rejected[0][1]),
             409,
         )
     chosen = recommendations[0]

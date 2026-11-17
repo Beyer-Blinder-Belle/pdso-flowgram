@@ -15,6 +15,7 @@ from .revit_helpers import (
     get_element,
     id_value,
     level_info,
+    to_number,
 )
 
 
@@ -35,8 +36,9 @@ def create_level(doc, name, elevation):
     """Create a Level at an elevation (feet)."""
     if any(level.Name == name for level in all_levels(doc)):
         raise PDSOError("Level '{}' is in the model already.".format(name), 409)
+    elevation = to_number(elevation, "elevation")
     with Transaction(doc, "PDSO - Create Level"):
-        level = DB.Level.Create(doc, float(elevation))
+        level = DB.Level.Create(doc, elevation)
         level.Name = str(name)
     return level_info(level)
 

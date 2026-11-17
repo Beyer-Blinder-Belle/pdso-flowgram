@@ -136,12 +136,29 @@ def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> An
 def api(
     method: str, path: str, body: Any = None, timeout: int = 1800, **query: Any
 ) -> Any:
-    """Call the API. Open the SSH port forward at the first connection error."""
+    """Call the API. Open the SSH port forward at the first connection error.
+
+    The request is sent again only if it did not reach Revit (urllib wraps a
+    connect error, such as a refused connection, in URLError) or if it is a
+    GET. A dropped connection after a write stops the run.
+    """
     try:
         return _request(method, path, body, query, timeout)
     except (urllib.error.URLError, ConnectionError) as error:
         if not SSH_HOST or _tunnel is not None:
             raise SystemExit(f"The PDSO API does not answer at {API_URL}: {error}")
+        reason = getattr(error, "reason", error)
+        dropped = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+        # A timeout while sending is wrapped too, but the request may have
+        # reached Revit
+        not_sent = isinstance(error, urllib.error.URLError) and not isinstance(
+            reason, dropped + (TimeoutError,)
+        )
+        if method != "GET" and not not_sent:
+            raise SystemExit(
+                f"The connection dropped during {method} {path} ({error}); Revit "
+                "may have made the change. Check the model before you run again."
+            )
         _open_tunnel()
         return _request(method, path, body, query, timeout)
 

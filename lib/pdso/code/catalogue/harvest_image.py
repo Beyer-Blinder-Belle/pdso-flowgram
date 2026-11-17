@@ -73,10 +73,14 @@ def clean_image(path, corners, outline):
         outline (list): The unit's boundary, [(x, y), ...].
     """
     source = Bitmap(path)
+    result = None
+    # GDI objects hold Windows handles: each one is disposed (see finally)
+    disposables = []
     try:
         width, height = source.Width, source.Height
         result = Bitmap(width, height)
         graphics = Graphics.FromImage(result)
+        disposables.append(graphics)
         try:
             graphics.Clear(Color.White)
 
@@ -84,6 +88,7 @@ def clean_image(path, corners, outline):
             # corner pixel is the background; it goes to white, white to black.
             background = _luminance(source.GetPixel(2, 2))
             attributes = ImageAttributes()
+            disposables.append(attributes)
             if background < 0.5:
                 gain = 1.0 / max(1.0 - background, 0.05)
                 shift = 1.0 + gain * background
@@ -118,20 +123,31 @@ def clean_image(path, corners, outline):
                 ]
             )
             unit = GraphicsPath()
-            unit.AddPolygon(points)
             grown = GraphicsPath()
-            grown.AddPolygon(points)
-            grown.Widen(Pen(Color.Black, 2.0 * MARGIN * scale_x))
+            pen = Pen(Color.Black, 2.0 * MARGIN * scale_x)
             outside = Region(Rectangle(0, 0, width, height))
+            brush = SolidBrush(Color.White)
+            disposables.extend([unit, grown, pen, outside, brush])
+            unit.AddPolygon(points)
+            grown.AddPolygon(points)
+            grown.Widen(pen)
             outside.Exclude(unit)
             outside.Exclude(grown)
-            graphics.FillRegion(SolidBrush(Color.White), outside)
+            graphics.FillRegion(brush, outside)
         finally:
-            graphics.Dispose()
+            for item in reversed(disposables):
+                item.Dispose()
+    except Exception:
+        if result is not None:
+            result.Dispose()
+        raise
     finally:
         source.Dispose()
-    result.Save(path, ImageFormat.Png)
-    result.Dispose()
+    # The source file is closed now, so the result can be saved over it
+    try:
+        result.Save(path, ImageFormat.Png)
+    finally:
+        result.Dispose()
 
 
 def thumbnail_data_uri(path, height):
@@ -161,6 +177,19 @@ def thumbnail_data_uri(path, height):
         return ""
 
 
+def _roll_back(transaction):
+    """Roll back a transaction that was started and not ended."""
+    try:
+        if (
+            transaction is not None
+            and transaction.HasStarted()
+            and not transaction.HasEnded()
+        ):
+            transaction.RollBack()
+    except Exception:
+        pass
+
+
 class UnitImager(object):
     """Exports one PNG per unit from a temporary copy of a plan view.
 
@@ -184,6 +213,7 @@ class UnitImager(object):
         if not isinstance(view, DB.ViewPlan) or view.IsTemplate:
             self.error = "the active view is not a plan view"
             return
+        transaction = None
         try:
             self.group = DB.TransactionGroup(doc, "PDSO - Layout images")
             self.group.Start()
@@ -220,6 +250,7 @@ class UnitImager(object):
             self.view = copy
         except Exception as error:
             self.error = "{}: {}".format(type(error).__name__, error)
+            _roll_back(transaction)
             self.close()
 
     def _hide(self, view, category_id):
@@ -241,6 +272,7 @@ class UnitImager(object):
         if self.view is None or len(outline) < 3:
             return False
         folder = None
+        transaction = None
         try:
             transaction = DB.Transaction(self.doc, "PDSO - Image crop")
             transaction.Start()
@@ -294,6 +326,8 @@ class UnitImager(object):
             return True
         except Exception as error:
             self.error = "{}: {}".format(type(error).__name__, error)
+            # An open crop transaction would make every later export fail
+            _roll_back(transaction)
             return False
         finally:
             if folder and os.path.isdir(folder):

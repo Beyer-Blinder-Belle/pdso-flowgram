@@ -7,13 +7,37 @@ This service handles the three-stage level mapping process:
 3. Validate and deduplicate results
 
 Supports key-based range expansion for multi-building projects where keys
-can include prefixes (e.g., "A07", "B03").
+can include prefixes (e.g., "A07", "B03"). A key can't contain "-" or ",":
+stacking uses them for ranges and lists (see level_key_problem).
 """
 
 from pyrevit import script
 
 # Custom Modules
 from pdso.code.view_models.config_mapping_item import ConfigMappingItem
+
+
+# Stacking uses "-" for ranges and "," between keys, so a key can't contain them
+RESERVED_KEY_CHARACTERS = ("-", ",")
+
+
+def level_key_problem(key):
+    """Why a level key can't be saved, or None if it can.
+
+    Project Config and the API check every key with this before saving.
+    Keys are compared after stripping spaces at the ends.
+    """
+    text = "{}".format(key if key is not None else "").strip()
+    if not text:
+        return "A level key can't be empty."
+    used = [c for c in RESERVED_KEY_CHARACTERS if c in text]
+    if used:
+        return (
+            "Level key '{}' contains {}. Stacking uses '-' for ranges and ',' "
+            "between keys. Use '.', '_' or a space instead, for example "
+            "'B1.03'.".format(text, " and ".join("'{}'".format(c) for c in used))
+        )
+    return None
 
 
 # TO DO - Review this class and make sure its architecture is consistent with other services. Consider moving certain methods.
@@ -148,19 +172,19 @@ class PDSOLevelMappingService(object):
         """
         config = self.ext_storage_service.get_document_config()
         if config:
-            with config as c:
-                level_mappings = c.levels_mapping or {}
+            # Read without "with": its exit writes the entity back
+            level_mappings = config.levels_mapping or {}
 
-                # Convert .NET Dictionary to Python dict
-                if hasattr(level_mappings, "Keys"):
-                    self.level_mappings_cache = {
-                        k: level_mappings[k] for k in level_mappings.Keys
-                    }
-                else:
-                    self.level_mappings_cache = level_mappings
+            # Convert .NET Dictionary to Python dict
+            if hasattr(level_mappings, "Keys"):
+                self.level_mappings_cache = {
+                    k: level_mappings[k] for k in level_mappings.Keys
+                }
+            else:
+                self.level_mappings_cache = level_mappings
 
         # Build sorted keys list for range expansion
-        # Uses natural sort to handle "3" < "10" and compound keys like "B1-03"
+        # Uses natural sort to handle "3" < "10" and compound keys like "B1.03"
         self.sorted_keys = sorted(
             self.level_mappings_cache.keys(), key=ConfigMappingItem.natural_sort_key
         )
@@ -208,7 +232,15 @@ class PDSOLevelMappingService(object):
                 continue
 
             if "-" in segment:
-                # Range notation (e.g., "03-05" or "A07-A09")
+                if segment in self.level_mappings_cache:
+                    # A key saved before hyphens were refused
+                    errors.append(
+                        "Level key '{}' contains a hyphen, which stacking reads "
+                        "as a range. Rename it in Project Config.".format(segment)
+                    )
+                    continue
+
+                # Range notation (e.g., "03-05", "A07-A09")
                 parts = segment.split("-")
                 if len(parts) == 2:
                     start_key = parts[0].strip()

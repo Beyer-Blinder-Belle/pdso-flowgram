@@ -1334,16 +1334,19 @@ def generate_detailed_report(output, logger, doc):
         output.print_md("Program volume family geometry hash status.")
         output.print_md("")
 
-        families_with_hashes = [
-            f
-            for f in ext_pv_family_collection.extended_program_volume_families
-            if f.entity and f.entity.hashed_area_curve_geometry
-        ]
-        families_without_hashes = [
-            f
-            for f in ext_pv_family_collection.extended_program_volume_families
-            if not f.entity or not f.entity.hashed_area_curve_geometry
-        ]
+        # Correlation adds wrappers with no family for Data Silos that have
+        # none yet; they are not families. The entity is read once per
+        # family.
+        families_with_hashes = []
+        families_without_hashes = []
+        for f in ext_pv_family_collection.extended_program_volume_families:
+            if f.rpw_element is None:
+                continue
+            entity = f.entity
+            if entity and entity.hashed_area_curve_geometry:
+                families_with_hashes.append(f)
+            else:
+                families_without_hashes.append(f)
 
         output.print_md(
             "- Families with geometry hashes: {}".format(len(families_with_hashes))

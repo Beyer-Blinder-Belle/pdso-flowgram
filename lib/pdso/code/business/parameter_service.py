@@ -230,11 +230,17 @@ def _apply(doc, desired, removed, unbind_removed=False):
         shared_parameter_file_for_writes(doc),
         unbind_removed=unbind_removed,
     )
-    if not report.success:
-        errors = [text for level, text in report.messages if level == "error"]
+    errors = [text for level, text in report.messages if level == "error"]
+    if errors or not report.success:
+        saved = ""
+        if report.tracked:
+            # The model changed even so: say what was kept
+            saved = " The tracked list was saved with {} parameters.".format(
+                len(report.tracked)
+            )
         raise PDSOError(
-            "The parameters were not set up: {}".format(
-                " ".join(errors) or "unknown error"
+            "The parameters were not all set up: {}{}".format(
+                " ".join(errors) or "unknown error", saved
             ),
             409,
         )

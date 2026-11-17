@@ -17,6 +17,7 @@ import json
 import re
 import math
 import os
+import time
 
 from pdso.code.catalogue.layout_entry import LayoutEntry
 
@@ -79,21 +80,163 @@ def save_entry(entry, folder):
         os.makedirs(folder)
 
     json_path = os.path.join(folder, entry.id + ENTRY_EXTENSION)
-    with codecs.open(json_path, "w", encoding="utf-8") as stream:
-        stream.write(to_json(entry.to_dict()))
+    _write_text(json_path, to_json(entry.to_dict()))
 
     sketch_path = os.path.join(folder, entry.id + SKETCH_EXTENSION)
-    with codecs.open(sketch_path, "w", encoding="utf-8") as stream:
-        stream.write(entry_to_svg(entry))
+    _write_text(sketch_path, entry_to_svg(entry))
 
     return json_path
 
 
-def remove_previous(folder, source):
+def _write_text(path, text):
+    """Write a UTF-8 file so that a reader never sees it half written.
+
+    The text goes to a temporary file in the same folder, which then takes
+    the file's place in one step (os.replace in Python 3, File.Replace in
+    IronPython). If that fails, the old file is still there and the
+    temporary file is removed.
+    """
+    temporary = "{}.{}.tmp".format(path, os.getpid())
+    with codecs.open(temporary, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    try:
+        _replace_file(temporary, path)
+    except Exception:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+        raise
+
+
+def _replace_file(source, target):
+    """Move source to target in one step, over a file that is there."""
+    replace = getattr(os, "replace", None)
+    if replace is not None:  # Python 3
+        replace(source, target)
+        return
+    # IronPython 2.7: no os.replace, and os.rename can't overwrite
+    from System.IO import File
+
+    if File.Exists(target):
+        File.Replace(source, target, None)
+    else:
+        File.Move(source, target)
+
+
+LOCK_FILE_NAME = ".catalogue.lock"
+# A lock not touched for this long (s) was left by a run that stopped; it is
+# removed. The run that holds a lock touches it for each unit (see touch).
+STALE_LOCK_AGE = 600
+
+
+class catalogue_lock(object):
+    """Lock a catalogue folder while catalogue numbers are given out.
+
+    Two people who harvest into one shared folder at the same time would
+    otherwise give one number to two shapes. The lock is a file made with
+    O_EXCL, so only one run can hold it.
+
+    Example Usage:
+        with catalogue_lock(folder):
+            numbers = catalogue_numbers(folder)
+            ...  # assign_catalogue and save_entry
+    """
+
+    def __init__(self, folder, timeout=30.0):
+        self.path = os.path.join(folder, LOCK_FILE_NAME)
+        self.folder = folder
+        self.timeout = timeout
+        # Written into the lock, so a run only ever removes its own lock
+        self.token = "{}-{}-{}".format(os.getpid(), id(self), time.time())
+        self._held = False
+
+    def _read_token(self):
+        try:
+            with codecs.open(self.path, "r", encoding="ascii") as stream:
+                return stream.read().strip()
+        except (IOError, OSError):
+            return None
+
+    def __enter__(self):
+        if not os.path.isdir(self.folder):
+            os.makedirs(self.folder)
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except OSError:
+                if not os.path.exists(self.path):
+                    # Not a lock held by someone: the folder can't be written
+                    raise RuntimeError(
+                        "Can't write to the catalogue folder {}. Check that it "
+                        "exists and that you can save files there.".format(self.folder)
+                    )
+                self._remove_if_stale()
+                if time.time() > deadline:
+                    raise RuntimeError(
+                        "Someone else is saving to the catalogue folder {}. Try "
+                        "again in a minute. If nobody is, delete the file {}.".format(
+                            self.folder, LOCK_FILE_NAME
+                        )
+                    )
+                time.sleep(0.5)
+                continue
+            try:
+                os.write(handle, self.token.encode("ascii"))
+            finally:
+                os.close(handle)
+            self._held = True
+            return self
+
+    def _remove_if_stale(self):
+        """Remove a lock that its run stopped touching long ago.
+
+        The age is measured against a file this run writes in the same
+        folder, so the clocks of two computers don't matter.
+        """
+        probe = os.path.join(self.folder, ".catalogue.{}.probe".format(os.getpid()))
+        try:
+            with open(probe, "w"):
+                pass
+            now = os.path.getmtime(probe)
+            os.remove(probe)
+            token = self._read_token()
+            if now - os.path.getmtime(self.path) > STALE_LOCK_AGE:
+                # Remove it only if it is still the same lock
+                if token is not None and self._read_token() == token:
+                    os.remove(self.path)
+        except (IOError, OSError):
+            pass
+
+    def touch(self):
+        """Show that this run is still working, so the lock isn't taken as stale."""
+        if self._held:
+            try:
+                os.utime(self.path, None)
+            except OSError:
+                pass
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        if self._held:
+            # Only remove the lock if it is still this run's lock
+            if self._read_token() == self.token:
+                try:
+                    os.remove(self.path)
+                except OSError:
+                    pass
+            self._held = False
+        return False
+
+
+def remove_previous(folder, source, keep=None):
     """Delete earlier harvests of the same unit, so a re-run replaces them.
 
-    The same unit is the same element id in the same model (same file path
-    when both have one, else the same model name).
+    The same unit is the same element id in the same model: both models were
+    saved to files with the same name, and their model_id (when both have one)
+    is the same. An unsaved model ("Project1") is never matched, since many
+    projects share that name.
+
+    Call it after the new entry is saved, with keep= its path, so a failed
+    save never leaves the unit with no entry.
 
     Returns:
         int: How many earlier entries were removed.
@@ -103,10 +246,13 @@ def remove_previous(folder, source):
         return 0
 
     removed = 0
+    keep = os.path.normcase(os.path.abspath(keep)) if keep else None
     for file_name in sorted(os.listdir(folder)):
         if not file_name.lower().endswith(ENTRY_EXTENSION):
             continue
         path = os.path.join(folder, file_name)
+        if keep and os.path.normcase(os.path.abspath(path)) == keep:
+            continue
         try:
             with codecs.open(path, "r", encoding="utf-8") as stream:
                 other = json.loads(stream.read()).get("source") or {}
@@ -114,10 +260,15 @@ def remove_previous(folder, source):
             continue
         if str(other.get("element_id")) != str(element_id):
             continue
-        if source.get("model_path") and other.get("model_path"):
-            same = source["model_path"] == other["model_path"]
-        else:
-            same = source.get("model") == other.get("model")
+        # Both models must be saved files with the same name. Projects made
+        # from one template can share a model_id, so it only narrows the
+        # match (a different model_id is a different model); it never makes
+        # one on its own.
+        same = bool(source.get("model_path")) and source.get(
+            "model_path"
+        ) == other.get("model_path")
+        if same and source.get("model_id") and other.get("model_id"):
+            same = source["model_id"] == other["model_id"]
         if not same:
             continue
         os.remove(path)

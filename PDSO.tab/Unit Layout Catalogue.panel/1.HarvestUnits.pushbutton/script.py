@@ -21,6 +21,7 @@ for _name in [name for name in sys.modules if name.startswith("pdso.code.catalog
 from pdso.code.catalogue.catalogue_settings import get_catalogue_folder  # noqa: E402
 from pdso.code.catalogue.catalogue_store import (  # noqa: E402
     assign_catalogue,
+    catalogue_lock,
     catalogue_numbers,
     remove_previous,
     save_entry,
@@ -204,67 +205,79 @@ if __name__ == "__main__":
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     used_ids = set()
     rows, failures, last = [], [], None
-    # Catalogue numbers already given out: the same shape keeps its number
-    numbers = catalogue_numbers(folder)
-    saved = []
-    replaced = 0
+    # Lock the folder while numbers are given out: two people who harvest
+    # into one shared folder at once would give one number to two shapes
+    lock = catalogue_lock(folder)
+    try:
+        lock.__enter__()
+    except RuntimeError as error:
+        forms.alert(str(error), exitscript=True)
+    try:
+        # Catalogue numbers already given out: the same shape keeps its number
+        numbers = catalogue_numbers(folder)
+        saved = []
+        replaced = 0
 
-    for element in elements:
-        try:
-            result = harvest(element, "", "", project_type)
-            if result is None:
-                failures.append((element.Id, "not placed or not enclosed"))
-                continue
+        for element in elements:
+            lock.touch()
+            try:
+                result = harvest(element, "", "", project_type)
+                if result is None:
+                    failures.append((element.Id, "not placed or not enclosed"))
+                    continue
 
-            entry = result.entry
-            features = entry.features
-            unit = features.get("unit", {})
-            source = entry.source
+                entry = result.entry
+                features = entry.features
+                unit = features.get("unit", {})
+                source = entry.source
 
-            entry.program = suggest_program(
-                unit,
-                features.get("rooms", []),
-                get_room_name(element) or get_room_department(element),
-            )
-            label = source.get("room_number") or source.get("room_name") or source["element_id"]
-            entry.name = "{} - {:.0f} sf - {} {}".format(
-                entry.program, entry.area, source["element_kind"], label
-            )
+                entry.program = suggest_program(
+                    unit,
+                    features.get("rooms", []),
+                    get_room_name(element) or get_room_department(element),
+                )
+                label = source.get("room_number") or source.get("room_name") or source["element_id"]
+                entry.name = "{} - {:.0f} sf - {} {}".format(
+                    entry.program, entry.area, source["element_kind"], label
+                )
 
-            base = "{}--{}--{}".format(slugify(entry.program), slugify(entry.name), stamp)
-            entry.id, count = base, 1
-            while entry.id in used_ids:
-                count += 1
-                entry.id = "{}-{}".format(base, count)
-            used_ids.add(entry.id)
+                base = "{}--{}--{}".format(slugify(entry.program), slugify(entry.name), stamp)
+                entry.id, count = base, 1
+                while entry.id in used_ids:
+                    count += 1
+                    entry.id = "{}-{}".format(base, count)
+                used_ids.add(entry.id)
 
-            catalogue_number = assign_catalogue(entry, numbers)
-            replaced += remove_previous(folder, source)
-            path = save_entry(entry, folder)
-            saved.append((element, entry, path))
-            last = (entry, result)
+                catalogue_number = assign_catalogue(entry, numbers)
+                # Save first: a failed save must not leave the unit with no entry
+                path = save_entry(entry, folder)
+                replaced += remove_previous(folder, source, keep=path)
+                saved.append((element, entry, path))
+                last = (entry, result)
 
-            lengths = features.get("edge_lengths", {})
-            rows.append(
-                [
-                    output.linkify(element.Id),
-                    catalogue_number,
-                    entry.name,
-                    features.get("shape", {}).get("category", ""),
-                    "{:.1f} x {:.1f}".format(entry.width, entry.depth),
-                    "{:.0f}".format(lengths.get("exterior", 0.0)),
-                    "{:.0f}".format(lengths.get("corridor", 0.0)),
-                    "{:.0f}".format(lengths.get("party", 0.0)),
-                    "yes" if features.get("entry") else "no",
-                    unit.get("room_count", 0),
-                    len(features.get("internal_walls", [])),
-                    len(entry.items),
-                    len(features.get("nested_items", [])),
-                    len([p for p in unit.get("pdso", []) if p["value"] is not None]),
-                ]
-            )
-        except Exception as error:
-            failures.append((element.Id, "{}: {}".format(type(error).__name__, error)))
+                lengths = features.get("edge_lengths", {})
+                rows.append(
+                    [
+                        output.linkify(element.Id),
+                        catalogue_number,
+                        entry.name,
+                        features.get("shape", {}).get("category", ""),
+                        "{:.1f} x {:.1f}".format(entry.width, entry.depth),
+                        "{:.0f}".format(lengths.get("exterior", 0.0)),
+                        "{:.0f}".format(lengths.get("corridor", 0.0)),
+                        "{:.0f}".format(lengths.get("party", 0.0)),
+                        "yes" if features.get("entry") else "no",
+                        unit.get("room_count", 0),
+                        len(features.get("internal_walls", [])),
+                        len(entry.items),
+                        len(features.get("nested_items", [])),
+                        len([p for p in unit.get("pdso", []) if p["value"] is not None]),
+                    ]
+                )
+            except Exception as error:
+                failures.append((element.Id, "{}: {}".format(type(error).__name__, error)))
+    finally:
+        lock.__exit__(None, None, None)
 
     # A plan image of each unit, from a temporary copy of the active view with
     # tags and Area lines hidden. The copy is undone; the model does not change.

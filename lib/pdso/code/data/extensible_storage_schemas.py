@@ -10,10 +10,13 @@ Schemas Defined:
     - PdsoProgramVolumeFamilySchema: Per-family data for program volumes
 
 Example Usage:
-    # Reading configuration
-    with PdsoConfigDocumentSchema(project_info) as entity:
-        uid_pattern = entity.uid_pattern
-        extrusion_height = entity.program_volume_extrusion_height
+    # Reading configuration. Do not use "with" to read: leaving the "with"
+    # block always writes the entity back in a transaction (vendored
+    # extensible_storage BaseSchema.__exit__), which fails outside an API
+    # context and marks the model as changed.
+    entity = PdsoConfigDocumentSchema(project_info, update=False)
+    uid_pattern = entity.uid_pattern
+    extrusion_height = entity.program_volume_extrusion_height
 
     # Writing configuration
     with PdsoConfigDocumentSchema(project_info, update=True) as entity:

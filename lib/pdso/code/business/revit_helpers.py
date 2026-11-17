@@ -5,6 +5,8 @@ All lengths are decimal feet and all areas are square feet (Revit internal units
 """
 
 # System Modules
+import math
+
 import System
 from System.Collections.Generic import List
 
@@ -79,6 +81,18 @@ def level_info(level):
         "name": level.Name,
         "elevation": level.Elevation,
     }
+
+
+def to_number(value, name):
+    """A caller's value as a finite float, or a PDSOError (400) that names the field."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = None
+    # NaN and infinity pass float() (and JSON can carry them)
+    if number is None or math.isnan(number) or math.isinf(number):
+        raise PDSOError("'{}' must be a number. Got: {!r}".format(name, value))
+    return number
 
 
 def point_in_polygon(x, y, polygon):

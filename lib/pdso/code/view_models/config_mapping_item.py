@@ -132,7 +132,7 @@ class ConfigMappingItem(object):
         Handles proper sorting of identifiers like:
         - "Lvl 01", "Lvl 02", "Lvl 10" (not "Lvl 1", "Lvl 10", "Lvl 2")
         - "Level 2", "Level 10", "Level 20"
-        - "B1-03-A2", "B1-10-A1"
+        - "B1.03.A2", "B1.10.A1"
 
         Args:
             text (str): Text to generate sort key for

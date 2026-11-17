@@ -127,7 +127,9 @@ def harvest_layout(ctx):
         program=ctx.arg("program"),
         project_type=ctx.arg("project_type", "Other"),
         notes=ctx.arg("notes", ""),
-        folder=ctx.arg("folder"),
+        # No "folder" from the request: the API has no authentication, so a
+        # caller must not choose where files are written. Harvests go to the
+        # catalogue folder set in Revit (Shift+Click Harvest Layout).
     )
 
 

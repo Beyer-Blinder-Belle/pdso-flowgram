@@ -11,6 +11,8 @@ Example Usage:
 """
 
 # 3rd Party Modules
+import re
+
 from pyrevit import script, DB
 
 # Custom Modules
@@ -18,6 +20,7 @@ from ..data.shared_parameter_constants import standard_pdso_parameters
 from .errors import PDSOError
 from . import parameter_registry_service
 from .extensible_storage_service import PDSOExtensibleStorageService
+from .level_mapping_service import level_key_problem
 from .revit_helpers import find_level, id_value
 
 logger = script.get_logger()
@@ -109,7 +112,8 @@ def update_config(doc, updates):
             are replaced as a whole and cannot be empty.
             "levels_mapping" maps each stacking key (for example "01") to a level
             name or level id. The "PDSO - Program Stacking" parameter of a Data
-            Silo uses these keys ("01-02" or "01, 03"). The tracked parameters
+            Silo uses these keys ("01-02" or "01, 03"), so a key can't contain
+            "-" or ",". The tracked parameters
             ("tethered_parameters") are not changed here: see parameter_service.
 
     Returns:
@@ -145,8 +149,18 @@ def update_config(doc, updates):
         if name in updates:
             values[name] = str(updates[name])
 
+    if "uid_pattern" in values:
+        values["uid_pattern"] = check_uid_pattern(values["uid_pattern"])
+
     if "program_volume_extrusion_height" in updates:
-        height = float(updates["program_volume_extrusion_height"])
+        try:
+            height = float(updates["program_volume_extrusion_height"])
+        except (TypeError, ValueError):
+            raise PDSOError(
+                "program_volume_extrusion_height must be a number. Got: {!r}".format(
+                    updates["program_volume_extrusion_height"]
+                )
+            )
         if height <= 0:
             raise PDSOError("program_volume_extrusion_height must be more than 0.")
         values["program_volume_extrusion_height"] = height
@@ -179,8 +193,12 @@ def update_config(doc, updates):
     if "levels_mapping" in updates:
         mapping = updates["levels_mapping"]
         _require_map(mapping, "levels_mapping")
+        problems = [level_key_problem(key) for key in mapping]
+        problems = [problem for problem in problems if problem]
+        if problems:
+            raise PDSOError(" ".join(problems))
         values["levels_mapping"] = dict(
-            (str(key), find_level(doc, reference).Id)
+            (str(key).strip(), find_level(doc, reference).Id)
             for key, reference in mapping.items()
         )
 
@@ -189,6 +207,35 @@ def update_config(doc, updates):
     if not service.update_document_config(**values):
         raise PDSOError("Could not save the PDSO configuration.", 500)
     return get_config(doc)
+
+
+def check_uid_pattern(pattern):
+    """Return a Program UID pattern if it is a valid regular expression.
+
+    An empty pattern turns the check off. Raises PDSOError for a pattern that
+    does not compile, so a bad pattern is never saved (every program create
+    and update would fail on it).
+    """
+    if not pattern:
+        return ""
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        raise PDSOError(
+            "uid_pattern is not a valid regular expression: {}".format(error)
+        )
+    return pattern
+
+
+def uid_matches(pattern, uid):
+    """True if the whole UID matches the pattern (an empty pattern matches all)."""
+    if not pattern:
+        return True
+    try:
+        return re.match(r"(?:{})\Z".format(pattern), uid or "") is not None
+    except re.error:
+        # A pattern saved before it was checked: do not block programs on it
+        return True
 
 
 def _require_map(value, name):

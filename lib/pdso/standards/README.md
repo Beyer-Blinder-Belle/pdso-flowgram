@@ -98,16 +98,16 @@ python lib/pdso/code/setup/shared_parameter_file.py
 
 | Key | Meaning |
 | --- | --- |
-| `name` | Family name in Revit |
-| `files` | Paths to try in order. The first that exists is loaded. Relative paths resolve against this file's folder. |
+| `name` | Family name in Revit, or a list of names: the first that is loaded counts. A family keeps its file's name, so a Revit version with no family of its own uses the newest shipped one (for example `Rvt26` in Revit 2027). |
+| `files` | Paths to try in order. The first that exists is loaded. Relative paths resolve against this file's folder. Revit upgrades an older family file when it loads it; it can't load a newer one. |
 | `on_existing` | `skip` (default) leaves a loaded family alone. `reload` loads it again over the existing one. |
 | `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`) |
-| `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config, unless Project Config already names a different family that is loaded |
+| `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config. If Project Config already names a different family that is loaded, that family is kept, this one is not loaded, and the tracked parameters go into the chosen family. |
 | `add_tracked_parameters` | For the Data Silo family: add the parameters the model tracks (chosen in the Parameter Manager) to the family (default `true`). The shipped family only has Program UID, Program Stacking and Last Synced. |
 
 ## view_templates.json
 
-`on_existing`: `update` (default) re-applies these settings to an existing template. `skip` leaves it alone.
+`on_existing`: `skip` (default) leaves an existing template alone, so changes made in the model are kept. `update` re-applies these settings to it, which undoes such changes (for example category visibility).
 
 | Key | Meaning |
 | --- | --- |

@@ -33,6 +33,7 @@ from . import (
 from .errors import PDSOError
 from .revit_helpers import (
     Transaction,
+    TransactionGroup,
     id_list,
     id_value,
     point_in_polygon,
@@ -325,7 +326,6 @@ def color_areas(doc, view, color_by="program_type", labels=True):
         doc, scheme=view.AreaScheme.Name, level=id_value(level.Id)
     )
     programs = program_by_area(doc, areas, level)
-    clear_area_colors(doc, view)
 
     legend = {}
     colors = {}
@@ -350,53 +350,27 @@ def color_areas(doc, view, color_by="program_type", labels=True):
 
     colored = 0
     elevation = level.ProjectElevation
-    with Transaction(doc, "PDSO - Color Areas"):
-        label_type = None
-        text_height = 0.0
-        if labels and drawable:
-            text_height = _model_text_height(
-                [(area["outline"], lines) for area, _, _, lines in drawable]
-            )
-            label_type = _label_type(doc, text_height / float(view.Scale))
-        fit_view_to_outlines(view, [area["outline"] for area, _, _, _ in drawable])
 
-        for area, program, value, lines in drawable:
-            outline = area["outline"]
-            color = color_of(value)
-
-            loop = DB.CurveLoop()
-            for index in range(len(outline)):
-                start = outline[index]
-                end = outline[(index + 1) % len(outline)]
-                loop.Append(
-                    DB.Line.CreateBound(
-                        DB.XYZ(start[0], start[1], elevation),
-                        DB.XYZ(end[0], end[1], elevation),
-                    )
+    def loop_of(points):
+        loop = DB.CurveLoop()
+        for index in range(len(points)):
+            start = points[index]
+            end = points[(index + 1) % len(points)]
+            loop.Append(
+                DB.Line.CreateBound(
+                    DB.XYZ(start[0], start[1], elevation),
+                    DB.XYZ(end[0], end[1], elevation),
                 )
-            DB.FilledRegion.Create(
-                doc, _region_type(doc, color).Id, view.Id, _curve_loop_list([loop])
             )
+        return loop
 
-            if label_type is not None:
-                center_x, center_y = polygon_interior_point(outline)
-                block_height = text_height * LABEL_LINE_SPACING * len(lines)
-                options = DB.TextNoteOptions(label_type.Id)
-                options.HorizontalAlignment = DB.HorizontalTextAlignment.Center
-                DB.TextNote.Create(
-                    doc,
-                    view.Id,
-                    DB.XYZ(center_x, center_y + block_height / 2.0, elevation),
-                    "\n".join(lines),
-                    options,
-                )
-
-            entry = legend.setdefault(
-                value, {"value": value, "color": _hex(color), "count": 0, "area": 0.0}
+    # Removing the old overlay and drawing the new one are one undo step
+    with TransactionGroup(doc, "PDSO - Color Areas"):
+        clear_area_colors(doc, view)
+        with Transaction(doc, "PDSO - Draw Area Colors"):
+            colored = _draw_area_colors(
+                doc, view, drawable, labels, color_of, legend, loop_of, elevation
             )
-            entry["count"] += 1
-            entry["area"] += area["area"]
-            colored += 1
 
     return {
         "view": {"id": id_value(view.Id), "name": view.Name},
@@ -404,6 +378,62 @@ def color_areas(doc, view, color_by="program_type", labels=True):
         "legend": sorted(legend.values(), key=lambda entry: entry["value"]),
         "areas_colored": colored,
     }
+
+
+def _draw_area_colors(doc, view, drawable, labels, color_of, legend, loop_of, elevation):
+    """Draw the filled regions and labels of color_areas. Call in a transaction."""
+    colored = 0
+    label_type = None
+    text_height = 0.0
+    if labels and drawable:
+        text_height = _model_text_height(
+            [(area["outline"], lines) for area, _, _, lines in drawable]
+        )
+        label_type = _label_type(doc, text_height / float(view.Scale))
+    fit_view_to_outlines(view, [area["outline"] for area, _, _, _ in drawable])
+
+    for area, program, value, lines in drawable:
+        outline = area["outline"]
+        color = color_of(value)
+
+        # The holes of the Area are holes of the filled region too
+        try:
+            loops = [loop_of(outline)] + [
+                loop_of(hole) for hole in area.get("holes") or [] if len(hole) >= 3
+            ]
+            DB.FilledRegion.Create(
+                doc, _region_type(doc, color).Id, view.Id, _curve_loop_list(loops)
+            )
+        except Exception:
+            # A hole with a very short edge, or one that touches the outline,
+            # makes an invalid region: fill the outline alone rather than nothing
+            DB.FilledRegion.Create(
+                doc,
+                _region_type(doc, color).Id,
+                view.Id,
+                _curve_loop_list([loop_of(outline)]),
+            )
+
+        if label_type is not None:
+            center_x, center_y = polygon_interior_point(outline)
+            block_height = text_height * LABEL_LINE_SPACING * len(lines)
+            options = DB.TextNoteOptions(label_type.Id)
+            options.HorizontalAlignment = DB.HorizontalTextAlignment.Center
+            DB.TextNote.Create(
+                doc,
+                view.Id,
+                DB.XYZ(center_x, center_y + block_height / 2.0, elevation),
+                "\n".join(lines),
+                options,
+            )
+
+        entry = legend.setdefault(
+            value, {"value": value, "color": _hex(color), "count": 0, "area": 0.0}
+        )
+        entry["count"] += 1
+        entry["area"] += area["area"]
+        colored += 1
+    return colored
 
 
 def _curve_loop_list(loops):

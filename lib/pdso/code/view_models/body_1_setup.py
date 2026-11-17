@@ -44,10 +44,21 @@ from config_mapping_item import ConfigMappingItem
 from common.code.view_model_external_events import CustomizableEvent
 from common.code import generic_utils
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
+from pdso.code.business.level_mapping_service import level_key_problem
 from pdso.code.business.parameter_registry_service import (
     check_parameter_bindings,
 )
 from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
+
+
+class _DefaultConfig(object):
+    """The default configuration values, read like a stored configuration."""
+
+    def __init__(self, values):
+        self.levels_mapping = {}
+        self.worksets = {}
+        for name, value in values.items():
+            setattr(self, name, value)
 
 
 class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
@@ -133,13 +144,8 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         self.is_initializing = True
 
         try:
-            # Ensure schemas exist and initialize with defaults if needed
-            self.logger.info("Ensuring extensible storage schemas exist...")
-            schema_status = self.ext_storage_service.ensure_schemas_exist()
-
-            if not schema_status["success"]:
-                self.logger.warning("Some schemas missing or failed to initialize")
-
+            # Opening the window doesn't change the model: a model with no
+            # PDSO configuration shows the defaults, and Save creates it.
             # Load configuration from storage
             self._load_config_from_storage()
 
@@ -159,6 +165,9 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             self.logger.error("Error during setup: {}".format(e))
         finally:
             self.is_initializing = False
+            # Defaults shown for a model with no configuration are not saved yet
+            if getattr(self, "_showing_defaults", False):
+                self.has_unsaved_changes = True
 
     # =============================================================================
     # Observable Properties - Simple Fields
@@ -398,107 +407,110 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         self.logger.info("Loading configuration from extensible storage...")
 
         try:
-            # Check if schema exists first
-            if not self.ext_storage_service.check_document_pdso_config_schema_exists():
-                self.logger.warning("Document schema doesn't exist - using defaults")
-                return
-
-            # Get config context manager
-            config = self.ext_storage_service.get_document_config()
+            if self.ext_storage_service.check_document_pdso_config_schema_exists():
+                config = self.ext_storage_service.get_document_config()
+            else:
+                self.logger.info(
+                    "This model has no PDSO configuration yet. Showing the "
+                    "defaults; Save creates it."
+                )
+                config = _DefaultConfig(self.ext_storage_service.default_config_values())
+                self._showing_defaults = True
             if config:
-                with config as c:
-                    # Load simple fields
-                    self.data_silo_family_name = c.data_silo_family_name or ""
-                    self.uid_pattern = c.uid_pattern or ""
-                    self.program_volume_family_name_prefix = (
-                        c.program_volume_family_name_prefix or ""
+                # Read without "with": its exit writes the config back
+                c = config
+                # Load simple fields
+                self.data_silo_family_name = c.data_silo_family_name or ""
+                self.uid_pattern = c.uid_pattern or ""
+                self.program_volume_family_name_prefix = (
+                    c.program_volume_family_name_prefix or ""
+                )
+                self.program_volume_extrusion_height = (
+                    c.program_volume_extrusion_height or 8.0
+                )
+
+                # Load worksets dictionary and split into discrete properties
+                worksets = c.worksets or {}
+                # Convert .NET Dictionary to Python dict
+                if worksets and hasattr(worksets, "Keys"):
+                    worksets_dict = {k: worksets[k] for k in worksets.Keys}
+                else:
+                    worksets_dict = worksets
+
+                self.data_silo_workset = worksets_dict.get(
+                    "data-silos", "Not enforced"
+                )
+                self.program_volume_workset = worksets_dict.get(
+                    "program-volumes", "Not enforced"
+                )
+                self.area_workset = worksets_dict.get("areas", "Not enforced")
+
+                # Load area scheme mappings
+                self.area_scheme_mappings = []
+                area_mappings = c.area_scheme_mappings or {}
+                # Convert .NET Dictionary to Python dict
+                if area_mappings and hasattr(area_mappings, "Keys"):
+                    area_mappings = {
+                        k: area_mappings[k] for k in area_mappings.Keys
+                    }
+
+                if area_mappings:
+                    # Stored as {PDSO parameter: Revit area scheme} (see
+                    # docs/agent/architecture.md). Rows on this screen are
+                    # (area scheme, parameter), so swap on the way in.
+                    for stored_key, stored_value in area_mappings.items():
+                        if (
+                            stored_key not in standard_pdso_parameters
+                            and stored_value in standard_pdso_parameters
+                        ):
+                            # Saved by an older Project Config, which wrote
+                            # {scheme: parameter}. Saving again fixes it.
+                            scheme, parameter = stored_key, stored_value
+                        else:
+                            scheme, parameter = stored_value, stored_key
+                        item = ConfigMappingItem(scheme, parameter, self)
+                        self.area_scheme_mappings.append(item)
+                else:
+                    # Create default mappings if none exist
+                    default_mappings = [
+                        ("PDSO - GSF", "PDSO - GSF"),
+                        ("PDSO - NSF", "PDSO - NSF"),
+                        ("PDSO - ZFA", "PDSO - ZFA"),
+                    ]
+                    for key, value in default_mappings:
+                        item = ConfigMappingItem(key, value, self)
+                        self.area_scheme_mappings.append(item)
+
+                # Subcategory mappings removed - will be auto-generated from area schemes
+
+                # Load level mappings
+                self.levels_mappings = []
+                level_mappings = c.levels_mapping or {}
+                # Convert .NET Dictionary to Python dict
+                if level_mappings and hasattr(level_mappings, "Keys"):
+                    level_mappings = {
+                        k: level_mappings[k] for k in level_mappings.Keys
+                    }
+
+                # Create mapping items
+                for key, element_id in level_mappings.items():
+                    item = ConfigMappingItem(key, element_id, self)
+                    self.levels_mappings.append(item)
+
+                # Sort by key using natural sort
+                self.levels_mappings.sort(
+                    key=lambda item: ConfigMappingItem.natural_sort_key(item.key)
+                )
+
+                self.logger.info("Configuration loaded successfully")
+                self.logger.debug(
+                    "Loaded {} area scheme mappings".format(
+                        len(self.area_scheme_mappings)
                     )
-                    self.program_volume_extrusion_height = (
-                        c.program_volume_extrusion_height or 8.0
-                    )
-
-                    # Load worksets dictionary and split into discrete properties
-                    worksets = c.worksets or {}
-                    # Convert .NET Dictionary to Python dict
-                    if worksets and hasattr(worksets, "Keys"):
-                        worksets_dict = {k: worksets[k] for k in worksets.Keys}
-                    else:
-                        worksets_dict = worksets
-
-                    self.data_silo_workset = worksets_dict.get(
-                        "data-silos", "Not enforced"
-                    )
-                    self.program_volume_workset = worksets_dict.get(
-                        "program-volumes", "Not enforced"
-                    )
-                    self.area_workset = worksets_dict.get("areas", "Not enforced")
-
-                    # Load area scheme mappings
-                    self.area_scheme_mappings = []
-                    area_mappings = c.area_scheme_mappings or {}
-                    # Convert .NET Dictionary to Python dict
-                    if area_mappings and hasattr(area_mappings, "Keys"):
-                        area_mappings = {
-                            k: area_mappings[k] for k in area_mappings.Keys
-                        }
-
-                    if area_mappings:
-                        # Stored as {PDSO parameter: Revit area scheme} (see
-                        # docs/agent/architecture.md). Rows on this screen are
-                        # (area scheme, parameter), so swap on the way in.
-                        for stored_key, stored_value in area_mappings.items():
-                            if (
-                                stored_key not in standard_pdso_parameters
-                                and stored_value in standard_pdso_parameters
-                            ):
-                                # Saved by an older Project Config, which wrote
-                                # {scheme: parameter}. Saving again fixes it.
-                                scheme, parameter = stored_key, stored_value
-                            else:
-                                scheme, parameter = stored_value, stored_key
-                            item = ConfigMappingItem(scheme, parameter, self)
-                            self.area_scheme_mappings.append(item)
-                    else:
-                        # Create default mappings if none exist
-                        default_mappings = [
-                            ("PDSO - GSF", "PDSO - GSF"),
-                            ("PDSO - NSF", "PDSO - NSF"),
-                            ("PDSO - ZFA", "PDSO - ZFA"),
-                        ]
-                        for key, value in default_mappings:
-                            item = ConfigMappingItem(key, value, self)
-                            self.area_scheme_mappings.append(item)
-
-                    # Subcategory mappings removed - will be auto-generated from area schemes
-
-                    # Load level mappings
-                    self.levels_mappings = []
-                    level_mappings = c.levels_mapping or {}
-                    # Convert .NET Dictionary to Python dict
-                    if level_mappings and hasattr(level_mappings, "Keys"):
-                        level_mappings = {
-                            k: level_mappings[k] for k in level_mappings.Keys
-                        }
-
-                    # Create mapping items
-                    for key, element_id in level_mappings.items():
-                        item = ConfigMappingItem(key, element_id, self)
-                        self.levels_mappings.append(item)
-
-                    # Sort by key using natural sort
-                    self.levels_mappings.sort(
-                        key=lambda item: ConfigMappingItem.natural_sort_key(item.key)
-                    )
-
-                    self.logger.info("Configuration loaded successfully")
-                    self.logger.debug(
-                        "Loaded {} area scheme mappings".format(
-                            len(self.area_scheme_mappings)
-                        )
-                    )
-                    self.logger.debug(
-                        "Loaded {} level mappings".format(len(self.levels_mappings))
-                    )
+                )
+                self.logger.debug(
+                    "Loaded {} level mappings".format(len(self.levels_mappings))
+                )
 
         except Exception as e:
             self.logger.error("Error loading configuration: {}".format(e))
@@ -1221,7 +1233,8 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         identifier_textbox.Margin = Thickness(5, 0, 10, 0)
         identifier_textbox.VerticalAlignment = VerticalAlignment.Center
         identifier_textbox.ToolTip = (
-            "Enter sortable identifier (e.g., 'Lvl 01', 'B1-03-A2')"
+            "Enter sortable identifier (e.g., 'Lvl 01', 'B1.03.A2'). "
+            "It can't contain '-' or ','."
         )
 
         key_binding = Binding("key")
@@ -1339,7 +1352,16 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             level_mappings_list = []
             for item in self.levels_mappings:
                 if item.key and item.value:
-                    level_mappings_list.append((item.key, item.value))
+                    level_mappings_list.append((item.key.strip(), item.value))
+
+            # Stacking reads "-" as a range and "," as a list: refuse such keys
+            problems = [level_key_problem(key) for key, _ in level_mappings_list]
+            problems = [problem for problem in problems if problem]
+            if problems:
+                self.logger.error(
+                    "❌ **Configuration not saved.** {}".format(" ".join(problems))
+                )
+                return
 
             # Apply natural sort to keys
             level_mappings_list.sort(
