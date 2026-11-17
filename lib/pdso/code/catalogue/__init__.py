@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Unit Layout Catalogue: harvest -> store -> recommend -> create.
 
 layout_geometry      room frames and the eight rectangle orientations (no Revit)

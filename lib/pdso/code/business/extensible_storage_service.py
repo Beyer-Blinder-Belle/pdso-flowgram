@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Service for managing PDSO Extensible Storage schemas.
 
 This service handles checking for existing schemas and initializing them

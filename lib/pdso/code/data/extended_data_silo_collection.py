@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 from collections import defaultdict
 
@@ -210,7 +211,7 @@ class ExtendedDataSiloCollection(object):
 
                     value_to_elements[value].append(ext_data_silo)
 
-                    """    
+                    """
                     except (AttributeError, KeyError) as e:
                         self.logger.warning("Error accessing parameter '{}' for element : {}".format(
                             parameter_name, str(e)))
@@ -289,18 +290,6 @@ class ExtendedDataSiloCollection(object):
                 unavailable_element_ids.append(element_id)
 
         return unavailable_element_ids
-
-    def set_element_pin_status(self, pin_status):
-        """Set the pin status for all ExtendedDataSilo elements in the collection.
-
-        Args:
-            pin_status (bool): True to pin elements, False to unpin
-        """
-        # to do - check if isModifiable, start transaction if not.
-
-        with db.Transaction("Set Data Silo Pin Status", doc=self.doc):
-            for ext_data_silo in self.extended_data_silos:
-                ext_data_silo.rpw_element.Pinned = pin_status
 
     def get_data_silos_with_partial_coverage(self, configured_schemes):
         """Get data silos that are missing correlations for some configured area schemes.

@@ -12,11 +12,9 @@ ignore = [
     "E731", # lambda assignment — intentional public API shortcuts
     "F403", # star imports — required pattern for Autodesk.Revit.DB / UI
     "F405", # may be from star import — affects unicode builtin in IronPython 2.7
+    "E501", # line too long — about 480 long strings, comments and docstrings;
+            # `ruff format` keeps code lines short where it is applied
 ]
-
-[tool.ruff.lint.per-file-ignores]
-# The docstring of an MCP tool is its description for the agent: one long line.
-"mcp/pdso_mcp_server.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

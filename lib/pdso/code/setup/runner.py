@@ -3,7 +3,7 @@
 
 Each step reads its own standards file (<step id>.json) and adds rows to the
 report with SetupContext.add(). Steps run inside one TransactionGroup, so the
-whole setup shows up as a single "PDSO Quick Setup" undo in Revit. Each item a
+whole setup shows up as a single "PDSO - Quick Setup" undo in Revit. Each item a
 step creates gets its own transaction, so one bad item doesn't roll back the rest.
 """
 
@@ -101,6 +101,8 @@ class SetupContext(object):
     @contextmanager
     def transaction(self, name):
         """A transaction that hides Revit warnings and rolls back on errors."""
+        if not name.startswith("PDSO - "):
+            name = "PDSO - {}".format(name)
         transaction = DB.Transaction(self.doc, name)
         options = transaction.GetFailureHandlingOptions()
         options.SetFailuresPreprocessor(revit_utils.SwallowWarnings())
@@ -217,7 +219,7 @@ def run_setup(doc, standards, steps, options=None):
     """
     ctx = SetupContext(doc, standards, options)
 
-    group = DB.TransactionGroup(doc, "PDSO Quick Setup")
+    group = DB.TransactionGroup(doc, "PDSO - Quick Setup")
     group.Start()
     try:
         for step in steps:

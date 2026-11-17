@@ -1,9 +1,10 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 import os
 import traceback
 
 # 3rd Party Modules
-from rpw import revit, db, DB
+from rpw import revit, db
 from pyrevit import script, DB, HOST_APP
 from rpw.utils.dotnet import List
 
@@ -477,7 +478,7 @@ class PDSOFamilyManagerService(object):
             "Starting transaction to delete old geometry from family document"
         )
 
-        with db.Transaction("Delete old Geometry", fdoc) as t:
+        with db.Transaction("Delete old Geometry", fdoc):
             deleted_count = 0
             for element in extrusions:
                 element.delete()
@@ -511,7 +512,7 @@ class PDSOFamilyManagerService(object):
             "Starting transaction to create geometry in family document from spatial element"
         )
 
-        with db.Transaction("Create Geometry", fdoc) as t:
+        with db.Transaction("Create Geometry", fdoc):
             vector_to_origin = DB.Transform.CreateTranslation(reference_point.Negate())
 
             self.logger.debug(
@@ -654,7 +655,7 @@ class PDSOFamilyManagerService(object):
         subcategory_name = spatial_element.scheme.name
         created = False
 
-        with db.Transaction("Create Geometry", fdoc) as t:
+        with db.Transaction("Create Geometry", fdoc):
             vector_to_origin = DB.Transform.CreateTranslation(reference_point.Negate())
 
             self.logger.debug(

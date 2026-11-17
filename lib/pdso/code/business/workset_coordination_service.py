@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 
 
@@ -140,7 +141,7 @@ class WorksetCoordinationService(object):
         return True, ""
 
     def assign_elements_to_workset(
-        self, elements, workset_name, transaction_name="Assign Elements to Workset"
+        self, elements, workset_name, transaction_name="PDSO - Assign Elements to Workset"
     ):
         """Assign elements to specified workset.
 

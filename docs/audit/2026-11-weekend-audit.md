@@ -231,11 +231,12 @@ Still open from this review:
   - `pyrevit-mcp.md`'s destructive-calls list predates the catalogue
 - [ ] **K6.** `API_VERSION` wasn't bumped when 6e89d07 added `image` and `catalogue` to the layout replies. `image` is a local path, so remote agents can't use it. *Partly done: the bump to 1.6 (with B1) covers those reply changes. The `image` path is still open.*
 - [ ] **K7.** Duplicate routes: `document/save|close` vs `documents/save|close`, with different shapes. Read-only catalogue routes use POST. Parameter names differ between `handlers.py` and `catalogue_handlers.py`, and their `_flag` helpers are duplicated.
-- [ ] **K8. Transaction names without the "PDSO - " prefix:**
+- [x] **K8. Transaction names without the "PDSO - " prefix:**
   - Quick Setup: "PDSO Quick Setup" and "Create view {}" etc.
   - "Assign Elements to Workset"
   - "Set Data Silo Pin Status"
   - "Set Program Volume Family Pin Status"
+  *Done: Quick Setup's group is "PDSO - Quick Setup" and its step transactions get the prefix; the workset transaction is "PDSO - Assign Elements to Workset". The three `set_element_pin_status` methods had no callers since B5 and are removed. Transactions inside family documents keep their names.*
 - [ ] **K9. Parameters handled by name instead of GUID or registry:**
   - The sync reads and writes by name (`data_service.py:145`, `extended_data_silo.py:106`, `extended_program_volume_instance.py:235`).
   - `"PDSO - Program UID"` and `"PDSO - Program Stacking"` are hardcoded about 12 times.
@@ -244,7 +245,8 @@ Still open from this review:
   - The area scheme mappings default is written out three times, and the Data Silo family name and the PV prefix are also copied.
   - There are three `IFamilyLoadOptions` classes.
   - `bootstrap_service` copies `find_family` and `find_area_scheme`.
-- [ ] **K11.** `ruff check .` fails: 478 E501 plus 8 real errors (`family_manager_service` F811 and 3× F841, `hashing_service` F841, E711 in the `0.Config` and `3.RunScripts` scripts, 1 W291). 30 legacy files have no `coding` header.
+- [x] **K11.** `ruff check .` fails: 478 E501 plus 8 real errors (`family_manager_service` F811 and 3× F841, `hashing_service` F841, E711 in the `0.Config` and `3.RunScripts` scripts, 1 W291). 30 legacy files have no `coding` header.
+  *Done: the 6 errors are fixed (the E711 ones went with U1). E501 is ignored in `pyproject.toml`: the long lines are strings, comments and docstrings, and reformatting 47 files would conflict with the unmerged branches (F1–F3). The 30 files have the header. `ruff check .` passes.*
 - [ ] **K12.** No minimum pyRevit version is stated or checked. On 6.1 the API ignores query parameters (filters, `document`, `_rid`).
 - [ ] **K13.** `remove_previous` and every Pull row reload the whole catalogue folder, and Pull runs full-model collectors for each row.
 - [ ] **K14.** The workset option "Warn (if configured)" does nothing in phases 1–3 (`sync_service.py`); only "Fix" is acted on. Also, `pdso_kinds` (from B2) swallows a config read error and falls back to the default names.
