@@ -18,6 +18,7 @@ Example Usage:
 from pyrevit import script, DB
 
 # Custom Modules
+from ..data.extended_shared_parameter import ROLE_AREA
 from ..data.shared_parameter_constants import standard_pdso_parameters
 from . import config_service, parameter_service
 from . import parameter_registry_service
@@ -228,21 +229,29 @@ def summarize_program_types(doc, group_by="program_type"):
     """Count the programs and add their areas for each value of a field.
 
     Returns:
-        list[dict]: One dict per value with keys "value", "count", "gsf", "nsf",
-            "zfa" and "uids"
+        list[dict]: One dict per value with keys "value", "count", "uids" and
+            one total per area parameter the model tracks ("gsf", "nsf" and
+            "zfa" by default)
     """
     if group_by not in _fields(doc):
         raise PDSOError("Unknown field: '{}'".format(group_by))
+    area_fields = [
+        parameter_service.field_name(parameter.parameter_name)
+        for parameter in parameter_registry_service.get_registry(doc).by_role(
+            ROLE_AREA
+        )
+    ]
     groups = {}
     for program in list_programs(doc):
         key = program.get(group_by)
         key = "" if key is None else key
-        group = groups.setdefault(
-            key,
-            {"value": key, "count": 0, "gsf": 0.0, "nsf": 0.0, "zfa": 0.0, "uids": []},
-        )
+        group = groups.get(key)
+        if group is None:
+            group = {"value": key, "count": 0, "uids": []}
+            group.update((area_field, 0.0) for area_field in area_fields)
+            groups[key] = group
         group["count"] += 1
-        for area_field in ("gsf", "nsf", "zfa"):
+        for area_field in area_fields:
             group[area_field] += program.get(area_field) or 0.0
         group["uids"].append(program.get("uid"))
     return sorted(groups.values(), key=lambda group: str(group["value"]))

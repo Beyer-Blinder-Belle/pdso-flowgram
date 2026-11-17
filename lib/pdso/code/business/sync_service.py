@@ -874,7 +874,7 @@ class PDSOSyncService(object):
                 by_name[family.rpw_element.Name] = family
         linked = 0
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
-            uid = ext_data_silo.parameters["PDSO - Program UID"].value
+            uid = ext_data_silo.uid
             if not uid:
                 continue
             family = by_name.get("{}{}".format(prefix, uid))

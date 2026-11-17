@@ -8,6 +8,7 @@ from rpw import db
 from pyrevit import script
 
 # Custom Modules
+from pdso.code.data import parameter_access
 from pdso.code.data.shared_parameter_constants import LAST_SYNCED
 from pdso.code.data.extended_shared_parameter import ROLE_AREA
 from pdso.code.business.parameter_registry_service import get_registry
@@ -74,6 +75,18 @@ class ExtendedDataSilo(object):
         self.queue_resetting_params()
 
     @property
+    def uid(self):
+        """The Program UID, read by GUID (None if the parameter is missing)."""
+        return parameter_access.get_value(self.rpw_element, parameter_access.PROGRAM_UID)
+
+    @property
+    def stacking(self):
+        """The Program Stacking text, read by GUID (None if the parameter is missing)."""
+        return parameter_access.get_value(
+            self.rpw_element, parameter_access.PROGRAM_STACKING
+        )
+
+    @property
     def has_stacking_errors(self):
         """True if the stacking did not fully resolve to levels.
 
@@ -113,7 +126,7 @@ class ExtendedDataSilo(object):
 
         for param_name, new_value in self.params_to_update.items():
             try:
-                self.rpw_element.parameters[param_name].value = new_value
+                parameter_access.set_value(self.rpw_element, param_name, new_value)
             except Exception as e:
                 self.logger.error(
                     "Failed to update parameter '{}' on data silo {}: {}".format(

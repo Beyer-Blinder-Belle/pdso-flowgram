@@ -4,8 +4,10 @@ import datetime
 
 # 3rd Party Modules
 from pyrevit import script
+from rpw import db
 
 # Custom Modules
+from pdso.code.data import parameter_access
 from pdso.code.data.shared_parameter_constants import LAST_SYNCED
 from pdso.code.business.parameter_registry_service import get_registry
 
@@ -149,9 +151,12 @@ class PDSODataService(object):
         for ext_data_silo in ext_data_silos:
             for parameter in pdso_params_to_push:
                 try:
-                    new_value = ext_data_silo.rpw_element.parameters[
-                        parameter.parameter_name
-                    ].value
+                    found = parameter_access.get_parameter(
+                        ext_data_silo.rpw_element, parameter.parameter_name
+                    )
+                    if found is None:
+                        raise KeyError(parameter.parameter_name)
+                    new_value = db.Parameter(found).value
                 except Exception:
                     self.logger.debug(
                         "Parameter '{}' not found on Data Silo {}, skipping".format(

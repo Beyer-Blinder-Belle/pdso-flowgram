@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Routes of the PDSO HTTP API for open documents and the Unit Layout Catalogue.
+"""Routes of the PDSO HTTP API for the Unit Layout Catalogue.
 
 The dispatcher imports this module. The module adds its routes to the route
-table of ``handlers``, so that ``GET /pdso/routes`` lists them.
+table of ``handlers``, so that ``GET /pdso/routes`` lists them. The routes for
+open documents are in ``handlers``.
 
 A request can name the document that it works on with the field ``document``
 (a title or a file path of an open project). Without it, a request works on the
 active document.
 """
 
-import os
-
-from pyrevit import DB
-
 from pdso.code.api import handlers
-from pdso.code.api.dispatcher import ApiError
+from pdso.code.api.handlers import _flag
 from pdso.code.catalogue import catalogue_api_service as catalogue
 
 
@@ -31,79 +28,6 @@ def route(method, pattern):
         return func
 
     return wrapper
-
-
-def _flag(value, default=False):
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-# =============================================================================
-# Open documents
-# =============================================================================
-
-
-def _document_info(doc, active_doc):
-    return {
-        "title": doc.Title,
-        "path": doc.PathName,
-        "is_active": active_doc is not None and doc.Equals(active_doc),
-        "is_modified": doc.IsModified,
-        "is_workshared": doc.IsWorkshared,
-    }
-
-
-@route("GET", "documents")
-def list_documents(ctx):
-    """List the project documents that are open in Revit."""
-    return [
-        _document_info(doc, ctx.doc)
-        for doc in ctx.app.Documents
-        if not doc.IsFamilyDocument and not doc.IsLinked
-    ]
-
-
-@route("POST", "documents/open")
-def open_document_in_background(ctx):
-    """Open a project file but do not show it. Body: path, detach?"""
-    path = ctx.arg("path", required=True)
-    if not os.path.exists(path):
-        raise ApiError("File not found: {}".format(path), 404)
-    for doc in ctx.app.Documents:
-        if os.path.normcase(doc.PathName) == os.path.normcase(path):
-            return _document_info(doc, ctx.doc)
-    options = DB.OpenOptions()
-    if _flag(ctx.arg("detach")):
-        options.DetachFromCentralOption = DB.DetachFromCentralOption.DetachAndPreserveWorksets
-    model_path = DB.ModelPathUtils.ConvertUserVisiblePathToModelPath(path)
-    doc = ctx.app.OpenDocumentFile(model_path, options)
-    return _document_info(doc, ctx.doc)
-
-
-@route("POST", "documents/save")
-def save_document(ctx):
-    """Save a document to its file. Body: document"""
-    doc = ctx.require_doc()
-    if not doc.PathName:
-        raise ApiError("The document has no file path.", 409)
-    doc.Save()
-    return _document_info(doc, ctx.doc)
-
-
-@route("POST", "documents/close")
-def close_document(ctx):
-    """Close a document that is not the active document. Body: document, save?"""
-    doc = ctx.require_doc()
-    if ctx.doc is not None and doc.Equals(ctx.doc):
-        raise ApiError(
-            "The API cannot close the active document. Use POST document/close.", 409
-        )
-    title = doc.Title
-    doc.Close(_flag(ctx.arg("save")))
-    return {"closed": title}
 
 
 # =============================================================================
@@ -135,7 +59,11 @@ def harvest_layout(ctx):
 
 @route("POST", "catalogue/recommend")
 def recommend_layouts(ctx):
-    """Rank the layouts for a target Room or Area. Body: room, program?, limit?"""
+    """Rank the layouts for a target Room or Area (read-only). Body: room, program?, limit?
+
+    POST although it changes nothing: a body reaches the handler on every
+    pyRevit, query parameters don't (pyRevit 6.1 drops them).
+    """
     return catalogue.recommend_layouts(
         ctx.require_doc(),
         ctx.arg("room", required=True),
@@ -157,7 +85,10 @@ def place_layout(ctx):
 
 @route("POST", "catalogue/similar-rooms")
 def find_similar_rooms(ctx):
-    """Find the Rooms that are similar to a layout. Body: layout_id, kind?, level?, limit?"""
+    """Find the Rooms that are similar to a layout (read-only). Body: layout_id, kind?, level?, limit?
+
+    POST for the same reason as catalogue/recommend.
+    """
     return catalogue.find_similar_rooms(
         ctx.require_doc(),
         ctx.arg("layout_id", required=True),

@@ -1057,7 +1057,7 @@ def generate_detailed_report(output, logger, doc):
         sorted_silo_ids = sorted(
             silo_data.keys(),
             key=lambda x: (
-                silo_data[x]["parent_data_silo"].parameters["PDSO - Program UID"].value
+                silo_data[x]["parent_data_silo"].uid
                 or ""
             ),
         )
@@ -1074,11 +1074,7 @@ def generate_detailed_report(output, logger, doc):
             # Get stacking range from data silo parameter
             stacking_range = "N/A"
             if "parent_data_silo" in data and data["parent_data_silo"]:
-                stacking_param = data["parent_data_silo"].rpw_element.LookupParameter(
-                    "PDSO - Program Stacking"
-                )
-                if stacking_param and stacking_param.HasValue:
-                    stacking_range = stacking_param.AsString() or "N/A"
+                stacking_range = data["parent_data_silo"].stacking or "N/A"
 
             # Build family name display (comma separated if multiple)
             family_names = sorted(data["families"].keys())

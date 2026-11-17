@@ -42,6 +42,7 @@ from rpw import DB
 from rpw.utils.dotnet import List
 
 from pdso.code import defaults
+from pdso.code.data import parameter_access
 
 from pdso.code.catalogue.layout_geometry import (
     extent_along,
@@ -77,7 +78,7 @@ BATHROOM_WORDS = ("bath", "wc", "toilet", "powder", "shower", "ensuite")
 KITCHEN_WORDS = ("kitchen",)
 
 PDSO_PREFIX = "PDSO - "
-DATA_SILO_PARAMETER = "PDSO - Program UID"
+DATA_SILO_PARAMETER = parameter_access.PROGRAM_UID
 
 DATA_SILO = "data silo"
 PROGRAM_VOLUME = "program volume"
@@ -127,7 +128,8 @@ def pdso_kinds(doc):
             return DATA_SILO
         if family_name.startswith(defaults.DATA_SILO_FAMILY_PREFIX):
             return DATA_SILO
-        parameter = instance.LookupParameter(DATA_SILO_PARAMETER)
+        # By GUID: a non-PDSO parameter named like it must not count
+        parameter = parameter_access.get_parameter(instance, DATA_SILO_PARAMETER)
         if parameter is not None and parameter.HasValue and parameter.AsString():
             return DATA_SILO
         return None

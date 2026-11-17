@@ -402,7 +402,7 @@ class PDSOLevelMappingService(object):
             list: ExtendedLevel objects where program volumes should exist
         """
         data_silo_uid = (
-            ext_data_silo.parameters["PDSO - Program UID"].value or "UNKNOWN"
+            ext_data_silo.uid or "UNKNOWN"
         )
 
         # 1. Get canonical level (always include regardless of mapping)
@@ -432,7 +432,7 @@ class PDSOLevelMappingService(object):
             )
 
         # 2. Parse stacking parameter
-        stacking_param = ext_data_silo.parameters["PDSO - Program Stacking"].value
+        stacking_param = ext_data_silo.stacking
         if stacking_param and stacking_param.strip():
             self.logger.debug(
                 "Data Silo '{}' stacking parameter: '{}'".format(
@@ -552,7 +552,7 @@ class PDSOLevelMappingService(object):
 
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
             data_silo_uid = (
-                ext_data_silo.parameters["PDSO - Program UID"].value or "UNKNOWN"
+                ext_data_silo.uid or "UNKNOWN"
             )
 
             # Enumerate required levels (stores errors on ext_data_silo)

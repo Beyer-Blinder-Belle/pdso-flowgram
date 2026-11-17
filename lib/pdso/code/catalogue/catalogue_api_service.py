@@ -14,6 +14,7 @@ Example Usage:
     place_layout(doc, matches["rooms"][0]["id"], entry["id"])
 """
 
+import base64
 import math
 import os
 
@@ -34,6 +35,7 @@ from pdso.code.catalogue.catalogue_store import (
     ENTRY_EXTENSION,
     IMAGE_EXTENSION,
     SKETCH_EXTENSION,
+    default_local_folder,
     entry_to_svg,
     load_catalogue,
     sample_folder,
@@ -113,8 +115,34 @@ def entry_summary(entry):
         "notes": entry.notes,
         "file": os.path.join(folder, entry.id + ENTRY_EXTENSION) if folder else None,
         "image": _entry_image(folder, entry.id),
-        "catalogue": (entry.features or {}).get("catalogue"),
+        "catalogue": _catalogue_group(entry, folder),
     }
+
+
+def _catalogue_group(entry, folder):
+    """The entry's catalogue group, with the folder that numbered it.
+
+    Each folder numbers its own shapes, and the catalogue reads several
+    folders, so a number means one shape only within its folder ("folder").
+    """
+    group = (entry.features or {}).get("catalogue")
+    if not group:
+        return None
+    group = dict(group)
+    group["folder"] = folder_label(folder)
+    return group
+
+
+def folder_label(folder):
+    """A short name for a catalogue folder: "sample", "local" or its own name."""
+    if not folder:
+        return None
+    path = os.path.normcase(os.path.abspath(folder))
+    if path == os.path.normcase(os.path.abspath(sample_folder())):
+        return "sample"
+    if path == os.path.normcase(os.path.abspath(default_local_folder())):
+        return "local"
+    return os.path.basename(os.path.normpath(folder)) or folder
 
 
 def _entry_image(folder, entry_id):
@@ -150,16 +178,27 @@ def list_layouts(program=None, project_type=None):
 
 
 def get_layout(entry_id):
-    """Get one layout completely: the JSON entry and its SVG plan sketch.
+    """Get one layout completely: the JSON entry, its SVG sketch and its image.
 
     Returns:
-        dict: {"summary", "entry" (the stored JSON), "svg"}
+        dict: {"summary", "entry" (the stored JSON), "svg", "image_base64"}.
+            image_base64 is the PNG plan image Harvest saved, or None. The
+            summary's "image" is that file's path on the Revit computer, which
+            a remote client can't open.
     """
     entry = get_entry(entry_id)
+    summary = entry_summary(entry)
+    image_base64 = None
+    if summary["image"]:
+        with open(summary["image"], "rb") as image_file:
+            image_base64 = base64.b64encode(image_file.read())
+        if not isinstance(image_base64, str):
+            image_base64 = image_base64.decode("ascii")
     return {
-        "summary": entry_summary(entry),
+        "summary": summary,
         "entry": entry.to_dict(),
         "svg": entry_to_svg(entry),
+        "image_base64": image_base64,
     }
 
 
@@ -903,13 +942,46 @@ def _box_for(known, hand, facing):
     return (min_x, min_y, max_x, max_y)
 
 
-def preview_layout_in_room(doc, reference, entry_id):
+def _current_items(element):
+    """The free-standing items in a Room or Area now, for a preview."""
+    current = []
+    for instance in _room_instances(element):
+        point = instance.Location.Point
+        angle = instance.Location.Rotation
+        box = _own_box(instance)
+        current.append(
+            {
+                "id": id_value(instance.Id),
+                "category": instance.Category.Name,
+                "family": instance.Symbol.Family.Name,
+                "type": layout_service.get_type_name(instance.Symbol),
+                "x": point.X,
+                "y": point.Y,
+                "rotation": angle,
+                "hand_flipped": bool(instance.HandFlipped),
+                "facing_flipped": bool(instance.FacingFlipped),
+                "mirrored": bool(instance.Mirrored),
+                "can_flip_hand": bool(instance.CanFlipHand),
+                "can_flip_facing": bool(instance.CanFlipFacing),
+                "footprint": _box_corners(box, point.X, point.Y, angle) if box else None,
+            }
+        )
+    current.sort(key=lambda item: (item["family"], item["type"], item["x"], item["y"]))
+    return current
+
+
+def preview_layout_in_room(doc, reference, entry_id, lookups=None):
     """Data for a picture of a layout in a Room or Area. The model does not change.
 
     The items of the layout get the positions and rotations that place_layout
     would use. If the layout does not fit, the orientation with the best
     outline match is used, and each item says if it is inside the Room.
     All points are in project coordinates.
+
+    lookups (dict, optional): pass the same dict to several calls on a model
+    that doesn't change between them (the Pull window's rows). The family
+    types, their plan boxes and each Room's current items are then collected
+    once, not once per call.
 
     Returns:
         dict: {"room": {..., "outline", "width", "depth", "frame_angle"},
@@ -945,8 +1017,16 @@ def preview_layout_in_room(doc, reference, entry_id):
         placement = Placement(turns, mirror, shift)
         orientation_from = "best outline match"
 
-    symbols = layout_service._symbol_lookup(doc)
-    boxes = _type_boxes(doc, set(item.symbol_key for item in entry.items))
+    lookups = {} if lookups is None else lookups
+    if "symbols" not in lookups:
+        lookups["symbols"] = layout_service._symbol_lookup(doc)
+    symbols = lookups["symbols"]
+    boxes = lookups.setdefault("boxes", {})
+    missing = set(item.symbol_key for item in entry.items) - set(boxes)
+    if missing:
+        found = _type_boxes(doc, missing)
+        for key in missing:
+            boxes[key] = found.get(key)
     items = []
     outside = 0
     not_loaded = 0
@@ -994,29 +1074,10 @@ def preview_layout_in_room(doc, reference, entry_id):
             }
         )
 
-    current = []
-    for instance in _room_instances(element):
-        point = instance.Location.Point
-        angle = instance.Location.Rotation
-        box = _own_box(instance)
-        current.append(
-            {
-                "id": id_value(instance.Id),
-                "category": instance.Category.Name,
-                "family": instance.Symbol.Family.Name,
-                "type": layout_service.get_type_name(instance.Symbol),
-                "x": point.X,
-                "y": point.Y,
-                "rotation": angle,
-                "hand_flipped": bool(instance.HandFlipped),
-                "facing_flipped": bool(instance.FacingFlipped),
-                "mirrored": bool(instance.Mirrored),
-                "can_flip_hand": bool(instance.CanFlipHand),
-                "can_flip_facing": bool(instance.CanFlipFacing),
-                "footprint": _box_corners(box, point.X, point.Y, angle) if box else None,
-            }
-        )
-    current.sort(key=lambda item: (item["family"], item["type"], item["x"], item["y"]))
+    current_by_room = lookups.setdefault("current", {})
+    current = current_by_room.get(id_value(element.Id))
+    if current is None:
+        current = current_by_room[id_value(element.Id)] = _current_items(element)
 
     room = _spatial_info(element)
     room.update(

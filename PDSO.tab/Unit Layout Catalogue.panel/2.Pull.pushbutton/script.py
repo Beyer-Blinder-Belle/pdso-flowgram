@@ -28,8 +28,12 @@ def pull_into_room(doc, room_id):
     recommended = catalogue.recommend_layouts(doc, room_id, limit=LAYOUTS)
     target = recommended["target"]
     rows = []
+    # The model doesn't change while the rows are built: collect it once
+    lookups = {}
     for rank, item in enumerate(recommended["recommendations"], start=1):
-        preview = catalogue.preview_layout_in_room(doc, target["id"], item["layout_id"])
+        preview = catalogue.preview_layout_in_room(
+            doc, target["id"], item["layout_id"], lookups=lookups
+        )
         layout = preview["layout"]
         fit, state = windows.fit_line(preview)
         rows.append(
@@ -39,7 +43,10 @@ def pull_into_room(doc, room_id):
                 "title": "{}.  {}{}".format(
                     rank,
                     item["name"],
-                    "   (catalogue {})".format(layout["catalogue"]["number"])
+                    # Numbers are per folder: name the folder too
+                    "   (catalogue {}, {})".format(
+                        layout["catalogue"]["number"], layout["catalogue"].get("folder")
+                    )
                     if layout.get("catalogue")
                     else "",
                 ),

@@ -112,6 +112,10 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S1.
   Steps: put a Data Silo and an Area on the wrong workset. Sync from the Sync Data window with the Data Silo workset option at "Warn (if configured)", then again at "Fix (if configured)".
   Expected: "Warn" logs that 1 Data Silo and 1 Area are not on their workset and moves nothing. "Fix" moves both.
+- [ ] **T-S17. A same-named project parameter** [K9]
+  Model: add a project parameter (not shared) with the name of a tracked parameter, for example "DU Bedroom Count", bound to Generic Models (if Revit allows it).
+  Steps: sync.
+  Expected: the sync reads and writes the shared parameter only. Results match a model without the project parameter.
 - [ ] **T-S14. The sync log comes back over the API** [A6]
   Steps: `run_sync` on a model with one warning (for example M-D5).
   Expected: the reply's `log` lists the warning.
@@ -205,6 +209,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Steps: Harvest All Units on a view where a crop fails (if one can be found).
   Expected: the rest of the images still export, and nothing is left open.
 
+- [ ] **T-C11. Pull is quick on a big catalogue** [K13]
+  Model: a shared catalogue folder with 100+ layouts.
+  Steps: Pull for a Room; then Harvest All Units on 20 units.
+  Expected: Pull opens within a few seconds; Harvest All Units doesn't slow down unit by unit.
+- [ ] **T-C12. Catalogue numbers name their folder** [K17]
+  Steps: Pull for a Room that gets layouts from the sample and the local folder.
+  Expected: each row says "catalogue N, sample" or "catalogue N, local".
+
 ### Setup and ribbon
 
 - [ ] **T-U1. Two windows** [U1]
@@ -261,6 +273,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-P7. SSH drop during a write** [A3, A4]
   Steps: with `PDSO_SSH_HOST` set, stop the tunnel during a long `run_sync`.
   Expected: the tool says the change may have been made and does not send it again. A timed-out write says Revit may still make it.
+- [ ] **T-P10. Layout image over the API** [K6]
+  Steps: from a computer other than the Revit one (SSH), `get_layout` for a harvested layout.
+  Expected: the reply shows the plan image.
+- [ ] **T-P11. Save and close** [K7]
+  Steps: `open_document_in_background`, then `save_document` and `close_background_document` for it. Then `close_project` with the active document's title.
+  Expected: the background document saves and closes. Closing the active one gives a 409.
+- [ ] **T-P12. pyRevit check** [K12]
+  Steps: `get_status`.
+  Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
   Expected: API 1.8 with no version warning.

@@ -97,7 +97,7 @@ class PDSOFamilyManagerService(object):
             # (rpw.Element) inside may be None. A Data Silo with no UID, or one
             # that correlation could not pair, has no wrapper and is skipped.
             ext_program_volume_family = ext_data_silo.related_program_volume_family
-            uid = ext_data_silo.parameters["PDSO - Program UID"].value
+            uid = ext_data_silo.uid
 
             desired_family_name = "{}{}".format(
                 ext_program_volume_family_collection.program_volume_family_name_prefix,

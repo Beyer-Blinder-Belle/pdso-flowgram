@@ -8,6 +8,7 @@ from rpw import db, DB
 from pyrevit import script
 
 # Custom Modules
+from pdso.code.data import parameter_access
 from pdso.code.data.shared_parameter_constants import LAST_SYNCED
 from pdso.code.data.extended_shared_parameter import ROLE_AREA
 from pdso.code.business.parameter_registry_service import get_registry
@@ -233,7 +234,7 @@ class ExtendedProgramVolumeInstance(object):
         # Update parameters on existing or newly created instance
         for param_name, new_value in self.params_to_update.items():
             try:
-                self.rpw_element.parameters[param_name].value = new_value
+                parameter_access.set_value(self.rpw_element, param_name, new_value)
             except Exception as e:
                 self.logger.error(
                     "Failed to update parameter '{}' on program volume instance {}: {}".format(
@@ -446,9 +447,9 @@ class ExtendedProgramVolumeInstance(object):
 
             try:
                 default_val = parameter.default_value()
-                self.rpw_element.parameters[
-                    parameter.parameter_name
-                ].value = default_val
+                parameter_access.set_value(
+                    self.rpw_element, parameter.parameter_name, default_val
+                )
             except Exception as e:
                 self.logger.error(
                     "Failed to clear parameter '{}' on area {}: {}".format(

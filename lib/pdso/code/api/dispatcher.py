@@ -47,6 +47,8 @@ class Context(object):
         self.request = request
         body = getattr(request, "data", None)
         self.body = body if isinstance(body, dict) else {}
+        # Some pyRevit builds (6.1) give the handler no query parameters
+        self.query_supported = hasattr(request, "query_params")
         self.query = dict(getattr(request, "query_params", None) or {})
         # The request id is not a filter or an argument of a handler
         self.query.pop(REQUEST_ID_PARAM, None)

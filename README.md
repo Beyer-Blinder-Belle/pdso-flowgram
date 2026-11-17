@@ -35,8 +35,8 @@ The built-in GUIDs are fixed in `lib/pdso/code/data/shared_parameter_constants.p
 
 ## Requirements
 
-- Autodesk Revit
-- [pyRevit](https://github.com/pyrevitlabs/pyRevit)
+- Autodesk Revit 2024 or later (the shipped Data Silo family is for Revit 2026; older versions get a placeholder family)
+- [pyRevit](https://github.com/pyrevitlabs/pyRevit). For the HTTP API, a build whose Routes pass query parameters to the handler: pyRevit 6.1 doesn't, and then list filters, document targeting and request ids are lost. `GET status` reports `pyrevit.query_parameters`, and the MCP server's `get_status` warns when it is false.
 - The [`extensible-storage-pyrevit`](https://github.com/khorn06/extensible-storage-pyrevit) library by Kris Horn. A copy is bundled in `lib/extensible_storage`, so no separate install is needed (see its `NOTICE.md`).
 
 ## Installation
@@ -126,7 +126,7 @@ Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.
 
 | Group | Routes |
 | --- | --- |
-| Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `POST document/close`, `POST document/save`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
+| Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
 | Setup | `GET setup`, `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
 | Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
@@ -134,7 +134,7 @@ Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.
 | Selection | `GET/POST selection` |
 | Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `GET/PUT/DELETE areas/<id>` |
 | Visualization | `POST views/export`, `POST views/color-areas`, `POST views/clear-colors`, `POST views/program-volumes` |
-| Open documents | `GET documents`, `POST documents/open`, `POST documents/save`, `POST documents/close` |
+| Open documents | `GET documents`, `POST documents/open` (in the background), `POST documents/save` (`document`, default the active one), `POST documents/close` (`document` or `title`; not the active one). `document/save` and `document/close` are older names of the same routes. |
 | Unit Layout Catalogue | `GET catalogue/layouts`, `GET/DELETE catalogue/layouts/<id>`, `POST catalogue/harvest`, `POST catalogue/recommend`, `POST catalogue/similar-rooms`, `GET catalogue/preview`, `GET catalogue/item`, `POST catalogue/place`, `GET/DELETE catalogue/room-items` |
 
 A request can name the open document that it works on with the field `document` (a title or a file path). Without it, a request works on the active document. `POST documents/open` opens a file but does not show it, so a person or a different agent can use the same Revit at the same time.

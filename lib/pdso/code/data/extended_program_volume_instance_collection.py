@@ -351,9 +351,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
                     element_id = ext_instance.Id
 
                     if ext_instance.parent_data_silo:
-                        parent_uid = ext_instance.parent_data_silo.parameters[
-                            "PDSO - Program UID"
-                        ].value
+                        parent_uid = ext_instance.parent_data_silo.uid
                         instance_uid = parent_uid or "UNKNOWN"
 
                     # Safely get level name using the Level property (which handles wrapping)

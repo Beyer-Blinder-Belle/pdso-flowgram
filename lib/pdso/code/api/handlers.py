@@ -91,6 +91,11 @@ def get_status(ctx):
     """Get the Revit version, the open document and the PDSO setup state."""
     status = {
         "revit": {"version": HOST_APP.version, "build": HOST_APP.build},
+        "pyrevit": {
+            "version": _pyrevit_version(),
+            # False: list filters, "document" and "_rid" in a query are lost
+            "query_parameters": ctx.query_supported,
+        },
         "api_version": API_VERSION,
         "document": None,
         "pdso_config_exists": False,
@@ -100,6 +105,15 @@ def get_status(ctx):
         if not ctx.doc.IsFamilyDocument:
             status["pdso_config_exists"] = config_service.config_exists(ctx.doc)
     return status
+
+
+def _pyrevit_version():
+    try:
+        from pyrevit.versionmgr import get_pyrevit_version
+
+        return get_pyrevit_version().get_formatted()
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -130,18 +144,45 @@ def open_document(ctx):
     return model_service.open_project(ctx.uiapp, ctx.arg("path", required=True))
 
 
+@route("POST", "documents/close")
 @route("POST", "document/close")
 def close_document(ctx):
-    """Close an open document that is not the active one. Body: title, save?"""
-    return model_service.close_project(
-        ctx.uiapp, ctx.arg("title", required=True), save=_flag(ctx.arg("save"))
-    )
+    """Close an open document that is not the active one.
+
+    Body: document (or title), save?. "document/close" is the older name.
+    """
+    title = ctx.arg("title")
+    if title:
+        doc = model_service.find_open_document(ctx.app, str(title))
+    elif ctx.arg("document"):
+        doc = ctx.require_doc()
+    else:
+        raise ApiError("Give the document to close ('document').")
+    return model_service.close_document(doc, ctx.doc, save=_flag(ctx.arg("save")))
 
 
+@route("POST", "documents/save")
 @route("POST", "document/save")
 def save_document(ctx):
-    """Save the active document."""
+    """Save a document to its file. Body: document? (default: the active one).
+
+    "document/save" is the older name.
+    """
     return model_service.save_project(ctx.require_doc())
+
+
+@route("GET", "documents")
+def list_documents(ctx):
+    """List the project documents that are open in Revit."""
+    return model_service.list_documents(ctx.app, ctx.doc)
+
+
+@route("POST", "documents/open")
+def open_document_in_background(ctx):
+    """Open a project file but do not show it. Body: path, detach?"""
+    return model_service.open_in_background(
+        ctx.uiapp, ctx.arg("path", required=True), detach=_flag(ctx.arg("detach"))
+    )
 
 
 @route("GET", "levels")

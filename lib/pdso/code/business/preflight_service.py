@@ -726,7 +726,7 @@ class PDSOPreflightService(object):
                 self.check_uid_pattern_status = uid_pattern_status(
                     config.uid_pattern,
                     [
-                        data_silo.parameters["PDSO - Program UID"].value
+                        data_silo.uid
                         for data_silo in data_silos
                     ],
                 )

@@ -186,6 +186,10 @@ def _open_tunnel() -> None:
 # Title of the open Revit document that the tools work on. None: the active document.
 _target_document: str | None = None
 
+# True once a reply came back without the request id this server sent as a
+# query parameter: that pyRevit drops query parameters (see get_status)
+_query_dropped = False
+
 # Requests that change nothing in the model. It is safe to send them again.
 _READ_ONLY_POSTS = (
     "views/export",
@@ -203,9 +207,12 @@ def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> An
         and not path.startswith("documents")
     ):
         query = dict(query, document=_target_document)
+    global _query_dropped
     read_only = method == "GET" or path in _READ_ONLY_POSTS
     for attempt in range(3):
         payload, request_id = _send(method, path, body, query, timeout)
+        if payload.get("rid") is None:
+            _query_dropped = True
         if payload.get("rid") in (None, request_id):
             break
         # pyRevit Routes gave this client the reply of a different request.
@@ -392,7 +399,7 @@ def _save_image(name: str, data: bytes) -> Path:
 
 @mcp.tool()
 def get_status() -> dict:
-    """Get the Revit version, the open document, its levels, and if the model has a PDSO configuration. Call this first. If the reply has "version_warning", the PDSO extension in Revit and this MCP server are not the same version: tell the user."""
+    """Get the Revit and pyRevit versions, the open document, its levels, and if the model has a PDSO configuration. Call this first. If the reply has "version_warning" (the PDSO extension in Revit and this MCP server are not the same version) or "pyrevit_warning" (this pyRevit drops query parameters), tell the user."""
     status = api("GET", "status")
     found = status.get("api_version")
     if found != EXPECTED_API_VERSION:
@@ -400,6 +407,12 @@ def get_status() -> dict:
             f"The PDSO extension in Revit has API version {found or 'unknown (older than 1.1)'}. "
             f"This MCP server expects {EXPECTED_API_VERSION}. Some tools can fail. "
             "Update the extension on the Revit computer and reload pyRevit, or update this server."
+        )
+    if _query_dropped or (status.get("pyrevit") or {}).get("query_parameters") is False:
+        status["pyrevit_warning"] = (
+            f"pyRevit {(status.get('pyrevit') or {}).get('version') or ''} drops the query parameters of "
+            "API requests. List filters, set_target_document for read tools, and the "
+            "request id check don't work. Update pyRevit on the Revit computer."
         )
     return status
 
@@ -431,19 +444,19 @@ def new_project(
 
 @mcp.tool()
 def close_project(title: str, save: bool = False) -> dict:
-    """Close an open Revit document that is not the active document.
+    """Close an open Revit document that is not the active document (the same as close_background_document).
 
     Args:
         title: Title of the document (the file name without ".rvt").
         save: Save the document before it closes.
     """
-    return api("POST", "document/close", {"title": title, "save": save})
+    return api("POST", "documents/close", {"title": title, "save": save})
 
 
 @mcp.tool()
 def save_project() -> dict:
-    """Save the active Revit document to its file."""
-    return api("POST", "document/save", {}, timeout=LONG_TIMEOUT)
+    """Save the active Revit document to its file. To save another open document, use save_document."""
+    return api("POST", "documents/save", {}, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
@@ -1367,7 +1380,7 @@ def save_document(document: str | None = None) -> dict:
 
 @mcp.tool()
 def close_background_document(document: str, save: bool = False) -> dict:
-    """Close an open document that is not the active document. Use close_project for the active document.
+    """Close an open document that is not the active document (the same as close_project). Revit can't close the active document through the API: open another project first.
 
     Args:
         document: Title of the document.
@@ -1397,13 +1410,18 @@ def list_layouts(program: str | None = None, project_type: str | None = None) ->
 
 
 @mcp.tool()
-def get_layout(layout_id: str) -> dict:
-    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame) and its SVG plan sketch.
+def get_layout(layout_id: str) -> list:
+    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame), its SVG plan sketch, and the plan image that Harvest saved, if there is one.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
     """
-    return api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+    result = api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+    image = result.pop("image_base64", None)
+    content: list = [json.dumps(result)]
+    if image:
+        content.append(Image(data=base64.b64decode(image), format="png"))
+    return content
 
 
 @mcp.tool()
