@@ -9,6 +9,7 @@ from pdso.code.business.revit_helpers import id_value, to_element_id
 from pdso.code.catalogue import catalogue_api_service as catalogue
 from pdso.code.catalogue import catalogue_windows as windows
 from pdso.code.catalogue import revit_layout_service as layout_service
+from pdso.code.catalogue.harvest_features import DATA_SILO, pdso_kinds
 from pdso.code.catalogue.layout_geometry import point_in_polygon
 
 
@@ -46,108 +47,90 @@ def _plan_point(element):
 
 
 def selected_target_id():
-    """Element id of the one selected Room or Area, or None.
+    """Area id of the one selected unit, or None.
 
-    A Room or an Area (a unit) can get a layout. It does not have to be in the
-    catalogue.
+    The selection is a unit's Area or its PDSO data silo. A unit can get a
+    layout; it does not have to be in the catalogue.
     """
+    doc = revit.doc
     found = []
+    kind = pdso_kinds(doc)
     for element_id in revit.uidoc.Selection.GetElementIds():
-        element = revit.doc.GetElement(element_id)
-        if isinstance(element, (DB.Architecture.Room, DB.Area)) and element.Area > 0:
+        element = doc.GetElement(element_id)
+        if isinstance(element, DB.Area) and element.Area > 0:
             found.append(id_value(element.Id))
+        elif element is not None and kind(element) == DATA_SILO:
+            try:
+                found.append(id_value(catalogue.get_unit(doc, id_value(element.Id)).Id))
+            except PDSOError:
+                continue
+    found = sorted(set(found))
     return found[0] if len(found) == 1 else None
 
 
-class RoomIndex(object):
-    """The Rooms of the model with their plan data, read one time."""
+class UnitIndex(object):
+    """The units of the model (Areas with a data silo) with their plan data, read one time."""
 
     def __init__(self):
-        self.rooms = catalogue.rooms_overview(revit.doc)
+        self.units = catalogue.units_overview(revit.doc)
         counts = {}
-        for room in self.rooms:
-            counts[room["number"]] = counts.get(room["number"], 0) + 1
-        # A number that two Rooms have cannot select a Room
-        self.by_number = dict(
-            (room["number"], room) for room in self.rooms if counts[room["number"]] == 1
+        for unit in self.units:
+            counts[unit["uid"]] = counts.get(unit["uid"], 0) + 1
+        # A UID that two units have (preflight warns about it) selects nothing
+        self.by_uid = dict(
+            (unit["uid"], unit)
+            for unit in self.units
+            if unit["uid"] and counts[unit["uid"]] == 1
         )
 
-    def number_of_selection(self):
-        """Number of the Room of the selection, or "".
+    def uid_of_selection(self):
+        """Program UID of the unit of the selection, or "".
 
-        The selection can be the Room itself, or objects that are in the Room
-        (furniture, a Room tag, a door). All of them must be in one Room.
+        The selection can be the unit's Area or data silo, or objects that are
+        in the unit (furniture, a door, a tag). All of them must be in one unit.
         """
-        numbers = []
+        uids = []
         for element_id in revit.uidoc.Selection.GetElementIds():
             element = revit.doc.GetElement(element_id)
             if element is None:
                 continue
-            number = None
-            if isinstance(element, DB.Architecture.Room):
-                number = element.Number
-            else:
-                tagged = getattr(element, "Room", None)
-                if isinstance(tagged, DB.Architecture.Room):
-                    number = tagged.Number
-            if number is None:
+            found = []
+            if isinstance(element, DB.Area):
+                found = [u["uid"] for u in self.units if u["id"] == id_value(element.Id)]
+            if not found:
                 located = _plan_point(element)
                 if located is None:
                     continue
                 x, y, level_id = located
                 found = [
-                    room["number"]
-                    for room in self.rooms
-                    if (level_id is None or room["level_id"] == level_id)
-                    and point_in_polygon((x, y), room["outline"])
+                    unit["uid"]
+                    for unit in self.units
+                    if (level_id is None or unit["level_id"] == level_id)
+                    and point_in_polygon((x, y), unit["outline"])
                 ]
-                if len(found) != 1:
-                    continue
-                number = found[0]
-            if number not in numbers:
-                numbers.append(number)
-        if len(numbers) == 1 and numbers[0] in self.by_number:
-            return numbers[0]
+            if len(found) != 1:
+                continue
+            if found[0] not in uids:
+                uids.append(found[0])
+        if len(uids) == 1 and uids[0] in self.by_uid:
+            return uids[0]
         return ""
 
-    def describe(self, number):
-        """Data of the Room with this number for a window, or None."""
-        room = self.by_number.get(number)
-        if room is None:
+    def describe(self, uid):
+        """Data of the unit with this Program UID for a window, or None."""
+        unit = self.by_uid.get(uid)
+        if unit is None:
             return None
-        described = dict(room)
-        described["items"] = room["item_count"]
+        described = dict(unit)
+        described["items"] = unit["item_count"]
         return described
 
-    def picker_rows(self):
-        rows = []
-        for room in self.rooms:
-            rows.append(
-                {
-                    "key": room["number"],
-                    "values": [
-                        room["number"],
-                        room["name"],
-                        str(room["level"]),
-                        "{:,.0f} SF".format(room["area"]),
-                        str(room["item_count"]),
-                    ],
-                    "thumb": (
-                        lambda width, height, r=room: windows.sketch_canvas(
-                            r["outline"], width, height, r["boxes"]
-                        )
-                    ),
-                    "data": room,
-                }
-            )
-        return rows
 
-
-def place(room, layout_id, clear_first):
+def place(unit, layout_id, clear_first):
     """Place a layout, select the placed elements, show the result."""
     doc = revit.doc
     try:
-        result = catalogue.place_layout(doc, room["id"], layout_id, clear_first)
+        result = catalogue.place_layout(doc, unit["id"], layout_id, clear_first)
     except PDSOError as error:
         windows.show_message("The layout was not placed", [(str(error), "bad")], owner())
         return None
@@ -159,14 +142,14 @@ def place(room, layout_id, clear_first):
     missing = sum(result["missing"].values())
     lines = [
         (
-            "{} items placed in Room {} ({}). They are selected.".format(
-                len(result["placed"]), room["number"], result["placement"]["description"]
+            "{} items placed in Area {} ({}). They are selected.".format(
+                len(result["placed"]), unit["number"], result["placement"]["description"]
             ),
             "good",
         )
     ]
     if clear_first:
-        lines.append(("{} items that were in the Room were deleted first.".format(deleted), None))
+        lines.append(("{} items that were in the unit were deleted first.".format(deleted), None))
     if result.get("loaded_families"):
         lines.append(
             (

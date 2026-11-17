@@ -7,7 +7,7 @@ the entry as <id>.png and shown where a layout is chosen for placing.
 
 How it is made: the active plan view is duplicated without its detailing
 (tags and dimensions are not copied), its view template is taken off, every
-annotation category, the Area and Room lines and the PDSO data silos are
+annotation category, the Area lines (and any Room lines) and the PDSO data silos are
 hidden, and the view is cropped to each unit in turn and exported. All of
 this happens inside a transaction group that is rolled back at the end, so
 the model is left exactly as it was.

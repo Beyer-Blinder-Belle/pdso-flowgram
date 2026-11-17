@@ -65,7 +65,7 @@ A **PDSO** tab appears in the Revit ribbon with a **Program Data Silo Tools** pa
 | **Sync Data** | Runs preflight checks, then harvests Area SF into Data Silos and builds or updates Program Volumes. |
 | **Audit Report** | Prints a detailed report of configuration, correlation, level mapping and Area boundary problems, with clickable element IDs. |
 
-The **Unit Layout Catalogue** panel next to it is a separate tool for reusing room furniture layouts. See the [catalogue README](../catalogue/README.md).
+The **Unit Layout Catalogue** panel next to it is a separate tool for reusing furniture layouts in units (Areas with a Data Silo). See the [catalogue README](../catalogue/README.md).
 
 ## Setting up a project
 

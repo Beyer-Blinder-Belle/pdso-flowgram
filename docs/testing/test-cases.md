@@ -36,12 +36,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **M-P2.** A Program Volume unpinned by hand among pinned ones [B5].
 - [ ] **M-P3.** An orphaned Program Volume: its Data Silo was deleted [F5].
 
-### Rooms and furniture (Unit Layout Catalogue)
-- [ ] **M-R1.** A furnished Room that also holds a Data Silo and its Program Volume [B1].
-- [ ] **M-R2.** A Room with Generic Model furniture, such as a plant or a planter [B2].
+### Units and furniture (Unit Layout Catalogue)
+A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside.
+- [ ] **M-R1.** A furnished unit whose Data Silo has a Program Volume [B1].
+- [ ] **M-R2.** A unit with Generic Model furniture, such as a plant or a planter [B2].
 - [ ] **M-R3.** A catalogue layout harvested in a *different* project, using families that this model doesn't have loaded [R3].
 - [ ] **M-R4.** An unfurnished unit, harvested so the catalogue has an entry with no items [C2].
 - [ ] **M-R5.** Two units that would get the same layout id in one Harvest All Units run (same program, name and second) [R4].
+- [ ] **M-R6.** A unit whose Data Silo has `PDSO - DU Bedroom Count`, `PDSO - Bathroom Count` and `PDSO - Kitchen Count` set. Beyond its walls: a GSF Area named "Corridor" on one side, another unit on a second side, an Exterior wall on a third, and a wall with no Area beyond it (a shaft) on the fourth.
+- [ ] **M-R7.** A Revit Room drawn over one unit, with a Room number.
 
 ### Model settings
 - [ ] **M-S1.** A workshared copy of the model with the worksets named in Project Config [K14, S4, S9].
@@ -172,6 +175,10 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-A9. Bad numbers** [A8]
   Steps: call `move_area` with `dx="abc"`, and `scale_area` with factor 0.
   Expected: a 400 error with a plain message, not a 500.
+- [ ] **T-A13. Derive NSF Areas from GSF Areas**
+  Model: M-A1 to M-A4 in the GSF scheme, on one level.
+  Steps: `derive_areas("PDSO - NSF", 0.25, from_scheme="PDSO - GSF", level=<that level>)`. Then `derive_areas("PDSO - ZFA", 0, area_ids=[<M-A1>])`. Then `derive_areas` with an offset larger than half the width of M-A1.
+  Expected: one NSF Area for each GSF Area, with its name and number, its outline 0.25 ft in. The arc stays an arc, and the hole grows by 0.25 ft. The ZFA Area has the GSF outline. With the large offset, that Area is listed under `errors` and the others are made.
 
 ### Unit Layout Catalogue
 
@@ -181,15 +188,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the Data Silo and the Program Volume stay, and one Undo brings the old furniture back.
 - [ ] **T-C2. Clear and place, families missing** [R3]
   Model: M-R3.
-  Steps: Pull that layout into a furnished room with "Delete the furniture" on.
-  Expected: an error says no item could be placed and names the missing families. The room's furniture is still there.
+  Steps: Pull that layout into a furnished unit with "Delete the furniture" on.
+  Expected: an error says no item could be placed and names the missing families. The unit's furniture is still there.
 - [ ] **T-C3. Generic Model furniture is harvested** [B2]
   Model: M-R2.
   Steps: Harvest Layout, and also Harvest All Units.
   Expected: the plant is in the layout. The Data Silo and Program Volume are not, and they are hidden in the plan image.
 - [ ] **T-C4. A typed Unit Layout Type is kept** [B8]
   Model: M-D6.
-  Steps: Pull a layout into its room.
+  Steps: Pull a layout into its unit.
   Expected: "2BR - Type A" stays, and the result warns that it was kept. With the field empty, the layout id is written. Pull again: the old id is replaced.
 - [ ] **T-C5. Layout ids are not program names** [B8, R4]
   Model: M-R5, then T-C4.
@@ -197,7 +204,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the suggested program names are not layout ids.
 - [ ] **T-C6. Empty layouts** [C2]
   Model: M-R4.
-  Steps: Pull into a room of a similar size.
+  Steps: Pull into a unit of a similar size.
   Expected: the empty layout is not offered; `recommend_layouts` lists it under "rejected" with "the layout has no items to place". [Fixed: C2]
 - [ ] **T-C8. Re-harvest replaces only the same unit** [C3]
   Steps: run Harvest All Units twice in one saved model. Then run it once in an unsaved model ("Project1"), and once in another unsaved model with the same unit ids.
@@ -207,7 +214,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Steps: two people run Harvest All Units into the shared folder at the same time.
   Expected: one waits, or gets "Someone else is saving to the catalogue folder". No two shapes share a number, no JSON is half written, and no `.catalogue.lock` is left behind. A folder you can't write to gives a message at once, without freezing Revit.
 - [ ] **T-C10. Two harvests in one second** [C5]
-  Steps: call `harvest_layout` twice quickly on the same Room with the same name.
+  Steps: call `harvest_layout` twice quickly on the same unit (its Program UID) with the same name.
   Expected: two layouts; the second id ends in `-2`.
 - [ ] **T-C7. Plan image failure** [C1]
   Steps: Harvest All Units on a view where a crop fails (if one can be found).
@@ -215,14 +222,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 
 - [ ] **T-C11. Pull is quick on a big catalogue** [K13]
   Model: a shared catalogue folder with 100+ layouts.
-  Steps: Pull for a Room; then Harvest All Units on 20 units.
+  Steps: Pull for a unit; then Harvest All Units on 20 units.
   Expected: Pull opens within a few seconds; Harvest All Units doesn't slow down unit by unit.
 - [ ] **T-C12. Catalogue numbers name their folder** [K17]
-  Steps: Pull for a Room that gets layouts from the sample and the local folder.
+  Steps: Pull for a unit that gets layouts from the sample and the local folder.
   Expected: each row says "catalogue N, sample" or "catalogue N, local".
 
 - [ ] **T-C13. Place into a model without the families** [F1]
-  Steps: harvest a unit in model A. In model B, which doesn't have the furniture families, Pull that layout into an Area. Repeat with A closed.
+  Steps: harvest a unit in model A. In model B, which doesn't have the furniture families, Pull that layout into a unit. Repeat with A closed.
   Expected: the families are loaded and the items placed; the result lists "Families loaded into this model". With A closed, they still load from the catalogue's families/ folder. The preview said "N families will be loaded".
 - [ ] **T-C14. Furniture stays against its wall** [F1]
   Steps: Pull a layout into a target that is deeper than the source (a wall jog).
@@ -233,6 +240,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-C16. One harvest pipeline** [K2]
   Steps: harvest the same unit with Harvest Layout, then with Harvest All Units, then with the MCP's `harvest_units`.
   Expected: the same name style, catalogue number and family files each time. Harvest Layout adds a new entry; the other two replace the earlier entry of that unit.
+- [ ] **T-C17. A unit by Program UID, Area or Data Silo, never a Room**
+  Model: M-R7.
+  Steps: `list_unit_items` with the unit's Program UID, then its Area id, then its Data Silo id. Then with the Room's id, and with the Room number. Then Harvest Layout with the Program UID typed in, and Pull from Catalogue with the Area selected, then the Data Silo, then a piece of furniture in the unit.
+  Expected: the first three name the same unit. The Room id is refused ("is a Revit Room"), and the Room number is refused as no Area, Data Silo or UID. Both buttons find the unit each way.
+- [ ] **T-C18. Edge kinds and counts come from Areas and the Data Silo**
+  Model: M-R6.
+  Steps: Harvest Layout on that unit with no program given. Open its JSON.
+  Expected: `features.edges` has `corridor` towards the corridor Area, `party` towards the other unit, `exterior` at the Exterior wall and `no_area` at the shaft. `features.unit` has the Data Silo's bedroom, bathroom and kitchen counts, and no `room_count`. There is no `features.rooms`. `source` has `area_name` and `area_number`. The program is the Data Silo's Unit Layout Type, Program Display Name or Program Type, else "<n> Bedroom" from its bedroom count.
 
 ### Setup and ribbon
 
@@ -302,6 +317,9 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-P2. API version**
   Steps: `get_status`.
   Expected: API 1.9 with no version warning.
+- [ ] **T-P13. Older catalogue names still work**
+  Steps: `POST catalogue/similar-rooms` with `layout_id`, and `GET catalogue/room-items` with `room=<Program UID>`.
+  Expected: both answer as `catalogue/similar-units` and `catalogue/unit-items` do. The replies carry the new keys (`unit`, `units`, `units_checked`) and the old ones (`room`, `rooms`, `rooms_checked`).
 - [ ] **T-P8. Colored 3D view** [K1]
   Model: one where `show_program_volumes` ran before (it has "PDSO - Program Volumes").
   Steps: `show_program_volumes`.

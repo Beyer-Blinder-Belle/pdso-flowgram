@@ -1,10 +1,10 @@
 title: "Harvest\nLayout"
 
 tooltip: >-
-  Save the furniture and equipment layout of a Room into the Unit Layout
-  Catalogue, so it can be recommended and placed in other Rooms and projects.
-  Select a Room first, or type its number. Shift-click to choose the catalogue
-  folder.
+  Save the furniture and equipment layout of a unit (an Area with a PDSO data
+  silo inside) into the Unit Layout Catalogue, so it can be recommended and
+  placed in other units and projects. Select the unit first, or type its
+  Program UID. Shift-click to choose the catalogue folder.
 
 author: BBB DCT + hackathon team
 

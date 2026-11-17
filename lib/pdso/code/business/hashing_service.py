@@ -81,7 +81,7 @@ class PDSOHashingService(object):
         """Get the hash string for a SpatialElement based on tessellated boundary curves.
 
         Args:
-            wrapped_spatial_element: rpw.Element wrapped spatial element (Area, Room, etc.)
+            wrapped_spatial_element: rpw.Element wrapped Area
 
         Returns:
             str: SHA256 hash of the area tessellation signature
@@ -93,11 +93,11 @@ class PDSOHashingService(object):
 
     def area_tessellation_signature(self, wrapped_spatial_element):
         """
-        Build a signature for a SpatialElement (Area, Room, etc)
+        Build a signature for an Area
         based purely on tessellated boundary curves.
 
         Args:
-            wrapped_spatial_element: Wrapped spatial element (Area, Room, etc.)
+            wrapped_spatial_element: Wrapped Area
             return_full_signature (bool): If True, return full signature dict. If False, return hash hex string (default).
 
         Returns:

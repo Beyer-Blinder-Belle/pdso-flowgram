@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Recommend step: rank catalogue entries for a target room.
+"""Recommend step: rank catalogue entries for a target unit.
 
-No Revit imports. A target is described the same way an entry is: its room
+No Revit imports. A target is described the same way an entry is: its unit
 frame and its outline in that frame. For each entry, all eight orientations
 are tried and the best one that fits is kept.
 
@@ -10,7 +10,7 @@ target rectangle (within a tolerance) and every item lands inside the target
 outline (within the same tolerance, because a family against a wall has its
 insertion point on the boundary). The layout is centred in the target
 rectangle. When more than one orientation fits equally snugly, the one whose
-room outline covers the target outline best is kept.
+unit outline covers the target outline best is kept.
 
 Score (0-1):
     60%  area match     1 - |target - entry| / entry, floored at 0
@@ -27,7 +27,7 @@ from pdso.code.catalogue.layout_geometry import (
     point_in_polygon,
 )
 
-# How much larger than the target rectangle a layout may be (ft). Room
+# How much larger than the target rectangle a layout may be (ft). Unit
 # boundaries are measured to finish faces or wall centrelines, so a few inches
 # of difference between source and target is normal.
 FIT_TOLERANCE = 0.5
@@ -40,7 +40,7 @@ SNUG_WEIGHT = 0.4
 
 
 class Placement(object):
-    """Where an entry's items go in the target room frame.
+    """Where an entry's items go in the target unit frame.
 
     Attributes:
         turns (int): Quarter turns, 0-3.
@@ -61,7 +61,7 @@ class Placement(object):
 
 
 class Recommendation(object):
-    """One ranked entry for a target room."""
+    """One ranked entry for a target unit."""
 
     def __init__(self, entry, placement, score, area_score, snug_score, program_match):
         self.entry = entry
@@ -88,7 +88,7 @@ class Recommendation(object):
 
 
 def oriented_items(entry, placement):
-    """Item points in the target room frame for a placement.
+    """Item points in the target unit frame for a placement.
 
     Returns:
         list: (item, (x, y)) pairs.
@@ -103,7 +103,7 @@ def oriented_items(entry, placement):
 
 
 def oriented_outline(entry, placement):
-    """The entry's room outline in the target room frame for a placement."""
+    """The entry's unit outline in the target unit frame for a placement."""
     outline = []
     for point in entry.boundary:
         x, y = orient_point(
@@ -197,13 +197,13 @@ def refine_placement(entry, placement, target_width, target_depth, target_outlin
 
 
 def recommend(entries, target_width, target_depth, target_area, target_outline, program):
-    """Rank entries for a target room.
+    """Rank entries for a target unit.
 
     Args:
         entries (list[LayoutEntry]): The catalogue.
-        target_width, target_depth (float): Target room frame size (ft).
-        target_area (float): Target room area (ft2).
-        target_outline (list): Target outline in its room frame, [(x, y), ...].
+        target_width, target_depth (float): Target unit frame size (ft).
+        target_area (float): Target unit area (ft2).
+        target_outline (list): Target outline in its unit frame, [(x, y), ...].
         program (str): Target program; entries for it are listed first.
     Returns:
         tuple: (recommendations, rejected). rejected is a list of

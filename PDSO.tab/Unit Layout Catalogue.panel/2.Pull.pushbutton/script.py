@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Pull from Catalogue: put a catalogue layout into the selected Room.
+"""Pull from Catalogue: put a catalogue layout into the selected unit.
 
-The button needs a Room to compare the layouts with: select a Room, an Area,
-or objects that are in one Room. It is not available with no selection. The
-window shows the Room as it is now and the layouts that fit it, ranked. The
-Room does not have to be harvested.
+A unit is an Area with a PDSO data silo inside. The button needs a unit to
+compare the layouts with: select its Area or data silo, or objects that are
+in one unit. It is not available with no selection. The window shows the unit
+as it is now and the layouts that fit it, ranked. The unit does not have to
+be harvested.
 """
 
 import sys
@@ -23,15 +24,15 @@ from pdso.code.catalogue import catalogue_windows as windows  # noqa: E402
 LAYOUTS = 5
 
 
-def pull_into_room(doc, room_id):
-    """Show the layouts that fit a Room, ranked, and place the chosen one."""
-    recommended = catalogue.recommend_layouts(doc, room_id, limit=LAYOUTS)
+def pull_into_unit(doc, unit_id):
+    """Show the layouts that fit a unit, ranked, and place the chosen one."""
+    recommended = catalogue.recommend_layouts(doc, unit_id, limit=LAYOUTS)
     target = recommended["target"]
     rows = []
     # The model doesn't change while the rows are built: collect it once
     lookups = {}
     for rank, item in enumerate(recommended["recommendations"], start=1):
-        preview = catalogue.preview_layout_in_room(
+        preview = catalogue.preview_layout_in_unit(
             doc, target["id"], item["layout_id"], lookups=lookups
         )
         layout = preview["layout"]
@@ -76,10 +77,10 @@ def pull_into_room(doc, room_id):
         )
     if not rows:
         windows.show_message(
-            "No layout fits this Room",
+            "No layout fits this unit",
             [
                 (
-                    "{} layouts were checked. None fits Room {} ({:.1f} x {:.1f} ft).".format(
+                    "{} layouts were checked. None fits Area {} ({:.1f} x {:.1f} ft).".format(
                         len(recommended["rejected"]), target["number"], target["width"], target["depth"]
                     ),
                     "bad",
@@ -95,29 +96,29 @@ def pull_into_room(doc, room_id):
             len(rows), len(recommended["rejected"])
         ),
         [
-            ("Room", "{}: {}".format(target["number"], target["name"])),
+            ("Unit", "Area {}: {}".format(target["number"], target["name"])),
             ("Level", str(target["level"])),
             ("Size", "{:,.0f} SF, {:.1f} x {:.1f} ft".format(target["area"], target["width"], target["depth"])),
-            ("Items in the Room now", str(current)),
+            ("Items in the unit now", str(current)),
         ],
         rows,
-        "Pull this layout into the Room",
-        "Delete the furniture that is in the Room now" if current else None,
+        "Pull this layout into the unit",
+        "Delete the furniture that is in the unit now" if current else None,
         {
             "preview": dict(
                 rows[0]["preview"],
                 items=[],
-                layout_outline=rows[0]["preview"]["room"]["outline"],
+                layout_outline=rows[0]["preview"]["unit"]["outline"],
             ),
-            "room": True,
-            "tag": "ROOM NOW",
-            "title": "Room {}: {}".format(target["number"], target["name"]),
+            "unit": True,
+            "tag": "UNIT NOW",
+            "title": "Area {}: {}".format(target["number"], target["name"]),
             "lines": [
                 "Level {}".format(target["level"]),
                 "Area: {:,.0f} SF   ({:.1f} x {:.1f} ft)".format(
                     target["area"], target["width"], target["depth"]
                 ),
-                "{} items in the Room now (grey). Same plan scale as the layouts below.".format(
+                "{} items in the unit now (grey). Same plan scale as the layouts below.".format(
                     current
                 ),
             ],
@@ -132,21 +133,24 @@ def pull_into_room(doc, room_id):
 
 if __name__ == "__main__":
     document = revit.doc
-    # A selected Room or Area is the target. It does not have to be harvested:
-    # the target only receives a layout.
+    # A selected unit (its Area or data silo) is the target. It does not have
+    # to be harvested: the target only receives a layout.
     target_id = commands.selected_target_id()
     if target_id is None:
-        index = commands.RoomIndex()
-        number = index.number_of_selection()
-        if number:
-            target_id = index.by_number[number]["id"]
+        index = commands.UnitIndex()
+        uid = index.uid_of_selection()
+        if uid:
+            target_id = index.by_uid[uid]["id"]
 
     if target_id is None:
         windows.show_message(
-            "Select a Room first",
+            "Select a unit first",
             [
-                ("The selection is not in one Room.", "bad"),
-                ("Select a Room, an Area, or objects that are in one Room.", None),
+                ("The selection is not in one unit.", "bad"),
+                (
+                    "Select a unit's Area or data silo, or objects that are in one unit.",
+                    None,
+                ),
             ],
             commands.owner(),
         )
@@ -157,4 +161,4 @@ if __name__ == "__main__":
             commands.owner(),
         )
     else:
-        pull_into_room(document, target_id)
+        pull_into_unit(document, target_id)

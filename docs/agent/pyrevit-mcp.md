@@ -32,7 +32,7 @@ Verified 2026-11-14 on Windows 11 x64, Revit 2026, uv 0.13.8: the server registe
 | Learn the data shape | `get_program_fields` (field names such as `uid`), `list_parameters` |
 | Read the program | `list_programs`, `summarize_programs`, `describe_program`, `list_areas` |
 | See it | `render_plan` (diagram from model data, can preview draft outlines), `export_view_image`, `color_areas` |
-| Change it (only what the user asked) | `update_program(s)`, `create_program(s)`, `draft_area`, `adjust_area` |
+| Change it (only what the user asked) | `update_program(s)`, `create_program(s)`, `draft_area`, `derive_areas`, `adjust_area` |
 | Push the data through | `run_preflight` → fix ✗ items → `run_sync` → `get_audit_report` |
 | Show the user | `select_programs`, `select_elements`, `show_view`, `show_program_volumes` |
 
@@ -41,24 +41,26 @@ Verified 2026-11-14 on Windows 11 x64, Revit 2026, uv 0.13.8: the server registe
 - **Agree the setup scope with the user before `setup_model`**, unless they already said what they want. Use `get_setup_status` to tell them, in plain words, what a setup adds and what the model has. Describe the full package (configuration, the 20 built-in parameters, area schemes, the Data Silo family, view templates, area plans, a 3D view, schedules) and the minimum for programs and sync (`parts=["area_schemes", "families"]`, `parameters="required"`). Don't push the full package: views and schedules are conveniences, and some users don't want them in a working model. Parts can be added later.
 
 - **Never pass `force=true` to `run_sync`** unless the user explicitly says to skip failed preflight checks. Fix the ✗ items instead, or report them.
-- **Confirm before destructive calls**: `delete_program`, `delete_area`, `delete_parameter` (especially with `purge=true`, which deletes values), `clear_room_items`, `place_layout` with `clear_first=true`, `delete_layout` (deletes the catalogue file), `close_project`/`close_background_document` without saving, and `new_project`/`open_project` when the current model has unsaved changes.
+- **Confirm before destructive calls**: `delete_program`, `delete_area`, `delete_parameter` (especially with `purge=true`, which deletes values), `clear_unit_items`, `place_layout` with `clear_first=true`, `delete_layout` (deletes the catalogue file), `close_project`/`close_background_document` without saving, and `new_project`/`open_project` when the current model has unsaved changes.
 - `update_config` changes per-project setup: area scheme mappings, the family prefix and level mapping. Wrong values orphan Program Volumes. Only change config when the user asks, and say what it affects.
 - Use field names from `get_program_fields`, not Revit parameter names, in program calls.
 - Units are decimal feet and square feet everywhere.
 - The HTTP API has no authentication. Don't suggest exposing port 48884, and don't enable the dev flag (`/pdso/dev/exec`) on a non-dev machine.
-- `create_parameter` adds the `PDSO - ` prefix to a custom name, as the Parameter Manager does: `Room Finish` becomes `PDSO - Room Finish`. The field name (`room_finish`) is the same either way. A name the model already has a shared parameter for is kept as given, so its values are reused.
+- `create_parameter` adds the `PDSO - ` prefix to a custom name, as the Parameter Manager does: `Tenant Type` becomes `PDSO - Tenant Type`. The field name (`tenant_type`) is the same either way. A name the model already has a shared parameter for is kept as given, so its values are reused.
 - The program reply's `areas` (from `containing_areas`) is a dict keyed by area scheme name, `{"PDSO - GSF": {"id", "number", "name", "area"} or null, ...}`, not a list.
 
-### Drawing Areas from rooms
+### Drawing Areas
 
-There are two ways, and they give different outlines:
+PDSO works with Areas and area schemes only. It does not read Revit Rooms. Draw the Areas of the scheme that feeds `PDSO - GSF` first, then derive the other schemes from them.
 
-| Outline | How | Suits |
-| --- | --- | --- |
-| The room's inside faces | `draft_area_from_room` traces the Room boundary as Revit computes it (wall finish faces by default). `inset` can only move it inwards. | NSF |
-| Wall centerlines | Compute the outline yourself, for example by offsetting the room outline outwards by half of each wall's thickness, or by reading the room boundary with `SpatialElementBoundaryLocation.Center` in a Path B query. Check it with `render_plan` and `draft_outlines`, then create it with `draft_area` and the points. | GSF |
+| Areas | How |
+| --- | --- |
+| GSF | Work out each outline from the user's intent. Preview it with `render_plan` and `draft_outlines`, then create it with `draft_area` and the points. |
+| Other schemes (NSF, ZFA) | `derive_areas(scheme, offset, from_scheme="PDSO - GSF", level="L2")` for every GSF Area on a level, or `area_ids=[...]` for some of them. Each new Area gets its source's outline moved in by `offset` feet, and its source's name and number. |
 
-So don't use `draft_area_from_room` for GSF Areas that should run to wall centerlines: the GSF comes out too small.
+GSF usually runs to wall centerlines or the exterior face. NSF is measured to the inside faces of the walls. The offset covers that difference: choose one for each scheme, for example 0.25 ft for NSF, and 0 to copy the outline unchanged. The offset uses Revit's `CurveLoop.CreateViaOffset`, so arcs stay arcs and holes in an Area grow by the offset. An Area that fails doesn't stop the others; the reply lists it under `errors`.
+
+To trace GSF outlines from the walls in the model, read the wall geometry in a Path B query (for example each wall's `LocationCurve` and `Width`), then pass the points to `draft_area`.
 
 ## Path B: the pyRevit agent runtime (low level)
 

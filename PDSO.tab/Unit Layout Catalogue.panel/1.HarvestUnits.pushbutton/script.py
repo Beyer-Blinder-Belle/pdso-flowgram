@@ -2,8 +2,8 @@
 """Harvest All Units: save the layout of every unit in the active area plan.
 
 A unit is an Area with a PDSO data silo inside it. Nothing is picked: open the
-area plan and run. To harvest other elements (a Room, an Area with no silo),
-select them first; a selection of Rooms or Areas is harvested as it is.
+area plan and run. To harvest other Areas (one with no silo, for example),
+select them first; a selection of Areas is harvested as it is.
 
 Running again replaces the earlier harvest of the same unit. The harvest
 itself is catalogue_api_service.harvest_units, which the API uses too; this
@@ -24,9 +24,9 @@ from pdso.code.catalogue import catalogue_api_service as catalogue  # noqa: E402
 from pdso.code.catalogue.catalogue_windows import PROJECT_TYPES  # noqa: E402
 from pdso.code.catalogue.harvest_image import thumbnail_data_uri  # noqa: E402
 from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
-    get_room_name,
+    get_name,
     is_area_plan,
-    is_spatial_element,
+    is_unit_area,
 )
 
 output = script.get_output()
@@ -54,7 +54,7 @@ def html_table(columns, table_rows):
 
 
 def units_to_harvest():
-    """Selected Rooms/Areas if there are any, else the active area plan's units.
+    """Selected Areas if there are any, else the active area plan's units.
 
     Returns:
         tuple: (elements, areas without a silo, where they came from).
@@ -63,7 +63,7 @@ def units_to_harvest():
         revit.doc.GetElement(element_id)
         for element_id in revit.uidoc.Selection.GetElementIds()
     ]
-    selected = [element for element in selected if is_spatial_element(element)]
+    selected = [element for element in selected if is_unit_area(element)]
     if selected:
         return selected, [], "the selection"
 
@@ -72,7 +72,7 @@ def units_to_harvest():
         forms.alert(
             "Open an area plan and run Harvest All Units again: every Area in it with a "
             "PDSO data silo inside is harvested.\n\n"
-            "Or select the Rooms or Areas to harvest first.",
+            "Or select the Areas to harvest first.",
             exitscript=True,
         )
     areas, without = catalogue.units_in_view(revit.doc, view)
@@ -97,7 +97,7 @@ def print_details(entry, result):
             ["Exterior wall", "{:.1f} ft".format(lengths.get("exterior", 0.0))],
             ["Corridor wall", "{:.1f} ft".format(lengths.get("corridor", 0.0))],
             ["Party wall (a neighbour beyond)", "{:.1f} ft".format(lengths.get("party", 0.0))],
-            ["Wall with no room beyond", "{:.1f} ft".format(lengths.get("unroomed", 0.0))],
+            ["Wall with no Area beyond", "{:.1f} ft".format(lengths.get("no_area", 0.0))],
             ["Glazing (windows + curtain wall)", "{:.1f} ft".format(features.get("glazed_length", 0.0))],
             ["Doors in the unit's boundary", len([o for o in openings if o["kind"] == "door"])],
             ["Windows", len([o for o in openings if o["kind"] == "window"])],
@@ -109,8 +109,7 @@ def print_details(entry, result):
 
     output.print_table(
         [
-            ["Rooms", unit.get("room_count", 0)],
-            ["Bedrooms / bathrooms / kitchens (by room name)", "{} / {} / {}".format(
+            ["Bedrooms / bathrooms / kitchens (from the data silo)", "{} / {} / {}".format(
                 unit.get("bedrooms", 0), unit.get("bathrooms", 0), unit.get("kitchens", 0)
             )],
             ["Partitions", len(features.get("internal_walls", []))],
@@ -122,13 +121,6 @@ def print_details(entry, result):
         columns=["Inside the unit", "Value"],
         title="Inside the unit",
     )
-
-    if features.get("rooms"):
-        output.print_table(
-            [[r["name"], "{:.0f} sf".format(r["area"])] for r in features["rooms"]],
-            columns=["Room", "Area"],
-            title="Rooms",
-        )
 
     if unit.get("pdso"):
         output.print_table(
@@ -161,7 +153,7 @@ if __name__ == "__main__":
     if not elements:
         forms.alert(
             "No Area with a PDSO data silo inside was found in {}.\n\n"
-            "{} placed Area(s) have no silo. Select Areas or Rooms first to "
+            "{} placed Area(s) have no silo. Select Areas first to "
             "harvest them anyway.".format(origin, len(without_silo)),
             exitscript=True,
         )
@@ -213,7 +205,11 @@ if __name__ == "__main__":
                 "{:.0f}".format(lengths.get("corridor", 0.0)),
                 "{:.0f}".format(lengths.get("party", 0.0)),
                 "yes" if features.get("entry") else "no",
-                details.get("room_count", 0),
+                "{} / {} / {}".format(
+                    details.get("bedrooms", 0),
+                    details.get("bathrooms", 0),
+                    details.get("kitchens", 0),
+                ),
                 len(features.get("internal_walls", [])),
                 len(entry.items),
                 len(features.get("nested_items", [])),
@@ -237,7 +233,7 @@ if __name__ == "__main__":
             html_table(
                 [
                     "Plan", "Unit", "Catalogue", "Name", "Shape", "Size (ft)", "Exterior (ft)",
-                    "Corridor (ft)", "Party (ft)", "Entry", "Rooms", "Partitions", "Families",
+                    "Corridor (ft)", "Party (ft)", "Entry", "Bed / bath / kitchen", "Partitions", "Families",
                     "Nested pieces", "PDSO values set",
                 ],
                 rows,
@@ -253,7 +249,7 @@ if __name__ == "__main__":
 
     if without_silo:
         output.print_table(
-            [[output.linkify(area.Id), get_room_name(area), "{:.0f} sf".format(area.Area)]
+            [[output.linkify(area.Id), get_name(area), "{:.0f} sf".format(area.Area)]
              for area in without_silo],
             columns=["Area", "Name", "Size"],
             title="Areas left out: no PDSO data silo inside",

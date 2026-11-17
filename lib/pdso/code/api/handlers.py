@@ -203,17 +203,6 @@ def list_views(ctx):
     return model_service.list_views(ctx.require_doc(), ctx.arg("type"))
 
 
-@route("GET", "rooms")
-def list_rooms(ctx):
-    """List the placed Rooms with their outlines. Query: level?, name?, outline?"""
-    return model_service.list_rooms(
-        ctx.require_doc(),
-        level=ctx.arg("level"),
-        name=ctx.arg("name"),
-        with_outline=_flag(ctx.arg("outline"), True),
-    )
-
-
 @route("POST", "views/activate")
 def activate_view(ctx):
     """Show a view in the Revit window. Body: view (name or id), type?, zoom_box?"""
@@ -356,7 +345,7 @@ def get_audit(ctx):
 
 
 # =============================================================================
-# Programs (Data Silos): the room types and unit types of the building program
+# Programs (Data Silos): the space types and unit types of the building program
 # =============================================================================
 
 
@@ -507,6 +496,23 @@ def create_area(ctx):
         ctx.arg("points", required=True),
         name=ctx.arg("name"),
         number=ctx.arg("number"),
+    )
+
+
+@route("POST", "areas/derive")
+def derive_areas(ctx):
+    """Make Areas in a scheme from Areas of another scheme, moved in by offset.
+
+    Body: scheme, offset? (feet, default 0), and areas (ids) or from_scheme
+    and level (every placed Area of that scheme on that level).
+    """
+    return area_drafting_service.derive_areas(
+        ctx.require_doc(),
+        ctx.arg("scheme", required=True),
+        offset=ctx.arg("offset", 0.0),
+        area_ids=ctx.arg("areas"),
+        from_scheme=ctx.arg("from_scheme"),
+        level=ctx.arg("level"),
     )
 
 
