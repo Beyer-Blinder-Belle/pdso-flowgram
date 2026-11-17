@@ -126,16 +126,16 @@ Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.
 
 | Group | Routes |
 | --- | --- |
-| Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `GET/POST levels`, `GET rooms`, `GET views`, `POST views/activate` |
+| Status and model | `GET status`, `GET document`, `POST document/new`, `POST document/open`, `GET/POST levels`, `GET views`, `POST views/activate` |
 | Setup | `GET setup`, `POST bootstrap`, `GET/PUT config`, `GET config/checks` |
 | Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
 | Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `POST programs/batch`, `GET/PUT/DELETE programs/<uid or id>` |
 | Selection | `GET/POST selection` |
-| Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `GET/PUT/DELETE areas/<id>` |
+| Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `POST areas/derive`, `GET/PUT/DELETE areas/<id>` |
 | Visualization | `POST views/export`, `POST views/color-areas`, `POST views/clear-colors`, `POST views/program-volumes` |
 | Open documents | `GET documents`, `POST documents/open` (in the background), `POST documents/save` (`document`, default the active one), `POST documents/close` (`document` or `title`; not the active one). `document/save` and `document/close` are older names of the same routes. |
-| Unit Layout Catalogue | `GET catalogue/layouts`, `GET/DELETE catalogue/layouts/<id>`, `POST catalogue/harvest`, `POST catalogue/recommend`, `POST catalogue/similar-rooms`, `GET catalogue/preview`, `GET catalogue/item`, `POST catalogue/place`, `GET/DELETE catalogue/room-items` |
+| Unit Layout Catalogue | `GET catalogue/layouts`, `GET/DELETE catalogue/layouts/<id>`, `POST catalogue/harvest`, `POST catalogue/harvest-units`, `POST catalogue/recommend`, `POST catalogue/similar-units`, `GET catalogue/preview`, `GET catalogue/item`, `POST catalogue/place`, `GET/DELETE catalogue/unit-items`. Older names, accepted until the next API version: `POST catalogue/similar-rooms`, `GET/DELETE catalogue/room-items`, and the argument `room` for `unit`. |
 
 A request can name the open document that it works on with the field `document` (a title or a file path). Without it, a request works on the active document. `POST documents/open` opens a file but does not show it, so a person or a different agent can use the same Revit at the same time.
 
@@ -184,7 +184,7 @@ Use this setup when the agent and Revit are on the same Windows computer. The se
 }
 ```
 
-Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`, `shapely`). Thus the first start can be slow. The next starts use the uv cache.
+Do not set `PDSO_SSH_HOST`. At the first start, uv downloads Python (if it is necessary) and the dependencies (`mcp`, `pillow`). Thus the first start can be slow. The next starts use the uv cache.
 
 Or register the server with the `claude` command instead of editing `.mcp.json`. Run it in **Command Prompt** or **Git Bash**, in the repository folder. PowerShell drops the `--`, and `claude` then rejects `--script`. `-s local` keeps the entry private to you and this project:
 
@@ -209,16 +209,16 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 
 | Task | Tools |
 | --- | --- |
-| Model | `get_status`, `open_project`, `close_project`, `new_project`, `save_project`, `list_levels`, `create_level`, `list_rooms` |
+| Model | `get_status`, `open_project`, `close_project`, `new_project`, `save_project`, `list_levels`, `create_level` |
 | Setup | `get_setup_status`, `setup_model`, `get_config`, `update_config`, `check_config` |
 | Parameters | `list_parameters`, `create_parameter`, `delete_parameter` |
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
-| Programs (room types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
+| Programs (space types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
 | Selection | `select_elements`, `select_programs`, `get_selection` |
-| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `draft_area_from_room`, `draft_areas_from_rooms`, `adjust_area`, `delete_area` |
+| Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `derive_areas`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 | Open documents | `list_open_documents`, `open_document_in_background`, `set_target_document`, `save_document`, `close_background_document` |
-| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `recommend_layouts`, `find_similar_rooms`, `preview_similar_rooms`, `place_layout`, `list_room_items`, `describe_item`, `clear_room_items`, `delete_layout` |
+| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `harvest_units`, `recommend_layouts`, `find_similar_units`, `preview_similar_units`, `place_layout`, `list_unit_items`, `describe_item`, `clear_unit_items`, `delete_layout` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
 
@@ -227,12 +227,13 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 The server instructions give an agent the PDSO workflow, so that a user can ask in plain language ("map out the program of the second floor of this school") and does not need to know PDSO. The tools that make this short:
 
 - Setup keeps the user in the loop. The agent calls `get_setup_status` (what each part makes and what the model has), agrees the scope with the user, then calls `setup_model`. `parts` and `parameters` choose between the full package (the default: what the ribbon's setup buttons make) and the minimum the sync needs (`parts=["area_schemes", "families"]`, `parameters="required"`). `setup_model` can add parts later.
-- `setup_model()` with no levels makes area plans for the levels that have Rooms.
-- `list_rooms(level, include_outline=false)` gives number, name, area and bounding box of each Room.
-- `draft_areas_from_rooms(level, room_numbers, insets)` drafts one Area for each Room in each scheme, for example `insets = {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}`. A Room that fails does not stop the other Rooms. If an inset splits a Room outline, a larger simplify tolerance or the largest piece is used, and `warnings` says so.
+- `setup_model()` with no levels makes area plans for Quick Setup's default levels (`views.json`: all levels but Roof and Parapet).
+- PDSO works with Areas and area schemes only. It does not read Revit Rooms.
+- `draft_area` draws one Area from points, in the scheme that feeds `PDSO - GSF`. `render_plan` with `draft_outlines` previews the outlines first.
+- `derive_areas(scheme, offset, area_ids, from_scheme, level)` makes Areas in another scheme from those Areas: the same outline moved in by `offset` feet, with the source Area's name and number. For example `derive_areas("PDSO - NSF", 0.25, from_scheme="PDSO - GSF", level="L2")`. Arcs stay arcs and holes grow by the offset. An Area that fails does not stop the others; `errors` lists it.
 - `create_programs` places one program in each Area by `area_id`.
 - `run_sync` returns `program_volumes`: the families and the id and level of each instance.
-- `show_view(view, fit=true)` opens a plan and zooms it to its Areas (or Rooms) in one call. `view_type` selects one view when a floor plan and an area plan have the same name.
+- `show_view(view, fit=true)` opens a plan and zooms an area plan to its Areas in one call. `view_type` selects one view when a floor plan and an area plan have the same name.
 - `show_program_volumes` shows the 3D view in the Revit window.
 
 ### Versions, reloads and more than one client
@@ -248,7 +249,7 @@ The API uses the tracked parameters of the model (see [Tracked parameters](#trac
 
 - `POST bootstrap` sets up the parameters of a model that tracks no parameter: all built-in parameters (the *Default* preset). It does not change a model that tracks parameters.
 - `GET parameters` lists the tracked parameters, and the built-in parameters that the model does not track.
-- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. A custom name gets the `PDSO - ` prefix, as in the Parameter Manager (`Room Finish` becomes `PDSO - Room Finish`). If the model has one shared parameter with the name as given, that parameter is used and its values stay.
+- `POST parameters` (body: `name`, `type`) tracks a new parameter. The types are `string`, `multilineText`, `number`, `integer`, `area`, `length` and `yesno`. A custom name gets the `PDSO - ` prefix, as in the Parameter Manager (`Tenant Type` becomes `PDSO - Tenant Type`). If the model has one shared parameter with the name as given, that parameter is used and its values stay.
 - Each tracked parameter has a field name for the program routes, for filters and for `color_by`. A built-in parameter has a short name (`PDSO - Program UID` is `uid`). A custom parameter gets a name from its Revit name without the prefix (`PDSO - Rent per SF` is `rent_per_sf`).
 - `DELETE parameters/<field or name>` stops the tracking. The Revit parameter and its values stay. With `purge=true`, the parameter is also removed from Generic Models, and its values are deleted. The required parameters cannot be deleted.
 - New shared parameter definitions go into the shared parameter file that Revit is set to use, then the fallback file of the Parameter Manager. If there is none, the API uses a file in the temporary folder.

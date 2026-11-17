@@ -14,16 +14,22 @@ from rpw.utils.dotnet import List
 
 
 class FamilyLoadOptions(DB.IFamilyLoadOptions):
-    """Load options that always overwrite the family in the project.
+    """Load options for a family file.
 
-    Parameter values in the project are overwritten too if the family has no
-    instances yet, or if overwrite_parameters is True.
+    By default the family in the project is overwritten, and its parameter
+    values too if it has no instances yet or overwrite_parameters is True.
+    With keep_existing, a family that is in the project is never changed
+    (the catalogue loads only families a model doesn't have).
     """
 
-    def __init__(self, overwrite_parameters=False):
+    def __init__(self, overwrite_parameters=False, keep_existing=False):
         self.overwrite_parameters = overwrite_parameters
+        self.keep_existing = keep_existing
 
     def OnFamilyFound(self, family_in_use, overwrite_parameter_values):
+        if self.keep_existing:
+            overwrite_parameter_values.Value = False
+            return False
         overwrite_parameter_values.Value = (
             not family_in_use or self.overwrite_parameters
         )
@@ -32,6 +38,10 @@ class FamilyLoadOptions(DB.IFamilyLoadOptions):
     def OnSharedFamilyFound(
         self, shared_family, family_in_use, source, overwrite_parameter_values
     ):
+        if self.keep_existing:
+            source.Value = DB.FamilySource.Project
+            overwrite_parameter_values.Value = False
+            return False
         source.Value = DB.FamilySource.Family
         overwrite_parameter_values.Value = (
             not family_in_use or self.overwrite_parameters

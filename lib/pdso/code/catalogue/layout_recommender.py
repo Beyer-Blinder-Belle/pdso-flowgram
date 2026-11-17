@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Recommend step: rank catalogue entries for a target room.
+"""Recommend step: rank catalogue entries for a target unit.
 
-No Revit imports. A target is described the same way an entry is: its room
+No Revit imports. A target is described the same way an entry is: its unit
 frame and its outline in that frame. For each entry, all eight orientations
 are tried and the best one that fits is kept.
 
@@ -10,7 +10,7 @@ target rectangle (within a tolerance) and every item lands inside the target
 outline (within the same tolerance, because a family against a wall has its
 insertion point on the boundary). The layout is centred in the target
 rectangle. When more than one orientation fits equally snugly, the one whose
-room outline covers the target outline best is kept.
+unit outline covers the target outline best is kept.
 
 Score (0-1):
     60%  area match     1 - |target - entry| / entry, floored at 0
@@ -24,19 +24,23 @@ from pdso.code.catalogue.layout_geometry import (
     orient_size,
     outline_mismatch,
     point_in_or_near_polygon,
+    point_in_polygon,
 )
 
-# How much larger than the target rectangle a layout may be (ft). Room
+# How much larger than the target rectangle a layout may be (ft). Unit
 # boundaries are measured to finish faces or wall centrelines, so a few inches
 # of difference between source and target is normal.
 FIT_TOLERANCE = 0.5
+
+# Positions on each axis that refine_placement tries between two sides
+REFINE_STEPS = 8
 
 AREA_WEIGHT = 0.6
 SNUG_WEIGHT = 0.4
 
 
 class Placement(object):
-    """Where an entry's items go in the target room frame.
+    """Where an entry's items go in the target unit frame.
 
     Attributes:
         turns (int): Quarter turns, 0-3.
@@ -57,7 +61,7 @@ class Placement(object):
 
 
 class Recommendation(object):
-    """One ranked entry for a target room."""
+    """One ranked entry for a target unit."""
 
     def __init__(self, entry, placement, score, area_score, snug_score, program_match):
         self.entry = entry
@@ -84,7 +88,7 @@ class Recommendation(object):
 
 
 def oriented_items(entry, placement):
-    """Item points in the target room frame for a placement.
+    """Item points in the target unit frame for a placement.
 
     Returns:
         list: (item, (x, y)) pairs.
@@ -99,7 +103,7 @@ def oriented_items(entry, placement):
 
 
 def oriented_outline(entry, placement):
-    """The entry's room outline in the target room frame for a placement."""
+    """The entry's unit outline in the target unit frame for a placement."""
     outline = []
     for point in entry.boundary:
         x, y = orient_point(
@@ -143,14 +147,63 @@ def best_placement(entry, target_width, target_depth, target_outline):
     return best[1], best[2]
 
 
+def refine_placement(entry, placement, target_width, target_depth, target_outline):
+    """Move a placement to where the layout outline agrees best with the target.
+
+    best_placement puts the layout in the middle of the target rectangle. If
+    the target is larger than the layout (for example a wall jog makes its
+    rectangle deeper), the items are then away from the walls that they were
+    against. This function tries a grid of positions between the sides of the
+    target rectangle and keeps the one with the smallest outline mismatch.
+    A position is used only if it puts no more insertion points outside the
+    target outline than the middle position does.
+
+    Returns:
+        Placement: The same orientation; the shift can be different.
+    """
+    if not target_outline or not entry.boundary:
+        return placement
+    width, depth = orient_size(entry.width, entry.depth, placement.turns)
+
+    def shifts(spare, middle):
+        # A layout that is larger than the target (in the tolerance) stays centred
+        if spare <= 0.01:
+            return [middle]
+        return [spare * step / float(REFINE_STEPS) for step in range(REFINE_STEPS + 1)]
+
+    def outside(candidate):
+        return len(
+            [
+                1
+                for _, point in oriented_items(entry, candidate)
+                if not point_in_polygon(point, target_outline)
+            ]
+        )
+
+    best = placement
+    best_mismatch = outline_mismatch(oriented_outline(entry, placement), target_outline)
+    allowed = outside(placement)
+    for shift_x in shifts(target_width - width, placement.shift[0]):
+        for shift_y in shifts(target_depth - depth, placement.shift[1]):
+            candidate = Placement(placement.turns, placement.mirror, (shift_x, shift_y))
+            if outside(candidate) > allowed:
+                continue
+            mismatch = outline_mismatch(
+                oriented_outline(entry, candidate), target_outline
+            )
+            if mismatch < best_mismatch - 0.01:
+                best, best_mismatch = candidate, mismatch
+    return best
+
+
 def recommend(entries, target_width, target_depth, target_area, target_outline, program):
-    """Rank entries for a target room.
+    """Rank entries for a target unit.
 
     Args:
         entries (list[LayoutEntry]): The catalogue.
-        target_width, target_depth (float): Target room frame size (ft).
-        target_area (float): Target room area (ft2).
-        target_outline (list): Target outline in its room frame, [(x, y), ...].
+        target_width, target_depth (float): Target unit frame size (ft).
+        target_area (float): Target unit area (ft2).
+        target_outline (list): Target outline in its unit frame, [(x, y), ...].
         program (str): Target program; entries for it are listed first.
     Returns:
         tuple: (recommendations, rejected). rejected is a list of

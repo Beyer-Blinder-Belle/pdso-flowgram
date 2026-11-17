@@ -499,6 +499,168 @@ def create_area(doc, scheme, level, points, name=None, number=None):
     return info
 
 
+# =============================================================================
+# Derive an Area from an Area of another scheme
+# =============================================================================
+
+
+def _loop_points(curve_loop):
+    """The points of a CurveLoop, tessellated, as [[x, y], ...]."""
+    points = []
+    for curve in curve_loop:
+        for point in list(curve.Tessellate())[:-1]:
+            points.append([point.X, point.Y])
+    return points
+
+
+def _offset_loop(curve_loop, distance, smaller):
+    """Offset a CurveLoop by distance (feet), to make it smaller or larger.
+
+    Revit's CurveLoop.CreateViaOffset offsets to one side of the loop's
+    direction, which depends on how the loop runs. Both sides are tried and
+    the one that makes the loop smaller (or larger) is kept.
+    """
+    original = abs(polygon_area(_loop_points(curve_loop)))
+    best = None
+    for signed in (distance, -distance):
+        try:
+            candidate = DB.CurveLoop.CreateViaOffset(curve_loop, signed, DB.XYZ.BasisZ)
+        except Exception:
+            continue
+        size = abs(polygon_area(_loop_points(candidate)))
+        if size <= 0:
+            continue
+        if (smaller and size < original) or (not smaller and size > original):
+            if best is None or (size < best[0] if smaller else size > best[0]):
+                best = (size, candidate)
+    if best is None:
+        raise PDSOError(
+            "An offset of {} ft doesn't fit this outline (it would close it up). Use "
+            "a smaller offset.".format(distance)
+        )
+    return best[1]
+
+
+def _interior_point(outline, holes):
+    """A point inside the outline and not in a hole."""
+    x, y = polygon_interior_point(outline)
+    if point_in_area(x, y, outline, holes):
+        return x, y
+    xs = [point[0] for point in outline]
+    ys = [point[1] for point in outline]
+    center_x, center_y = sum(xs) / len(xs), sum(ys) / len(ys)
+    steps = 24
+    candidates = []
+    for i in range(1, steps):
+        for j in range(1, steps):
+            px = min(xs) + (max(xs) - min(xs)) * i / float(steps)
+            py = min(ys) + (max(ys) - min(ys)) * j / float(steps)
+            if point_in_area(px, py, outline, holes):
+                candidates.append(((px - center_x) ** 2 + (py - center_y) ** 2, px, py))
+    if not candidates:
+        raise PDSOError("No point was found inside the new outline.", 409)
+    _, x, y = min(candidates)
+    return x, y
+
+
+def derive_area(doc, area_id, scheme, offset=0.0):
+    """Make an Area in another scheme from the outline of an Area.
+
+    For example the NSF Area of a unit from its GSF Area, 0.25 ft in. The
+    outline moves in by offset (feet) and its holes grow by the same amount.
+    Arcs stay arcs. The new Area is on the same level and gets the source
+    Area's name and number.
+
+    Returns:
+        dict: The new Area (see area_info), plus "source_id", "offset" and
+            "warnings"
+    """
+    offset = to_number(offset, "offset")
+    if offset < 0:
+        raise PDSOError("The offset is a distance inwards in feet: 0 or more.")
+    source = get_area(doc, area_id)
+    if _scheme_name(source) == scheme:
+        raise PDSOError(
+            "Area {} is in '{}' already. Give the scheme to make the new Area in.".format(
+                area_id, scheme
+            )
+        )
+    level = doc.GetElement(source.LevelId)
+    curve_loops = []
+    for loop in source.GetBoundarySegments(DB.SpatialElementBoundaryOptions()) or []:
+        curve_loop = DB.CurveLoop()
+        for segment in loop:
+            curve_loop.Append(segment.GetCurve())
+        curve_loops.append(curve_loop)
+    if not curve_loops:
+        raise PDSOError("Area {} has no closed outline.".format(area_id), 409)
+    sizes = [abs(polygon_area(_loop_points(loop))) for loop in curve_loops]
+    outer_index = sizes.index(max(sizes))
+    if offset:
+        curve_loops = [
+            _offset_loop(loop, offset, smaller=(index == outer_index))
+            for index, loop in enumerate(curve_loops)
+        ]
+    outline = _loop_points(curve_loops[outer_index])
+    holes = [
+        _loop_points(loop) for index, loop in enumerate(curve_loops) if index != outer_index
+    ]
+    curves = [curve for loop in curve_loops for curve in loop]
+
+    name_parameter = source.get_Parameter(DB.BuiltInParameter.ROOM_NAME)
+    name = name_parameter.AsString() if name_parameter else None
+    warnings = []
+    with TransactionGroup(doc, "PDSO - Derive Area"):
+        view = _area_plan(doc, scheme, level)
+        with Transaction(doc, "PDSO - Draw Area Outline") as transaction:
+            _draw_curves(doc, view, level, curves)
+        warnings.extend(transaction.warnings)
+        with Transaction(doc, "PDSO - Place Area") as transaction:
+            x, y = _interior_point(outline, holes)
+            area = doc.Create.NewArea(view, DB.UV(x, y))
+            if name:
+                area.get_Parameter(DB.BuiltInParameter.ROOM_NAME).Set(name)
+            if source.Number:
+                try:
+                    area.Number = source.Number
+                except Exception as error:
+                    warnings.append("The number wasn't copied: {}".format(error))
+            doc.Regenerate()
+            if area.Area <= 0:
+                raise PDSOError(
+                    "Revit gave the new Area 0 SF: an Area of '{}' may be in this "
+                    "outline already. No change was made.".format(scheme)
+                )
+        warnings.extend(transaction.warnings)
+    info = area_info(doc, area)
+    info.update({"source_id": id_value(source.Id), "offset": offset, "warnings": warnings})
+    return info
+
+
+def derive_areas(doc, scheme, offset=0.0, area_ids=None, from_scheme=None, level=None):
+    """derive_area for several Areas: the given ids, or every placed Area of
+    from_scheme on a level. One Area that fails doesn't stop the others.
+
+    Returns:
+        dict: {"created": [area dicts], "errors": [{"source_id", "message"}]}
+    """
+    if area_ids is None:
+        if not from_scheme or level is None:
+            raise PDSOError("Give the Areas (area_ids), or from_scheme and level.")
+        area_ids = [
+            area["id"]
+            for area in list_areas(doc, scheme=from_scheme, level=level, with_outline=False)
+            if area["placed"] and area["area"] > 0
+        ]
+    created, errors = [], []
+    for area_id in area_ids:
+        try:
+            created.append(derive_area(doc, area_id, scheme, offset))
+        except PDSOError as error:
+            errors.append({"source_id": area_id, "message": str(error)})
+    return {"created": created, "errors": errors}
+
+
 def _inside_outline(loop_points, outline):
     """True if a loop lies wholly inside an outline (no point out, no crossing)."""
     if not all(point_in_polygon(x, y, outline) for x, y in loop_points):

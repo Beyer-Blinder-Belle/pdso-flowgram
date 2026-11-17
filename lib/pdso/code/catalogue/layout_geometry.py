@@ -4,9 +4,9 @@
 No Revit imports, so this module can be read, reused and tested outside Revit.
 Points are (x, y) tuples in feet. Angles are radians, counter-clockwise.
 
-The idea that makes a layout reusable: every layout is stored in its room's
+The idea that makes a layout reusable: every layout is stored in its unit's
 own frame, not in project coordinates. The frame is the bounding rectangle
-aligned to the direction most of the room's boundary runs in (the "most popular
+aligned to the direction most of the unit's boundary runs in (the "most popular
 vector"), origin at its corner, X along its longer side. An apartment harvested
 from one building can then be placed into a space in another.
 
@@ -74,8 +74,8 @@ def distance_to_polygon(point, polygon):
 def point_in_or_near_polygon(point, polygon, tolerance):
     """True if the point is in the polygon, or no farther than ``tolerance`` from it.
 
-    A family that stands against a wall has its insertion point on the room
-    boundary. In a second room with the same plan, that point can be a fraction
+    A family that stands against a wall has its insertion point on the unit
+    boundary. In a second unit with the same plan, that point can be a fraction
     of an inch outside the boundary.
     """
     if point_in_polygon(point, polygon):
@@ -88,7 +88,7 @@ def outline_mismatch(outline_a, outline_b):
 
     The value is the mean distance from each corner of one outline to the edges
     of the other outline, in the two directions. It is exact, so it also sees a
-    small wall jog that tells two orientations of an almost symmetric room apart.
+    small wall jog that tells two orientations of an almost symmetric unit apart.
 
     Args:
         outline_a, outline_b (list): [(x, y), ...] in the same frame.
@@ -149,8 +149,8 @@ def normalize_angle(angle):
     return angle
 
 
-class RoomFrame(object):
-    """A room's own coordinate frame: a bounding rectangle lined up with its walls.
+class UnitFrame(object):
+    """A unit's own coordinate frame: a bounding rectangle lined up with its walls.
 
     Attributes:
         angle (float): Direction of the frame's X axis in project coordinates.
@@ -177,11 +177,11 @@ class RoomFrame(object):
 
     @classmethod
     def from_polygon(cls, polygon):
-        """Fit the bounding rectangle aligned to the room's dominant direction.
+        """Fit the bounding rectangle aligned to the unit's dominant direction.
 
         The X axis follows the direction that the greatest length of boundary
-        runs in (see dominant_direction). For a rectangular room this is the
-        same rectangle as before; for an irregular room it stays lined up with
+        runs in (see dominant_direction). For a rectangular unit this is the
+        same rectangle as before; for an irregular unit it stays lined up with
         the walls furniture is set out against, where a minimum-area rectangle
         can end up on a diagonal.
         """
@@ -215,7 +215,7 @@ def dominant_direction(polygon):
     """The direction most of a polygon's boundary runs in: the "most popular vector".
 
     Edges are grouped by direction, ignoring which way they point and treating
-    perpendicular edges as one group (a room's walls mostly sit on one
+    perpendicular edges as one group (a unit's walls mostly sit on one
     orthogonal grid). The group with the greatest total length wins.
 
     Returns:
@@ -270,14 +270,14 @@ MATRIX_SIZE = 10
 
 
 def shape_matrix(polygon, width, depth, size=MATRIX_SIZE):
-    """A room's shape as a size x size grid over its frame rectangle.
+    """A unit's shape as a size x size grid over its frame rectangle.
 
-    Each cell is 1 when its centre is inside the room, else 0. A rectangular
-    room is all ones; an L-shaped room has a block of zeros in one corner.
-    Two rooms' shapes are compared cell by cell (see matrix_difference).
+    Each cell is 1 when its centre is inside the unit, else 0. A rectangular
+    unit is all ones; an L-shaped unit has a block of zeros in one corner.
+    Two units' shapes are compared cell by cell (see matrix_difference).
 
     Args:
-        polygon (list): Room outline in the room frame.
+        polygon (list): Unit outline in the unit frame.
     Returns:
         list: Rows from y = 0 upward, each a list of 0/1 from x = 0 upward.
     """
@@ -349,7 +349,7 @@ def shape_category(polygon, tolerance=SHAPE_TOLERANCE):
     it is turned, mirrored or proportioned.
 
     Args:
-        polygon (list): Outline in the room frame.
+        polygon (list): Outline in the unit frame.
     Returns:
         dict: category (a name from SHAPE_NAMES, else "other"), corners,
             reflex_corners, turns (the canonical sequence), and orthogonal

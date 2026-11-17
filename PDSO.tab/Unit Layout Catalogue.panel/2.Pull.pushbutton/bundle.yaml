@@ -1,12 +1,12 @@
 title: "Pull from\nCatalogue"
 
 tooltip: >-
-  Put a catalogue layout into the selected Room. Select a Room, an Area, or
-  objects that are in one Room: the button is not available with no selection.
-  A window shows the Room as it is now and the layouts that fit it, ranked,
-  with a plan preview of each layout in the Room. The Room does not have to be
-  harvested. The layout's id is written to "PDSO - Unit Layout Type" on any
-  PDSO data silo in the room.
+  Put a catalogue layout into the selected unit (an Area with a PDSO data silo
+  inside). Select the unit's Area or data silo, or objects that are in one
+  unit: the button is not available with no selection. A window shows the unit
+  as it is now and the layouts that fit it, ranked, with a plan preview of
+  each layout in the unit. The unit does not have to be harvested. The
+  layout's id is written to "PDSO - Unit Layout Type" on the unit's data silo.
 
 author: BBB DCT + hackathon team
 

@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Harvest step: what a unit is like, around and inside its layout.
 
-The unit is an apartment drawn as an Area (a single Room also works). A layout
-only transfers to a space like the one it came from: the entry on the same
-side, the windows on the same side, the same shape. This module reads those
-features so the Recommend step can compare them, and reads what is inside the
-unit (partitions, doors, rooms) so the Create step can rebuild it. The feature list follows Oliver Green, "An Introspective Approach to
-Apartment Design" (AHMM, 2020), which names them as what designers match on:
+The unit is an Area with a PDSO data silo inside (an apartment, a classroom).
+Revit Rooms are not read. A layout only transfers to a space like the one it
+came from: the entry on the same side, the windows on the same side, the same
+shape. This module reads those features so the Recommend step can compare
+them, and reads what is inside the unit (partitions, doors) so the Create step
+can rebuild it. The feature list follows Oliver Green, "An Introspective
+Approach to Apartment Design" (AHMM, 2020), which names them as what designers
+match on:
 
     entry location          -> features["entry"]
     external wall location  -> features["edges"], kind "exterior"
@@ -15,23 +17,27 @@ Apartment Design" (AHMM, 2020), which names them as what designers match on:
     size                    -> entry.area, features["perimeter"]
     wider context           -> features["edges"], kind "corridor" / "party"
     internal elements       -> features["internal_walls"], ["internal_doors"],
-                               ["rooms"], and the entry's items
-    metadata (mix, tenure)  -> features["unit"]
+                               and the entry's items
+    metadata (mix, tenure)  -> features["unit"]: the data silo's values
 
-How an edge's kind is found: a few points are probed just beyond the wall.
-    another room there, named like a corridor  -> "corridor"
-    another room there                         -> "party"
-    no room, wall is an Exterior or curtain wall -> "exterior"
-    no room, anything else                     -> "unroomed"
+How an edge's kind is found: a few points are probed just beyond the wall,
+for an Area of the unit's scheme on the same level.
+    an Area there, circulation by its name or its
+    program (corridor, hall, lobby...)          -> "corridor"
+    another Area there                          -> "party"
+    no Area, wall is an Exterior or curtain wall -> "exterior"
+    no Area, anything else                      -> "no_area"
+Entries harvested before this read Revit Rooms and say "unroomed" for the
+last kind.
 
 Limits, so nobody is surprised:
     - A wall's Function is often left at Revit's default (Exterior), so a wall
-      facing a space with no Room in it (a shaft, a closet) reads as exterior.
+      facing a space with no Area (a shaft, a closet) reads as exterior.
     - An Area's boundary is a line, not a wall. The wall is found by looking
       for a straight wall on the same level that runs along the line. Where
       none is found, an edge with a window in it is taken to be exterior.
     - Only straight walls whose base is on the unit's level are read.
-    - Walls in a linked model are not read: their edges come out "unroomed"
+    - Walls in a linked model are not read: their edges come out "no_area"
       and their doors and windows are not found.
     - Only the outer boundary is read; holes (columns, shafts) are ignored.
 """
@@ -55,13 +61,12 @@ from pdso.code.catalogue.layout_geometry import (
     shape_matrix,
 )
 
-# A room beyond the wall with one of these in its name is circulation
+# An Area beyond the wall with one of these in its name or program is circulation
 CORRIDOR_WORDS = ("corridor", "hall", "circulation", "lobby", "vestibule", "breezeway")
 
 PROBE_DISTANCE = 1.5  # ft past the far face of the wall
-PROBE_HEIGHT = 1.0  # ft above the level
-# Tried in turn until a room is found: a chase or a second wall behind the
-# first one must not hide the room on the far side
+# Tried in turn until an Area is found: a chase or a second wall behind the
+# first one must not hide the Area on the far side
 PROBE_STEPS = (0.0, 2.0, 4.0)  # ft added to PROBE_DISTANCE
 SAMPLES = (0.25, 0.5, 0.75)  # where along an edge to probe
 SHORT_EDGE = 1.0  # ft; shorter edges are probed once, at the middle
@@ -70,12 +75,16 @@ OPENING_REACH = 1.0  # ft; how far past the wall thickness an opening may sit
 WALL_REACH = 1.0  # ft; how far from a wall's faces an Area boundary may run
 PARALLEL = 0.087  # sine of 5 degrees
 
-EDGE_KINDS = ("exterior", "corridor", "party", "unroomed")
+EDGE_KINDS = ("exterior", "corridor", "party", "no_area")
 
-# Words in a room's name that say what the room is
-BEDROOM_WORDS = ("bed",)
-BATHROOM_WORDS = ("bath", "wc", "toilet", "powder", "shower", "ensuite")
-KITCHEN_WORDS = ("kitchen",)
+# The data silo parameters that count a unit's spaces (features["unit"])
+COUNT_PARAMETERS = (
+    ("bedrooms", "PDSO - DU Bedroom Count"),
+    ("bathrooms", "PDSO - Bathroom Count"),
+    ("kitchens", "PDSO - Kitchen Count"),
+)
+# The data silo parameters that say what a neighbouring Area is
+PROGRAM_PARAMETERS = ("PDSO - Program Type", "PDSO - Program Display Name")
 
 PDSO_PREFIX = "PDSO - "
 DATA_SILO_PARAMETER = parameter_access.PROGRAM_UID
@@ -210,31 +219,76 @@ def _wall_label(wall):
         return ""
 
 
-def _room_name(room):
-    parameter = room.get_Parameter(DB.BuiltInParameter.ROOM_NAME)
+def _area_name(area):
+    parameter = area.get_Parameter(DB.BuiltInParameter.ROOM_NAME)
     if parameter is None or not parameter.HasValue:
         return ""
     return parameter.AsString() or ""
 
 
-def _room_phase(spatial_element):
-    """The phase a Room belongs to, or None (Areas have no phase)."""
-    if not isinstance(spatial_element, DB.Architecture.Room):
-        return None
-    parameter = spatial_element.get_Parameter(DB.BuiltInParameter.ROOM_PHASE)
-    if parameter is None or not parameter.HasValue:
-        return None
-    return spatial_element.Document.GetElement(parameter.AsElementId())
-
-
-def _room_at(doc, x, y, z, phase):
-    point = DB.XYZ(x, y, z)
+def _scheme_name(area):
     try:
-        if phase is not None:
-            return doc.GetRoomAtPoint(point, phase)
-        return doc.GetRoomAtPoint(point)
+        return area.AreaScheme.Name
     except Exception:
         return None
+
+
+def _silo_text(silo, names):
+    """The first of these text parameters that the data silo has a value in."""
+    for name in names:
+        value = parameter_access.get_value(silo, name)
+        if value:
+            return str(value)
+    return ""
+
+
+def _neighbour_areas(doc, unit_area, level):
+    """The other Areas of the unit's scheme on its level, for the edge probes.
+
+    Returns:
+        list: (Area, outline [(x, y)], label). The label is what says if the
+            Area is circulation: its name and its data silo's program.
+    """
+    scheme = _scheme_name(unit_area)
+    silos = []
+    kind = pdso_kinds(doc)
+    for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
+        if kind(instance) != DATA_SILO or instance.LevelId != level.Id:
+            continue
+        location = instance.Location
+        if isinstance(location, DB.LocationPoint):
+            silos.append(((location.Point.X, location.Point.Y), instance))
+
+    neighbours = []
+    for area in (
+        DB.FilteredElementCollector(doc)
+        .OfCategory(DB.BuiltInCategory.OST_Areas)
+        .WhereElementIsNotElementType()
+    ):
+        if not isinstance(area, DB.Area) or area.Area <= 0:
+            continue
+        if area.LevelId != level.Id or id_value(area.Id) == id_value(unit_area.Id):
+            continue
+        if _scheme_name(area) != scheme:
+            continue
+        outline = [start for start, _, _ in boundary_edges(area)]
+        if len(outline) < 3:
+            continue
+        label = _area_name(area)
+        for point, silo in silos:
+            if point_in_polygon(point, outline):
+                label = "{} {}".format(label, _silo_text(silo, PROGRAM_PARAMETERS))
+                break
+        neighbours.append((area, outline, label.strip()))
+    return neighbours
+
+
+def _area_at(neighbours, x, y):
+    """(Area, label) of the neighbouring Area at a point, or (None, "")."""
+    for area, outline, label in neighbours:
+        if point_in_polygon((x, y), outline):
+            return area, label
+    return None, ""
 
 
 def _has_word(name, words):
@@ -255,7 +309,7 @@ def _is_corridor(name):
 
 
 def boundary_edges(spatial_element):
-    """The outer boundary of a Room or Area as straight edges, in order.
+    """The outer boundary of an Area as straight edges, in order.
 
     Curved segments are split into short straight edges. Each edge keeps the
     id of the element that bounds it (a wall, a separation line, an area
@@ -288,7 +342,7 @@ def boundary_edges(spatial_element):
 
 
 def _outward_normal(start, end, counter_clockwise):
-    """Unit vector pointing out of the room, square to an edge."""
+    """Unit vector pointing out of the unit, square to an edge."""
     dx, dy = end[0] - start[0], end[1] - start[1]
     length = math.hypot(dx, dy)
     if length < 1e-9:
@@ -308,8 +362,8 @@ def _far_face(start, end, normal, stack):
     return far
 
 
-def _classify_edge(doc, spatial_element, start, end, normal, stack, z, phase):
-    """Kind of one edge and the name of the room beyond it.
+def _classify_edge(start, end, normal, stack, neighbours):
+    """Kind of one edge and the name of the Area beyond it.
 
     Args:
         stack (list): (wall, start, end) for every wall layered along the edge.
@@ -327,20 +381,17 @@ def _classify_edge(doc, spatial_element, start, end, normal, stack, z, phase):
 
     votes, beyond = {}, {}
     for t in samples:
-        room = None
+        area, name = None, ""
         for step in PROBE_STEPS:
             x = start[0] + t * (end[0] - start[0]) + normal[0] * (reach + step)
             y = start[1] + t * (end[1] - start[1]) + normal[1] * (reach + step)
-            room = _room_at(doc, x, y, z, phase)
-            if room is not None:
+            area, name = _area_at(neighbours, x, y)
+            if area is not None:
                 break
-        if room is None:
-            kind, name = ("exterior" if is_exterior_wall else "unroomed"), ""
+        if area is None:
+            kind = "exterior" if is_exterior_wall else "no_area"
         else:
-            name = _room_name(room)
-            # The room wrapping round on itself counts as a wall to a neighbour
-            is_self = id_value(room.Id) == id_value(spatial_element.Id)
-            kind = "corridor" if (not is_self and _is_corridor(name)) else "party"
+            kind = "corridor" if _is_corridor(name) else "party"
         votes[kind] = votes.get(kind, 0) + 1
         if name:
             beyond[kind] = name
@@ -414,7 +465,7 @@ def _walls_along_edge(start, end, level_walls):
 
 
 def _find_openings(doc, level, edges, walls):
-    """Doors and windows that sit in the room's boundary.
+    """Doors and windows that sit in the unit's boundary.
 
     Args:
         edges (list): (start, end, element_id) in project feet.
@@ -481,21 +532,20 @@ def nearest_edge(point, edges):
 
 
 def build_features(spatial_element, edges, frame, level):
-    """Read a room's surroundings into the features dictionary of an entry.
+    """Read a unit's surroundings into the features dictionary of an entry.
 
     Args:
-        spatial_element: The Room or Area.
+        spatial_element: The unit's Area.
         edges (list): From boundary_edges.
-        frame (RoomFrame): The room frame built from the same edges.
-        level: The room's Level.
+        frame (UnitFrame): The unit frame built from the same edges.
+        level: The unit's Level.
     Returns:
-        dict: See LayoutEntry.features. All points are in the room frame.
+        dict: See LayoutEntry.features. All points are in the unit frame.
     """
     doc = spatial_element.Document
     outline = [start for start, _, _ in edges]
     counter_clockwise = polygon_area(outline) > 0
-    phase = _room_phase(spatial_element)
-    z = level.ProjectElevation + PROBE_HEIGHT
+    neighbours = _neighbour_areas(doc, spatial_element, level)
 
     def local(point):
         x, y = frame.to_local(point)
@@ -521,9 +571,7 @@ def build_features(spatial_element, edges, frame, level):
         # The thickest wall of the stack is the real one; the rest are finishes
         wall = max(stack, key=lambda item: item[0].Width)[0] if stack else None
         normal = _outward_normal(start, end, counter_clockwise)
-        kind, beyond, curtain_length = _classify_edge(
-            doc, spatial_element, start, end, normal, stack, z, phase
-        )
+        kind, beyond, curtain_length = _classify_edge(start, end, normal, stack, neighbours)
         wall_ids.append(ids)
         normals.append(normal)
         edge_data.append(
@@ -567,7 +615,7 @@ def build_features(spatial_element, edges, frame, level):
             }
         )
         # An Area's edge has no wall to ask; a window in it means outside
-        if kind == "window" and edge_data[index]["kind"] == "unroomed":
+        if kind == "window" and edge_data[index]["kind"] == "no_area":
             edge_data[index]["kind"] = "exterior"
 
     for edge in edge_data:
@@ -613,7 +661,6 @@ def build_features(spatial_element, edges, frame, level):
     internal_walls, internal_wall_ids = _internal_walls(
         level_walls, boundary_wall_ids, outline, local
     )
-    rooms = _rooms_inside(doc, spatial_element, level, outline, frame)
 
     local_outline = [frame.to_local(point) for point in outline]
     return {
@@ -626,8 +673,7 @@ def build_features(spatial_element, edges, frame, level):
         "entry": entry,
         "shape_matrix": shape_matrix(local_outline, frame.width, frame.depth),
         "shape": shape_category(local_outline),
-        "unit": _unit_data(doc, level, outline, rooms),
-        "rooms": rooms,
+        "unit": _unit_data(doc, level, outline),
         "internal_walls": internal_walls,
         "internal_doors": _internal_doors(doc, level, internal_wall_ids, frame, local),
         "hosted_items": [],
@@ -701,56 +747,18 @@ def _internal_doors(doc, level, internal_wall_ids, frame, local):
     return found
 
 
-def _rooms_inside(doc, spatial_element, level, outline, frame):
-    """Rooms that stand inside the unit, with their outlines in the unit frame."""
-    found = []
-    rooms = (
-        DB.FilteredElementCollector(doc)
-        .OfCategory(DB.BuiltInCategory.OST_Rooms)
-        .WhereElementIsNotElementType()
-    )
-    for room in rooms:
-        if room.Area <= 0 or room.LevelId != level.Id:
-            continue
-        if id_value(room.Id) == id_value(spatial_element.Id):
-            continue
-        location = room.Location
-        if not isinstance(location, DB.LocationPoint):
-            continue
-        if not point_in_polygon((location.Point.X, location.Point.Y), outline):
-            continue
-        x, y = frame.to_local((location.Point.X, location.Point.Y))
-        boundary = []
-        for start, _end, _id in boundary_edges(room):
-            bx, by = frame.to_local(start)
-            boundary.append([round(bx, 4), round(by, 4)])
-        found.append(
-            {
-                "name": _room_name(room),
-                "area": round(room.Area, 2),
-                "x": round(x, 4),
-                "y": round(y, 4),
-                "boundary": boundary,
-            }
-        )
-    return found
+def _unit_data(doc, level, outline):
+    """What kind of unit this is: the PDSO data silo's values.
 
-
-def _unit_data(doc, level, outline, rooms):
-    """What kind of unit this is: room counts, and the PDSO data silo's values.
-
-    The data silo (see pdso_kinds) is the one that stands inside the unit. All of its "PDSO - ..." parameters (program type,
-    market segment, bedroom count...) are kept, set or not, as a list of
-    {key, value, display}: value is the stored value (None when empty; numbers
-    in Revit's internal units), display is how Revit shows it, with its unit.
+    The data silo (see pdso_kinds) is the one that stands inside the unit.
+    bedrooms, bathrooms and kitchens are its counts (COUNT_PARAMETERS; 0 when
+    not set). All of its "PDSO - ..." parameters (program type, market
+    segment, bedroom count...) are kept, set or not, as a list of {key, value,
+    display}: value is the stored value (None when empty; numbers in Revit's
+    internal units), display is how Revit shows it, with its unit.
     """
-    unit = {
-        "bedrooms": len([r for r in rooms if _has_word(r["name"], BEDROOM_WORDS)]),
-        "bathrooms": len([r for r in rooms if _has_word(r["name"], BATHROOM_WORDS)]),
-        "kitchens": len([r for r in rooms if _has_word(r["name"], KITCHEN_WORDS)]),
-        "room_count": len(rooms),
-        "pdso": [],
-    }
+    unit = dict((key, 0) for key, _ in COUNT_PARAMETERS)
+    unit["pdso"] = []
 
     kind = pdso_kinds(doc)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
@@ -783,6 +791,12 @@ def _unit_data(doc, level, outline, rooms):
                     value = display or None
             unit["pdso"].append({"key": name, "value": value, "display": display})
         unit["pdso"].sort(key=lambda pair: pair["key"])
+        for key, name in COUNT_PARAMETERS:
+            value = parameter_access.get_value(instance, name)
+            try:
+                unit[key] = int(round(float(value))) if value not in (None, "") else 0
+            except (TypeError, ValueError):
+                unit[key] = 0
         break
     return unit
 

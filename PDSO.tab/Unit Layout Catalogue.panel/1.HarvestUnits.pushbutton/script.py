@@ -2,14 +2,15 @@
 """Harvest All Units: save the layout of every unit in the active area plan.
 
 A unit is an Area with a PDSO data silo inside it. Nothing is picked: open the
-area plan and run. To harvest other elements (a Room, an Area with no silo),
-select them first; a selection of Rooms or Areas is harvested as it is.
+area plan and run. To harvest other Areas (one with no silo, for example),
+select them first; a selection of Areas is harvested as it is.
 
-Running again replaces the earlier harvest of the same unit.
+Running again replaces the earlier harvest of the same unit. The harvest
+itself is catalogue_api_service.harvest_units, which the API uses too; this
+button chooses the units, asks for the project type and prints the report.
 """
 
 import sys
-from datetime import datetime
 
 from pyrevit import forms, revit, script
 
@@ -18,49 +19,19 @@ from pyrevit import forms, revit, script
 for _name in [name for name in sys.modules if name.startswith("pdso.code.catalogue")]:
     del sys.modules[_name]
 
-from pdso.code.catalogue.catalogue_settings import get_catalogue_folder  # noqa: E402
-from pdso.code.catalogue.catalogue_store import (  # noqa: E402
-    assign_catalogue,
-    catalogue_lock,
-    catalogue_numbers,
-    remove_previous,
-    save_entry,
-)
+from pdso.code.business.errors import PDSOError  # noqa: E402
+from pdso.code.catalogue import catalogue_api_service as catalogue  # noqa: E402
 from pdso.code.catalogue.catalogue_windows import PROJECT_TYPES  # noqa: E402
-from pdso.code.catalogue.harvest_features import boundary_edges, pdso_value  # noqa: E402
-from pdso.code.catalogue.harvest_image import UnitImager, thumbnail_data_uri  # noqa: E402
-from pdso.code.catalogue.layout_entry import is_entry_id, slugify  # noqa: E402
+from pdso.code.catalogue.harvest_image import thumbnail_data_uri  # noqa: E402
 from pdso.code.catalogue.revit_layout_service import (  # noqa: E402
-    areas_with_data_silo,
-    get_room_department,
-    get_room_name,
-    harvest,
+    get_name,
     is_area_plan,
-    is_spatial_element,
+    is_unit_area,
 )
 
 output = script.get_output()
 
 ROW_IMAGE_HEIGHT = 110  # px, the plan in front of each row of the table
-
-
-def suggest_program(unit, rooms, fallback):
-    """The unit type: the data silo's, else read from the rooms inside.
-
-    A dwelling (it has a bedroom, bathroom or kitchen) is named by its bedroom
-    count; a unit that is one room takes that room's name (a classroom).
-    """
-    for name in ("PDSO - Unit Layout Type", "PDSO - Program Display Name", "PDSO - Program Type"):
-        value = pdso_value(unit, name)
-        # A layout id that Pull from Catalogue wrote is not a program name
-        if value and not is_entry_id(str(value).strip()):
-            return str(value)
-    bedrooms = unit.get("bedrooms", 0)
-    if bedrooms or unit.get("bathrooms") or unit.get("kitchens"):
-        return "Studio" if bedrooms == 0 else "{} Bedroom".format(bedrooms)
-    if len(rooms) == 1 and rooms[0].get("name"):
-        return rooms[0]["name"].title()
-    return fallback or "Unit"
 
 
 def html_table(columns, table_rows):
@@ -83,7 +54,7 @@ def html_table(columns, table_rows):
 
 
 def units_to_harvest():
-    """Selected Rooms/Areas if there are any, else the active area plan's units.
+    """Selected Areas if there are any, else the active area plan's units.
 
     Returns:
         tuple: (elements, areas without a silo, where they came from).
@@ -92,7 +63,7 @@ def units_to_harvest():
         revit.doc.GetElement(element_id)
         for element_id in revit.uidoc.Selection.GetElementIds()
     ]
-    selected = [element for element in selected if is_spatial_element(element)]
+    selected = [element for element in selected if is_unit_area(element)]
     if selected:
         return selected, [], "the selection"
 
@@ -101,10 +72,10 @@ def units_to_harvest():
         forms.alert(
             "Open an area plan and run Harvest All Units again: every Area in it with a "
             "PDSO data silo inside is harvested.\n\n"
-            "Or select the Rooms or Areas to harvest first.",
+            "Or select the Areas to harvest first.",
             exitscript=True,
         )
-    areas, without = areas_with_data_silo(revit.doc, view)
+    areas, without = catalogue.units_in_view(revit.doc, view)
     return areas, without, "area plan '{}'".format(view.Name)
 
 
@@ -126,7 +97,7 @@ def print_details(entry, result):
             ["Exterior wall", "{:.1f} ft".format(lengths.get("exterior", 0.0))],
             ["Corridor wall", "{:.1f} ft".format(lengths.get("corridor", 0.0))],
             ["Party wall (a neighbour beyond)", "{:.1f} ft".format(lengths.get("party", 0.0))],
-            ["Wall with no room beyond", "{:.1f} ft".format(lengths.get("unroomed", 0.0))],
+            ["Wall with no Area beyond", "{:.1f} ft".format(lengths.get("no_area", 0.0))],
             ["Glazing (windows + curtain wall)", "{:.1f} ft".format(features.get("glazed_length", 0.0))],
             ["Doors in the unit's boundary", len([o for o in openings if o["kind"] == "door"])],
             ["Windows", len([o for o in openings if o["kind"] == "window"])],
@@ -138,8 +109,7 @@ def print_details(entry, result):
 
     output.print_table(
         [
-            ["Rooms", unit.get("room_count", 0)],
-            ["Bedrooms / bathrooms / kitchens (by room name)", "{} / {} / {}".format(
+            ["Bedrooms / bathrooms / kitchens (from the data silo)", "{} / {} / {}".format(
                 unit.get("bedrooms", 0), unit.get("bathrooms", 0), unit.get("kitchens", 0)
             )],
             ["Partitions", len(features.get("internal_walls", []))],
@@ -151,13 +121,6 @@ def print_details(entry, result):
         columns=["Inside the unit", "Value"],
         title="Inside the unit",
     )
-
-    if features.get("rooms"):
-        output.print_table(
-            [[r["name"], "{:.0f} sf".format(r["area"])] for r in features["rooms"]],
-            columns=["Room", "Area"],
-            title="Rooms",
-        )
 
     if unit.get("pdso"):
         output.print_table(
@@ -190,7 +153,7 @@ if __name__ == "__main__":
     if not elements:
         forms.alert(
             "No Area with a PDSO data silo inside was found in {}.\n\n"
-            "{} placed Area(s) have no silo. Select Areas or Rooms first to "
+            "{} placed Area(s) have no silo. Select Areas first to "
             "harvest them anyway.".format(origin, len(without_silo)),
             exitscript=True,
         )
@@ -201,106 +164,58 @@ if __name__ == "__main__":
     if not project_type:
         script.exit()
 
-    folder = get_catalogue_folder()
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    used_ids = set()
-    rows, failures, last = [], [], None
-    # Lock the folder while numbers are given out: two people who harvest
-    # into one shared folder at once would give one number to two shapes
-    lock = catalogue_lock(folder)
     try:
-        lock.__enter__()
-    except RuntimeError as error:
+        # Plan images come from the active view (the imager reports a view
+        # that is not a plan)
+        report = catalogue.harvest_units(
+            revit.doc, elements, project_type, view=revit.doc.ActiveView
+        )
+    except PDSOError as error:
         forms.alert(str(error), exitscript=True)
-    try:
-        # Catalogue numbers already given out: the same shape keeps its number
-        numbers = catalogue_numbers(folder)
-        saved = []
-        replaced = 0
 
-        for element in elements:
-            lock.touch()
-            try:
-                result = harvest(element, "", "", project_type)
-                if result is None:
-                    failures.append((element.Id, "not placed or not enclosed"))
-                    continue
+    folder = report["folder"]
+    replaced = report["replaced"]
+    images = report["images"]
+    image_error = report["image_error"]
+    saved = report["units"]
+    failures = [(unit["id"], unit["reason"]) for unit in report["failures"]]
+    last = (saved[0]["_entry"], saved[0]["_result"]) if saved else None
 
-                entry = result.entry
-                features = entry.features
-                unit = features.get("unit", {})
-                source = entry.source
-
-                entry.program = suggest_program(
-                    unit,
-                    features.get("rooms", []),
-                    get_room_name(element) or get_room_department(element),
-                )
-                label = source.get("room_number") or source.get("room_name") or source["element_id"]
-                entry.name = "{} - {:.0f} sf - {} {}".format(
-                    entry.program, entry.area, source["element_kind"], label
-                )
-
-                base = "{}--{}--{}".format(slugify(entry.program), slugify(entry.name), stamp)
-                entry.id, count = base, 1
-                while entry.id in used_ids:
-                    count += 1
-                    entry.id = "{}-{}".format(base, count)
-                used_ids.add(entry.id)
-
-                catalogue_number = assign_catalogue(entry, numbers)
-                # Save first: a failed save must not leave the unit with no entry
-                path = save_entry(entry, folder)
-                replaced += remove_previous(folder, source, keep=path)
-                saved.append((element, entry, path))
-                last = (entry, result)
-
-                lengths = features.get("edge_lengths", {})
-                rows.append(
-                    [
-                        output.linkify(element.Id),
-                        catalogue_number,
-                        entry.name,
-                        features.get("shape", {}).get("category", ""),
-                        "{:.1f} x {:.1f}".format(entry.width, entry.depth),
-                        "{:.0f}".format(lengths.get("exterior", 0.0)),
-                        "{:.0f}".format(lengths.get("corridor", 0.0)),
-                        "{:.0f}".format(lengths.get("party", 0.0)),
-                        "yes" if features.get("entry") else "no",
-                        unit.get("room_count", 0),
-                        len(features.get("internal_walls", [])),
-                        len(entry.items),
-                        len(features.get("nested_items", [])),
-                        len([p for p in unit.get("pdso", []) if p["value"] is not None]),
-                    ]
-                )
-            except Exception as error:
-                failures.append((element.Id, "{}: {}".format(type(error).__name__, error)))
-    finally:
-        lock.__exit__(None, None, None)
-
-    # A plan image of each unit, from a temporary copy of the active view with
-    # tags and Area lines hidden. The copy is undone; the model does not change.
-    images = 0
-    imager = UnitImager(revit.doc, revit.doc.ActiveView)
-    try:
-        for index, (element, entry, path) in enumerate(saved):
-            picture = ""
-            outline = [start for start, _, _ in boundary_edges(element)]
-            image_path = path[: -len(".json")] + ".png"
-            if imager.export(outline, image_path):
-                entry.features["image"] = entry.id + ".png"
-                save_entry(entry, folder)
-                images += 1
-                # The plan goes in front of the unit's row of the table
-                data = thumbnail_data_uri(image_path, ROW_IMAGE_HEIGHT * 2)
-                if data:
-                    picture = '<img src="{}" height="{}">'.format(data, ROW_IMAGE_HEIGHT)
-            if index < len(rows):
-                rows[index].insert(0, picture)
-    finally:
-        image_error = imager.error
-        imager.close()
+    rows = []
+    for unit in saved:
+        entry = unit["_entry"]
+        features = entry.features
+        details = features.get("unit", {})
+        lengths = features.get("edge_lengths", {})
+        picture = ""
+        if unit["image"]:
+            # The plan goes in front of the unit's row of the table
+            data = thumbnail_data_uri(unit["image"], ROW_IMAGE_HEIGHT * 2)
+            if data:
+                picture = '<img src="{}" height="{}">'.format(data, ROW_IMAGE_HEIGHT)
+        rows.append(
+            [
+                picture,
+                output.linkify(unit["_element"].Id),
+                unit["catalogue_number"],
+                entry.name,
+                features.get("shape", {}).get("category", ""),
+                "{:.1f} x {:.1f}".format(entry.width, entry.depth),
+                "{:.0f}".format(lengths.get("exterior", 0.0)),
+                "{:.0f}".format(lengths.get("corridor", 0.0)),
+                "{:.0f}".format(lengths.get("party", 0.0)),
+                "yes" if features.get("entry") else "no",
+                "{} / {} / {}".format(
+                    details.get("bedrooms", 0),
+                    details.get("bathrooms", 0),
+                    details.get("kitchens", 0),
+                ),
+                len(features.get("internal_walls", [])),
+                len(entry.items),
+                len(features.get("nested_items", [])),
+                len([p for p in details.get("pdso", []) if p["value"] is not None]),
+            ]
+        )
 
     output.print_md("## Harvested {} unit(s) from {}".format(len(rows), origin))
     output.print_md("**{}** · saved to `{}`".format(project_type, folder))
@@ -318,7 +233,7 @@ if __name__ == "__main__":
             html_table(
                 [
                     "Plan", "Unit", "Catalogue", "Name", "Shape", "Size (ft)", "Exterior (ft)",
-                    "Corridor (ft)", "Party (ft)", "Entry", "Rooms", "Partitions", "Families",
+                    "Corridor (ft)", "Party (ft)", "Entry", "Bed / bath / kitchen", "Partitions", "Families",
                     "Nested pieces", "PDSO values set",
                 ],
                 rows,
@@ -334,7 +249,7 @@ if __name__ == "__main__":
 
     if without_silo:
         output.print_table(
-            [[output.linkify(area.Id), get_room_name(area), "{:.0f} sf".format(area.Area)]
+            [[output.linkify(area.Id), get_name(area), "{:.0f} sf".format(area.Area)]
              for area in without_silo],
             columns=["Area", "Name", "Size"],
             title="Areas left out: no PDSO data silo inside",

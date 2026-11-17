@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 """Harvest and Create steps: the Revit side of the Unit Layout Catalogue.
 
-Harvest reads a Room or Area and the families standing in it, and turns them
-into a LayoutEntry in the room's own frame. Create does the reverse: it places
-an entry's families into a target Room or Area through a Placement chosen by
+Harvest reads a unit (an Area with a PDSO data silo inside) and the families
+standing in it, and turns them into a LayoutEntry in the unit's own frame.
+Create does the reverse: it places an entry's families into a target unit
+through a Placement chosen by
 the recommender.
 
 Harvest also reads what surrounds the layout (which walls are exterior or face
-the corridor, the doors and windows, the room's shape); see harvest_features.
+the corridor, the doors and windows, the unit's shape); see harvest_features.
 
 Limits, reported to the user rather than hidden:
     - Only free-standing (level-based) families are placed by Create. Wall- and
       face-hosted families (wall cabinets, whiteboards) are recorded in the
       entry's features, with the wall they sit on, but not placed yet.
     - A family that is not loaded in the target model is listed as missing.
-    - Only a room's outer boundary is used; holes (columns, shafts) are ignored.
+    - Only a unit's outer boundary is used; holes (columns, shafts) are ignored.
 """
 
 import os
@@ -34,12 +35,13 @@ from pdso.code.catalogue.harvest_features import (
 )
 from pdso.code.catalogue.layout_entry import LayoutEntry, LayoutItem, is_entry_id
 from pdso.code.catalogue.layout_geometry import (
-    RoomFrame,
+    UnitFrame,
     orient_angle,
     point_in_polygon,
     polygon_area,
 )
 from pdso.code.catalogue.layout_recommender import oriented_items
+from pdso.code.setup.revit_utils import FamilyLoadOptions
 
 # Categories a layout is made of
 HARVEST_CATEGORIES = [
@@ -57,20 +59,20 @@ UNIT_LAYOUT_PARAMETER = "PDSO - Unit Layout Type"
 
 
 # ---------------------------------------------------------------------------
-# Reading a Room or Area
+# Reading a unit's Area
 # ---------------------------------------------------------------------------
 
 
-def is_spatial_element(element):
-    """True for a Room or an Area."""
-    return isinstance(element, (DB.Architecture.Room, DB.Area))
+def is_unit_area(element):
+    """True for an Area. PDSO units are Areas; Revit Rooms are never used."""
+    return isinstance(element, DB.Area)
 
 
 def get_outline(spatial_element):
-    """The outer boundary of a Room or Area as [(x, y), ...] in project feet.
+    """The outer boundary of an Area as [(x, y), ...] in project feet.
 
-    Rooms are measured to wall finish faces. Areas follow their own boundary
-    rules (wall centrelines or area boundary lines).
+    It follows the Area's boundary rules (wall centrelines or area
+    boundary lines).
 
     Returns:
         list: Points, or [] if the element is unplaced or not enclosed.
@@ -105,16 +107,16 @@ def get_text_parameter(element, built_in_parameter):
     return parameter.AsString() or ""
 
 
-def get_room_name(spatial_element):
+def get_name(spatial_element):
     return get_text_parameter(spatial_element, DB.BuiltInParameter.ROOM_NAME)
 
 
-def get_room_department(spatial_element):
+def get_department(spatial_element):
     return get_text_parameter(spatial_element, DB.BuiltInParameter.ROOM_DEPARTMENT)
 
 
 def describe_target(spatial_element):
-    """Frame, outline in that frame, and area of a target Room or Area.
+    """Frame, outline in that frame, and area of a target Area.
 
     Returns:
         tuple: (frame, local_outline, area), or (None, None, None) when the
@@ -123,7 +125,7 @@ def describe_target(spatial_element):
     outline = get_outline(spatial_element)
     if len(outline) < 3:
         return None, None, None
-    frame = RoomFrame.from_polygon(outline)
+    frame = UnitFrame.from_polygon(outline)
     local_outline = [frame.to_local(p) for p in outline]
     return frame, local_outline, spatial_element.Area
 
@@ -145,12 +147,8 @@ def is_area_plan(view):
     return isinstance(view, DB.ViewPlan) and view.ViewType == DB.ViewType.AreaPlan
 
 
-def areas_with_data_silo(doc, view):
-    """The placed Areas shown in a view that have a PDSO data silo inside.
-
-    Returns:
-        tuple: (areas, without). without is the placed Areas with no silo.
-    """
+def data_silos(doc):
+    """The placed PDSO data silos: [(level id, x, y, instance)]."""
     silos = []
     kind = pdso_kinds(doc)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
@@ -158,28 +156,68 @@ def areas_with_data_silo(doc, view):
             continue
         location = instance.Location
         if isinstance(location, DB.LocationPoint):
-            silos.append((id_value(instance.LevelId), location.Point.X, location.Point.Y))
+            silos.append(
+                (id_value(instance.LevelId), location.Point.X, location.Point.Y, instance)
+            )
+    return silos
 
-    areas, without = [], []
+
+def units(doc, view=None, scheme=None, level_id=None):
+    """The units: placed Areas that have a PDSO data silo inside.
+
+    Args:
+        view: Only the Areas shown in this view (an area plan)
+        scheme (str): Only the Areas of this area scheme
+        level_id (int): Only the Areas on this level
+
+    Returns:
+        tuple: (units, without). units is [(Area, data silo instance)];
+            without is the placed Areas with no silo.
+    """
+    silos = data_silos(doc)
     collector = (
         DB.FilteredElementCollector(doc, view.Id)
-        .OfCategory(DB.BuiltInCategory.OST_Areas)
-        .WhereElementIsNotElementType()
+        if view is not None
+        else DB.FilteredElementCollector(doc)
     )
-    for area in collector:
+    found, without = [], []
+    for area in collector.OfCategory(DB.BuiltInCategory.OST_Areas).WhereElementIsNotElementType():
         if not isinstance(area, DB.Area) or area.Area <= 0:
+            continue
+        if scheme is not None and _scheme_name(area) != scheme:
+            continue
+        if level_id is not None and id_value(area.LevelId) != level_id:
             continue
         outline = [start for start, _, _ in boundary_edges(area)]
         if len(outline) < 3:
             continue
-        level_id = id_value(area.LevelId)
         inside = [
-            1
-            for silo_level, x, y in silos
-            if silo_level == level_id and point_in_polygon((x, y), outline)
+            silo
+            for silo_level, x, y, silo in silos
+            if silo_level == id_value(area.LevelId) and point_in_polygon((x, y), outline)
         ]
-        (areas if inside else without).append(area)
-    return areas, without
+        if inside:
+            found.append((area, inside[0]))
+        else:
+            without.append(area)
+    return found, without
+
+
+def _scheme_name(area):
+    try:
+        return area.AreaScheme.Name
+    except Exception:
+        return None
+
+
+def areas_with_data_silo(doc, view):
+    """The placed Areas shown in a view that have a PDSO data silo inside.
+
+    Returns:
+        tuple: (areas, without). without is the placed Areas with no silo.
+    """
+    found, without = units(doc, view=view)
+    return [area for area, _ in found], without
 
 
 class HarvestResult(object):
@@ -287,7 +325,7 @@ def apply_instance_parameters(instance, values):
 
 
 def harvest(spatial_element, name, program, project_type, notes=""):
-    """Turn a Room or Area and the families in it into a catalogue entry.
+    """Turn a unit's Area and the families in it into a catalogue entry.
 
     Returns:
         HarvestResult, or None if the element has no usable boundary.
@@ -299,7 +337,7 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         return None
 
     level = get_level(spatial_element)
-    frame = RoomFrame.from_polygon(outline)
+    frame = UnitFrame.from_polygon(outline)
     features = build_features(spatial_element, edges, frame, level)
 
     categories = List[DB.BuiltInCategory]()
@@ -414,10 +452,11 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         "model_id": _model_id(doc),
         "project": doc.Title,
         "element_id": str(id_value(spatial_element.Id)),
-        "element_kind": "Area" if isinstance(spatial_element, DB.Area) else "Room",
-        "room_name": get_room_name(spatial_element),
-        "room_number": get_text_parameter(spatial_element, DB.BuiltInParameter.ROOM_NUMBER),
-        "department": get_room_department(spatial_element),
+        "element_kind": "Area",
+        # Revit keeps an Area's name and number in its ROOM_* parameters
+        "area_name": get_name(spatial_element),
+        "area_number": get_text_parameter(spatial_element, DB.BuiltInParameter.ROOM_NUMBER),
+        "department": get_department(spatial_element),
         "level": level.Name,
         "harvested": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
@@ -436,6 +475,176 @@ def harvest(spatial_element, name, program, project_type, notes=""):
         features=features,
     )
     return HarvestResult(entry, skipped)
+
+
+# ---------------------------------------------------------------------------
+# Family files: a layout can go into a model that does not have its families
+# ---------------------------------------------------------------------------
+
+FAMILY_FOLDER = "families"
+FAMILY_EXTENSION = ".rfa"
+
+
+def family_file_name(family_name):
+    """File name of a family in the families folder of a catalogue folder."""
+    safe = "".join(
+        character if character not in '\\/:*?"<>|' else "_" for character in family_name
+    )
+    return safe.strip() + FAMILY_EXTENSION
+
+
+def _families_by_name(doc):
+    families = {}
+    for family in DB.FilteredElementCollector(doc).OfClass(DB.Family):
+        families[family.Name] = family
+    return families
+
+
+def save_family_files(doc, entry, folder):
+    """Save the family of each layout item as a file beside the layout.
+
+    The files go to <folder>/families/<family name>.rfa. A file that is there
+    is kept. Must be called outside a transaction.
+
+    Returns:
+        dict: {"saved": [family names], "failed": {family name: reason}}
+    """
+    saved, failed = [], {}
+    names = sorted(set(item.family for item in entry.items))
+    if not names:
+        return {"saved": saved, "failed": failed}
+    target = os.path.join(folder, FAMILY_FOLDER)
+    if not os.path.isdir(target):
+        os.makedirs(target)
+    families = _families_by_name(doc)
+    for name in names:
+        path = os.path.join(target, family_file_name(name))
+        if os.path.exists(path):
+            continue
+        family = families.get(name)
+        if family is None or not family.IsEditable or family.IsInPlace:
+            failed[name] = "the family cannot be saved as a file"
+            continue
+        family_doc = None
+        try:
+            family_doc = doc.EditFamily(family)
+            options = DB.SaveAsOptions()
+            options.OverwriteExistingFile = True
+            family_doc.SaveAs(path, options)
+            saved.append(name)
+        except Exception as error:
+            failed[name] = str(error)
+        finally:
+            if family_doc is not None:
+                family_doc.Close(False)
+    return {"saved": saved, "failed": failed}
+
+
+def loadable_families(doc, entry, folders):
+    """The families of a layout that the model has not, but that can be loaded.
+
+    This is a read-only forecast of load_missing_families.
+
+    Returns:
+        set: Family names
+    """
+    symbols = _symbol_lookup(doc)
+    present = _families_by_name(doc)
+    names = set(
+        item.family
+        for item in entry.items
+        if item.symbol_key not in symbols and item.family not in present
+    )
+    found = set()
+    if not names:
+        return found
+    for name in names:
+        for folder in folders:
+            if os.path.exists(os.path.join(folder, FAMILY_FOLDER, family_file_name(name))):
+                found.add(name)
+    for other in doc.Application.Documents:
+        if len(found) == len(names):
+            break
+        if other.IsFamilyDocument or other.Equals(doc):
+            continue
+        for name, family in _families_by_name(other).items():
+            if name in names and family.IsEditable and not family.IsInPlace:
+                found.add(name)
+    return found
+
+
+def load_missing_families(doc, entry, folders):
+    """Load the families of a layout that the model does not have.
+
+    A family comes from the families folder of a catalogue folder, or from a
+    different open model that has it. Must be called outside a transaction.
+
+    Returns:
+        dict: {"loaded": {family name: where it came from},
+            "not_found": [family names]}
+    """
+    loaded, not_found = {}, []
+    symbols = _symbol_lookup(doc)
+    names = sorted(
+        set(item.family for item in entry.items if item.symbol_key not in symbols)
+    )
+    if not names:
+        return {"loaded": loaded, "not_found": not_found}
+    present = _families_by_name(doc)
+    options = FamilyLoadOptions(keep_existing=True)
+
+    for name in names:
+        if name in present:
+            # The family is loaded, but not this type. A file or a different
+            # model cannot add a type to it without a change of the family.
+            not_found.append(name)
+            continue
+
+        path = None
+        for folder in folders:
+            candidate = os.path.join(folder, FAMILY_FOLDER, family_file_name(name))
+            if os.path.exists(candidate):
+                path = candidate
+        if path is not None:
+            try:
+                transaction = DB.Transaction(doc, "PDSO - Load Layout Family")
+                transaction.Start()
+                try:
+                    done = doc.LoadFamily(path, options)
+                    transaction.Commit()
+                except Exception:
+                    transaction.RollBack()
+                    raise
+                if done or name in _families_by_name(doc):
+                    loaded[name] = "file " + os.path.basename(path)
+                    continue
+            except Exception:
+                pass
+
+        source_title = None
+        for other in doc.Application.Documents:
+            if other.IsFamilyDocument or other.Equals(doc):
+                continue
+            family = _families_by_name(other).get(name)
+            if family is None or not family.IsEditable or family.IsInPlace:
+                continue
+            family_doc = None
+            try:
+                family_doc = other.EditFamily(family)
+                family_doc.LoadFamily(doc, options)
+                source_title = other.Title
+            except Exception:
+                source_title = None
+            finally:
+                if family_doc is not None:
+                    family_doc.Close(False)
+            if source_title is not None:
+                break
+        if source_title is not None and name in _families_by_name(doc):
+            loaded[name] = "open model " + source_title
+        else:
+            not_found.append(name)
+    return {"loaded": loaded, "not_found": not_found}
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +676,11 @@ def _flip(doc, instance, hand):
     """Flip an instance along its hand or its facing direction.
 
     A family with a flip control is flipped with that control. A family with
-    no flip control (its source instance was mirrored) is mirrored in place,
-    about the plane through its location point.
+    no flip control is mirrored in place, about the plane through its location
+    point. Revit reports each mirror of such a family as "facing flipped" with
+    a different rotation, also when the mirror was along the hand direction.
+    Thus the check is that the mirror state changed, not the hand or facing
+    property.
 
     Returns:
         bool: True if the instance is flipped.
@@ -481,6 +693,7 @@ def _flip(doc, instance, hand):
         return True
     try:
         doc.Regenerate()
+        before = bool(instance.Mirrored)
         direction = instance.HandOrientation if hand else instance.FacingOrientation
         plane = DB.Plane.CreateByNormalAndOrigin(direction, instance.Location.Point)
         ids = List[DB.ElementId]()
@@ -489,17 +702,16 @@ def _flip(doc, instance, hand):
         doc.Regenerate()
     except Exception:
         return False
-    flipped = instance.HandFlipped if hand else instance.FacingFlipped
-    return bool(flipped)
+    return bool(instance.Mirrored) != before
 
 
 def create(spatial_element, entry, placement):
-    """Place an entry's families into a target Room or Area.
+    """Place an entry's families into a target Area.
 
     Must be called inside an open transaction.
 
     Args:
-        spatial_element: Target Room or Area.
+        spatial_element: Target Area.
         entry (LayoutEntry): The layout to place.
         placement (Placement): Orientation and shift from the recommender.
     Returns:
@@ -562,11 +774,14 @@ def create(spatial_element, entry, placement):
             axis = DB.Line.CreateBound(point, point + DB.XYZ.BasisZ)
             DB.ElementTransformUtils.RotateElement(doc, instance.Id, axis, angle)
 
-        # A mirrored placement flips each item's handedness
+        # A mirrored placement flips each item's handedness. A new instance
+        # has no flip, so each wanted flip is made one time. The properties of
+        # the instance are not read between the two flips: for a family with
+        # no flip control, a mirror along the hand shows as "facing flipped",
+        # and a second mirror would then undo the first one.
         want_hand = item.hand_flipped != placement.mirror
         for hand, wanted in ((True, want_hand), (False, item.facing_flipped)):
-            flipped = instance.HandFlipped if hand else instance.FacingFlipped
-            if bool(flipped) != wanted and not _flip(doc, instance, hand):
+            if wanted and not _flip(doc, instance, hand):
                 result.warnings.append(
                     "{} : {} could not be flipped; it keeps its original {}".format(
                         item.family, item.type, "hand" if hand else "facing"

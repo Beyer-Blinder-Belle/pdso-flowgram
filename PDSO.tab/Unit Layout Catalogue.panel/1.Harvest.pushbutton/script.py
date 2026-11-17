@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Harvest: save a Room's layout into the Unit Layout Catalogue."""
+"""Harvest Layout: save one unit's layout into the Unit Layout Catalogue.
+
+A unit is an Area with a PDSO data silo inside. Select it (its Area, its data
+silo or something in it), or type its Program UID.
+"""
 
 import sys
 
@@ -16,16 +20,16 @@ from pdso.code.catalogue import catalogue_commands as commands  # noqa: E402
 from pdso.code.catalogue import catalogue_windows as windows  # noqa: E402
 
 if __name__ == "__main__":
-    rooms = commands.RoomIndex()
+    units = commands.UnitIndex()
     answer = windows.HarvestWindow(
-        rooms.describe, rooms.number_of_selection(), commands.owner()
+        units.describe, units.uid_of_selection(), commands.owner()
     ).show()
     if answer is None:
         script.exit()
     try:
         harvest = catalogue.harvest_layout(
             revit.doc,
-            answer["room"],
+            answer["unit"],
             name=answer["name"],
             program=answer["program"],
             project_type=answer["project_type"],

@@ -2,8 +2,8 @@
 """Catalogue entry: one harvested unit layout, as plain data.
 
 An entry is what one JSON file in the catalogue holds. No Revit imports.
-All lengths are feet and all angles radians, in the room's own frame
-(see layout_geometry.RoomFrame).
+All lengths are feet and all angles radians, in the unit's own frame
+(see layout_geometry.UnitFrame).
 """
 
 import re
@@ -25,9 +25,9 @@ class LayoutItem(object):
         category (str): Revit category name, e.g. "Furniture".
         family (str): Family name.
         type (str): Type name.
-        x, y (float): Location in the room frame (ft).
+        x, y (float): Location in the unit frame (ft).
         z_offset (float): Height of the location point above the level (ft).
-        rotation (float): Rotation in the room frame (radians).
+        rotation (float): Rotation in the unit frame (radians).
         hand_flipped, facing_flipped (bool): Flip state of the instance.
         mirrored (bool): True if the instance was mirrored in the source model.
         parameters (dict): Instance parameters of the family (name -> number),
@@ -105,20 +105,21 @@ class LayoutEntry(object):
         name (str): Human name, e.g. "1 Bedroom - 650 sf, corner".
         program (str): Program the layout serves, e.g. "1 Bedroom". Used to filter.
         project_type (str): e.g. "Multifamily", "K-12". Used to filter.
-        width, depth (float): Room frame size (ft).
-        area (float): Room area (ft2).
-        boundary (list): Room outline in the room frame, [(x, y), ...].
+        width, depth (float): Unit frame size (ft).
+        area (float): Unit area (ft2).
+        boundary (list): Unit outline in the unit frame, [(x, y), ...].
         items (list[LayoutItem]): Placed families.
         source (dict): Where it was harvested from (project name, element id, date).
         notes (str): Free text.
-        features (dict): What the room is like around the layout, used to match
-            it to a target room. Empty for entries harvested before schema 2.
-            All points are in the room frame.
+        features (dict): What the unit is like around the layout, used to match
+            it to a target unit. Empty for entries harvested before schema 2.
+            All points are in the unit frame.
                 perimeter (float)
                 edges (list): one per boundary segment, in boundary order:
                     start, end ([x, y]), length,
-                    kind: "exterior" | "corridor" | "party" | "unroomed",
-                    beyond: name of the room on the other side, if any,
+                    kind: "exterior" | "corridor" | "party" | "no_area"
+                    ("unroomed" in entries harvested from Revit Rooms),
+                    beyond: name of the Area on the other side, if any,
                     wall_type, glazed (True for a curtain wall)
                 edge_lengths (dict): total length per kind
                 window_wall_length (float): length of exterior boundary
@@ -127,17 +128,18 @@ class LayoutEntry(object):
                     kind: "door" | "window", family, type, x, y, u, v,
                     width, sill_height, edge (index into edges)
                 entry (dict or None): the entrance door: x, y, u, v, edge,
-                    direction ([dx, dy], pointing into the room)
+                    direction ([dx, dy], pointing into the unit)
                 shape_matrix (list): see layout_geometry.shape_matrix
                 shape (dict): category ("rectangle", "L", "T", "Z", "U",
                     "other"), corners, reflex_corners, turns, orthogonal.
                     The same for a unit however it is turned, mirrored or
                     stretched; see layout_geometry.shape_category
-                unit (dict): bedrooms, bathrooms, kitchens, room_count, and
-                    pdso: every "PDSO - ..." parameter of the unit's data silo,
-                    as a list of {key, value, display}; value is None when the
-                    parameter is empty, display is the value with its unit
-                rooms (list): rooms inside the unit: name, area, x, y, boundary
+                unit (dict): bedrooms, bathrooms, kitchens (the data silo's
+                    counts), and pdso: every "PDSO - ..." parameter of the
+                    unit's data silo, as a list of {key, value, display}; value
+                    is None when the parameter is empty, display is the value
+                    with its unit. Older entries also have room_count and a
+                    "rooms" list read from Revit Rooms.
                 internal_walls (list): partitions: start, end, width, wall_type
                 internal_doors (list): family, type, x, y, width, rotation,
                     hand_flipped, facing_flipped, wall (index into internal_walls)

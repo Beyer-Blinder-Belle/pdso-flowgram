@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
 """Unit Layout Catalogue without a UI, for the HTTP API and the MCP server.
 
-The Harvest and Place buttons ask the user to pick a Room and to type names.
-These functions take the same inputs as arguments and return plain data. They
-use the same harvest, store, recommend and create code as the buttons.
+A unit is an Area with a PDSO data silo inside (by default in the scheme that
+feeds PDSO - GSF). Functions name a unit by its Area id, its data silo's id or
+its Program UID; Revit Rooms are never used. The Harvest and Pull buttons pick
+the unit and ask for names; these functions take the same inputs as arguments
+and return plain data, through the same harvest, store, recommend and create
+code as the buttons.
 
 All lengths are decimal feet. All areas are square feet.
 
 Example Usage:
     entry = harvest_layout(doc, 1234, name="Studio", program="Studio Unit")
-    matches = find_similar_rooms(doc, entry["id"])
-    picture_data = preview_layout_in_room(doc, matches["rooms"][0]["id"], entry["id"])
-    place_layout(doc, matches["rooms"][0]["id"], entry["id"])
+    matches = find_similar_units(doc, entry["id"])
+    picture_data = preview_layout_in_unit(doc, matches["units"][0]["id"], entry["id"])
+    place_layout(doc, matches["units"][0]["id"], entry["id"])
 """
 
 import base64
 import math
 import os
+from datetime import datetime
 
 from rpw import DB
 
@@ -30,14 +34,26 @@ from pdso.code.business.revit_helpers import (
 )
 from pdso.code.catalogue import revit_layout_service as layout_service
 from pdso.code.catalogue.catalogue_settings import catalogue_folders, get_catalogue_folder
-from pdso.code.catalogue.harvest_features import pdso_kinds
+from pdso.code.catalogue.harvest_features import (
+    DATA_SILO,
+    boundary_edges,
+    pdso_kinds,
+    pdso_value,
+)
+from pdso.code.data import parameter_access
+from pdso.code.catalogue.harvest_image import UnitImager
+from pdso.code.catalogue.layout_entry import is_entry_id, slugify
 from pdso.code.catalogue.catalogue_store import (
     ENTRY_EXTENSION,
     IMAGE_EXTENSION,
     SKETCH_EXTENSION,
+    assign_catalogue,
+    catalogue_lock,
+    catalogue_numbers,
     default_local_folder,
     entry_to_svg,
     load_catalogue,
+    remove_previous,
     sample_folder,
     save_entry,
 )
@@ -58,7 +74,11 @@ from pdso.code.catalogue.layout_recommender import (
     oriented_items,
     oriented_outline,
     recommend,
+    refine_placement,
 )
+
+# The area parameter whose scheme holds the units (see unit_scheme)
+GSF_PARAMETER = "PDSO - GSF"
 
 # Number of sample points on each side of the grid that compares two outlines
 SHAPE_GRID = 24
@@ -218,58 +238,93 @@ def delete_layout(entry_id):
 
 
 # =============================================================================
-# Rooms and Areas
+# Units: Areas with a PDSO data silo inside
 # =============================================================================
 
 
-def get_spatial_element(doc, reference):
-    """Get a Room or Area by element id, or a Room by its number.
+def unit_scheme(doc):
+    """The area scheme of the units: the one that feeds PDSO - GSF."""
+    try:
+        from pdso.code.business.config_service import get_config
 
-    Args:
-        doc: Revit Document
-        reference: Element id (int or digits), or a Room number such as "304"
+        config = get_config(doc)
+        if config.get("exists"):
+            mapped = (config.get("area_scheme_mappings") or {}).get(GSF_PARAMETER)
+            if mapped:
+                return mapped
+    except Exception:
+        pass
+    return GSF_PARAMETER
+
+
+def get_unit(doc, reference):
+    """Get a unit's Area by Area id, by its data silo's id, or by Program UID.
+
+    A data silo or a Program UID gives the Area of unit_scheme that holds the
+    silo. Revit Rooms are not units: a Room id is refused.
     """
     text = str(reference).strip()
-    if text.isdigit():
+    if text.lstrip("-").isdigit():
         element = doc.GetElement(to_element_id(text))
-        if element is not None and layout_service.is_spatial_element(element):
+        if isinstance(element, DB.Area):
+            if element.Area <= 0:
+                raise PDSOError(
+                    "Area {} is not placed or not enclosed. It has no boundary.".format(text),
+                    409,
+                )
             return element
-    matches = [
-        room
-        for room in DB.FilteredElementCollector(doc)
-        .OfCategory(DB.BuiltInCategory.OST_Rooms)
-        .WhereElementIsNotElementType()
-        if room.Number == text and room.Area > 0
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
+        if isinstance(element, DB.Architecture.Room):
+            raise PDSOError(
+                "Element {} is a Revit Room. PDSO works with Areas: give the id of an "
+                "Area or a data silo, or a Program UID.".format(text)
+            )
+        if element is not None and pdso_kinds(doc)(element) == DATA_SILO:
+            return _area_of_silo(doc, element)
+    from pdso.code.business.program_service import find_program_by_uid
+
+    silos = find_program_by_uid(doc, text)
+    if len(silos) == 1:
+        return _area_of_silo(doc, silos[0])
+    if len(silos) > 1:
         raise PDSOError(
-            "{} Rooms have the number '{}'. Use the element id: {}".format(
-                len(matches), text, ", ".join(str(id_value(m.Id)) for m in matches)
-            ),
-            409,
+            "{} programs have the UID '{}'. Use the Area id.".format(len(silos), text), 409
         )
     raise PDSOError(
-        "'{}' is not the element id of a Room or Area, and no Room has that"
-        " number.".format(reference),
+        "'{}' is not the id of an Area or a data silo, and no program has that "
+        "UID.".format(reference),
         404,
     )
 
 
-def _spatial_info(element):
+def _area_of_silo(doc, silo):
+    """The Area of unit_scheme that holds a data silo."""
+    from pdso.code.business.program_service import containing_areas
+
+    scheme = unit_scheme(doc)
+    found = containing_areas(doc, silo).get(scheme)
+    if found is None:
+        raise PDSOError(
+            "The program (data silo {}) is in no Area of '{}'.".format(
+                id_value(silo.Id), scheme
+            ),
+            404,
+        )
+    return doc.GetElement(to_element_id(found["id"]))
+
+
+def _unit_info(element):
     level = layout_service.get_level(element)
     return {
         "id": id_value(element.Id),
-        "kind": "Area" if isinstance(element, DB.Area) else "Room",
         "number": element.Number,
-        "name": layout_service.get_room_name(element),
+        "name": layout_service.get_name(element),
+        "scheme": layout_service._scheme_name(element),
         "level": level.Name if level is not None else None,
         "area": element.Area,
     }
 
 
-def _room_instances(element):
+def _unit_instances(element):
     """The free-standing family instances that a harvest of the element takes.
 
     This uses the same rules as revit_layout_service.harvest.
@@ -313,18 +368,18 @@ def _room_instances(element):
     return instances
 
 
-def list_room_items(doc, reference):
-    """List the free-standing families in a Room or Area (what a harvest takes).
+def list_unit_items(doc, reference):
+    """List the free-standing families in a unit (what a harvest takes).
 
     Returns:
-        dict: {"room": {...}, "items": [{"id", "category", "family", "type",
+        dict: {"unit": {...}, "items": [{"id", "category", "family", "type",
             "x", "y", "z" (project elevation), "z_offset" (height above the
             level), "rotation"}]}
     """
-    element = get_spatial_element(doc, reference)
+    element = get_unit(doc, reference)
     level = layout_service.get_level(element)
     items = []
-    for instance in _room_instances(element):
+    for instance in _unit_instances(element):
         point = instance.Location.Point
         items.append(
             {
@@ -340,24 +395,24 @@ def list_room_items(doc, reference):
             }
         )
     items.sort(key=lambda item: (item["family"], item["type"], item["x"], item["y"]))
-    return {"room": _spatial_info(element), "items": items}
+    return {"unit": _unit_info(element), "items": items}
 
 
-def clear_room_items(doc, reference):
-    """Delete the free-standing families in a Room or Area.
+def clear_unit_items(doc, reference):
+    """Delete the free-standing families in a unit.
 
-    This removes what a harvest of the room takes. Use it to make a furnished
-    room empty before a layout is placed.
+    This removes what a harvest of the unit takes. Use it to make a furnished
+    unit empty before a layout is placed.
 
     Returns:
-        dict: {"room": {...}, "deleted": number of elements}
+        dict: {"unit": {...}, "deleted": number of elements}
     """
-    element = get_spatial_element(doc, reference)
-    ids = [instance.Id for instance in _room_instances(element)]
+    element = get_unit(doc, reference)
+    ids = [instance.Id for instance in _unit_instances(element)]
     if ids:
-        with Transaction(doc, "PDSO - Clear Room Layout"):
+        with Transaction(doc, "PDSO - Clear Unit Layout"):
             doc.Delete(id_list(ids))
-    return {"room": _spatial_info(element), "deleted": len(ids)}
+    return {"unit": _unit_info(element), "deleted": len(ids)}
 
 
 def describe_item(doc, element_id):
@@ -390,7 +445,7 @@ def describe_item(doc, element_id):
         "can_flip_hand": bool(instance.CanFlipHand),
         "can_flip_facing": bool(instance.CanFlipFacing),
         "level_id": id_value(instance.LevelId),
-        "level_id_for_room": id_value(layout_service._instance_level_id(instance)),
+        "level_id_for_unit": id_value(layout_service._instance_level_id(instance)),
         "host": (
             None
             if instance.Host is None
@@ -403,26 +458,31 @@ def describe_item(doc, element_id):
     }
 
 
-def rooms_overview(doc):
-    """All placed Rooms with their outline and the plan boxes of their free-standing families.
+def units_overview(doc, scheme=None):
+    """All units with their outline and the plan boxes of their free-standing families.
 
-    One pass over the model, for a Room list with plan thumbnails.
+    One pass over the model, for a unit list with plan thumbnails.
+
+    Args:
+        scheme (str): Area scheme of the units. Default: unit_scheme
 
     Returns:
-        list: [{"id", "number", "name", "level", "level_id", "area", "outline"
-            [[x, y]], "boxes" [[[x, y] x 4]], "item_count"}], sorted by level elevation
-            and Room number
+        list: [{"id", "number", "name", "scheme", "level", "level_id", "area",
+            "uid", "outline" [[x, y]], "boxes" [[[x, y] x 4]], "item_count"}],
+            sorted by level elevation and Area number
     """
-    rooms = []
+    found, _ = layout_service.units(doc, scheme=scheme or unit_scheme(doc))
+    listed = []
     by_level = {}
-    for element in _spatial_elements(doc, "rooms", None):
+    for element, silo in found:
         outline = layout_service.get_outline(element)
         if len(outline) < 3:
             continue
         level = layout_service.get_level(element)
-        info = _spatial_info(element)
+        info = _unit_info(element)
         info.update(
             {
+                "uid": parameter_access.get_value(silo, parameter_access.PROGRAM_UID),
                 "outline": [[x, y] for x, y in outline],
                 "boxes": [],
                 "item_count": 0,
@@ -433,7 +493,7 @@ def rooms_overview(doc):
         ys = [point[1] for point in outline]
         record = (info, outline, min(xs), min(ys), max(xs), max(ys))
         by_level.setdefault(id_value(element.LevelId), []).append(record)
-        rooms.append((level.ProjectElevation if level is not None else 0.0, info))
+        listed.append((level.ProjectElevation if level is not None else 0.0, info))
 
     categories = layout_service.List[DB.BuiltInCategory]()
     for category in layout_service.HARVEST_CATEGORIES:
@@ -474,24 +534,8 @@ def rooms_overview(doc):
                     ]
                 )
             break
-    rooms.sort(key=lambda pair: (pair[0], pair[1]["number"]))
-    return [info for _, info in rooms]
-
-
-def layout_sketches():
-    """Outline and item points of each catalogue layout, for plan thumbnails.
-
-    Returns:
-        dict: {layout id: {"outline" [[x, y]], "points" [[x, y, rotation]]}}
-    """
-    entries, _ = _entries()
-    sketches = {}
-    for entry in entries:
-        sketches[entry.id] = {
-            "outline": [[x, y] for x, y in entry.boundary],
-            "points": [[item.x, item.y, item.rotation] for item in entry.items],
-        }
-    return sketches
+    listed.sort(key=lambda pair: (pair[0], pair[1]["number"] or ""))
+    return [info for _, info in listed]
 
 
 # =============================================================================
@@ -499,51 +543,268 @@ def layout_sketches():
 # =============================================================================
 
 
+def suggest_program(unit, fallback):
+    """The program of a harvested unit, when none is given.
+
+    The data silo's Unit Layout Type, Program Display Name or Program Type,
+    else a dwelling (its data silo counts a bedroom, bathroom or kitchen) is
+    named by its bedroom count. Else the fallback (the Area's name), else
+    "Unit".
+    """
+    for key in (
+        "PDSO - Unit Layout Type",
+        "PDSO - Program Display Name",
+        "PDSO - Program Type",
+    ):
+        value = pdso_value(unit, key)
+        # A layout id that Pull from Catalogue wrote is not a program name
+        if value and not is_entry_id(str(value).strip()):
+            return str(value)
+    bedrooms = unit.get("bedrooms", 0)
+    if bedrooms or unit.get("bathrooms") or unit.get("kitchens"):
+        return "Studio" if bedrooms == 0 else "{} Bedroom".format(bedrooms)
+    return fallback or "Unit"
+
+
+def units_in_view(doc, view):
+    """The units of an area plan: its Areas that have a PDSO data silo inside.
+
+    Returns:
+        tuple: (areas, without): the Areas with a silo, and the placed Areas
+            with none
+    """
+    if not layout_service.is_area_plan(view):
+        raise PDSOError(
+            "'{}' is not an area plan. Harvest All Units works on the Areas of "
+            "an area plan.".format(view.Name)
+        )
+    return layout_service.areas_with_data_silo(doc, view)
+
+
+def harvest_units(
+    doc,
+    elements,
+    project_type="Other",
+    view=None,
+    name=None,
+    program=None,
+    notes="",
+    folder=None,
+    replace_previous=True,
+):
+    """Save the layout of each unit (an Area) into the catalogue.
+
+    Every harvest goes through here (Harvest Layout, Harvest All Units and the
+    API), so their entries are made the same way:
+    - program: the one given, else suggest_program;
+    - name: the one given (one element only), else
+      "<program> - <area> sf - Area <number>";
+    - id: unique in the folder;
+    - catalogue number: a shape keeps its number in the folder. Numbers are
+      given while the folder is locked (catalogue_lock);
+    - with replace_previous, an earlier harvest of the same unit is removed,
+      after the new entry is saved;
+    - the family of each item is saved in the folder's families/ folder, so
+      the layout can go into a model that doesn't have it;
+    - with a view (a plan), a PNG plan image of each unit is saved beside it.
+
+    Must be called with no open transaction.
+
+    Returns:
+        dict: "folder", "units" (one dict per saved unit: element_id,
+            element_kind, layout_id, name, program, catalogue_number, file,
+            image, family_files, skipped, layout), "failures" ([{"id",
+            "reason"}]), "replaced", "images", "image_error". Each unit also
+            has "_element", "_entry" and "_result" for the ribbon; public_report
+            leaves them out.
+    """
+    if (name or program) and len(elements) != 1:
+        raise PDSOError("A name or a program can be given for one unit only.")
+    folder = folder or get_catalogue_folder()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    used_ids = set()
+    units, failures, replaced = [], [], 0
+
+    lock = catalogue_lock(folder)
+    try:
+        lock.__enter__()
+    except RuntimeError as error:
+        raise PDSOError(str(error), 409)
+    try:
+        numbers = catalogue_numbers(folder)
+        for element in elements:
+            lock.touch()
+            try:
+                result = layout_service.harvest(element, "", "", project_type, notes)
+                if result is None:
+                    failures.append(
+                        {
+                            "id": id_value(element.Id),
+                            "reason": "The Area is not placed or not enclosed. "
+                            "It has no boundary.",
+                        }
+                    )
+                    continue
+                entry = result.entry
+                features = entry.features
+                source = entry.source
+                entry.program = program or suggest_program(
+                    features.get("unit", {}),
+                    layout_service.get_name(element)
+                    or layout_service.get_department(element),
+                )
+                label = (
+                    source.get("area_number")
+                    or source.get("area_name")
+                    or source["element_id"]
+                )
+                entry.name = name or "{} - {:.0f} sf - {} {}".format(
+                    entry.program, entry.area, source["element_kind"], label
+                )
+                base = "{}--{}--{}".format(
+                    slugify(entry.program), slugify(entry.name), stamp
+                )
+                entry.id, count = base, 1
+                while entry.id in used_ids or os.path.exists(
+                    os.path.join(folder, entry.id + ENTRY_EXTENSION)
+                ):
+                    count += 1
+                    entry.id = "{}-{}".format(base, count)
+                used_ids.add(entry.id)
+
+                number = assign_catalogue(entry, numbers)
+                # Save first: a failed save must not leave the unit with no entry
+                path = save_entry(entry, folder)
+                if replace_previous:
+                    replaced += remove_previous(folder, source, keep=path)
+                units.append(
+                    {
+                        "_element": element,
+                        "_entry": entry,
+                        "_result": result,
+                        "file": path,
+                        "catalogue_number": number,
+                        "image": None,
+                    }
+                )
+            except Exception as error:
+                failures.append(
+                    {
+                        "id": id_value(element.Id),
+                        "reason": "{}: {}".format(type(error).__name__, error),
+                    }
+                )
+    finally:
+        lock.__exit__(None, None, None)
+
+    # The family files: outside the lock, since each takes a while. A file
+    # that is there is kept, so a family is saved once per folder.
+    for unit in units:
+        try:
+            unit["family_files"] = layout_service.save_family_files(
+                doc, unit["_entry"], folder
+            )
+        except Exception as error:
+            unit["family_files"] = {"saved": [], "failed": {"(all)": str(error)}}
+
+    # A plan image of each unit, from a temporary copy of the view with tags
+    # and Area lines hidden. The copy is undone; the model does not change.
+    images, image_error = 0, ""
+    if view is not None and units:
+        imager = UnitImager(doc, view)
+        try:
+            for unit in units:
+                entry = unit["_entry"]
+                outline = [start for start, _, _ in boundary_edges(unit["_element"])]
+                image_path = unit["file"][: -len(ENTRY_EXTENSION)] + IMAGE_EXTENSION
+                if imager.export(outline, image_path):
+                    entry.features["image"] = entry.id + IMAGE_EXTENSION
+                    save_entry(entry, folder)
+                    unit["image"] = image_path
+                    images += 1
+        finally:
+            image_error = imager.error
+            imager.close()
+
+    for unit in units:
+        entry, element = unit["_entry"], unit["_element"]
+        unit.update(
+            {
+                "element_id": id_value(element.Id),
+                "element_kind": entry.source.get("element_kind"),
+                "layout_id": entry.id,
+                "name": entry.name,
+                "program": entry.program,
+                "skipped": [
+                    {"id": id_value(element_id), "label": label, "reason": reason}
+                    for element_id, label, reason in unit["_result"].skipped
+                ],
+                "layout": entry_summary(entry),
+            }
+        )
+    return {
+        "folder": folder,
+        "units": units,
+        "failures": failures,
+        "replaced": replaced,
+        "images": images,
+        "image_error": image_error,
+    }
+
+
+def public_report(report):
+    """A harvest_units report without its Revit objects, for JSON."""
+    report = dict(report)
+    report["units"] = [
+        dict((key, value) for key, value in unit.items() if not key.startswith("_"))
+        for unit in report["units"]
+    ]
+    return report
+
+
 def harvest_layout(
     doc, reference, name=None, program=None, project_type="Other", notes="", folder=None
 ):
-    """Save the layout of a Room or Area into the catalogue.
+    """Save the layout of one unit into the catalogue (see harvest_units).
+
+    Each call makes a new layout; it doesn't replace an earlier harvest of the
+    same unit.
 
     Args:
         doc: Revit Document
-        reference: Element id of a Room or Area, or a Room number
-        name (str): Name of the layout. Default: "<program> - <area> sf"
-        program (str): Program that the layout serves. Default: the Room name
+        reference: Id of the unit's Area or data silo, or its Program UID
+        name (str): Name of the layout. Default: "<program> - <area> sf - ..."
+        program (str): Program that the layout serves. Default: suggest_program
         project_type (str): For example "Residential" or "K-12"
         notes (str): Free text
         folder (str): Folder for the files. Default: the configured folder
 
     Returns:
         dict: {"layout": summary, "file": path of the JSON file, "entry": the
-            stored JSON, "skipped": [{"id", "label", "reason"}]}
+            stored JSON, "skipped": [{"id", "label", "reason"}],
+            "catalogue_number", "family_files"}
     """
-    element = get_spatial_element(doc, reference)
-    program = program or layout_service.get_room_name(element)
-    if not program:
-        raise PDSOError("Give a program. The Room has no name.")
-    name = name or "{} - {:.0f} sf".format(program, element.Area)
-
-    result = layout_service.harvest(element, name, program, project_type, notes)
-    if result is None:
-        raise PDSOError(
-            "The Room or Area is not placed or not enclosed. It has no boundary.", 409
-        )
-    target_folder = folder or get_catalogue_folder()
-    # The id has a time stamp to the second. A second harvest in the same
-    # second gets "-2", "-3"... instead of overwriting the first.
-    base, count = result.entry.id, 1
-    while os.path.exists(os.path.join(target_folder, result.entry.id + ENTRY_EXTENSION)):
-        count += 1
-        result.entry.id = "{}-{}".format(base, count)
-    path = save_entry(result.entry, target_folder)
+    element = get_unit(doc, reference)
+    report = harvest_units(
+        doc,
+        [element],
+        project_type,
+        name=name,
+        program=program,
+        notes=notes,
+        folder=folder,
+        replace_previous=False,
+    )
+    if report["failures"]:
+        raise PDSOError(report["failures"][0]["reason"], 409)
+    unit = report["units"][0]
     return {
-        "layout": entry_summary(result.entry),
-        "file": path,
-        "entry": result.entry.to_dict(),
-        "skipped": [
-            {"id": id_value(element_id), "label": label, "reason": reason}
-            for element_id, label, reason in result.skipped
-        ],
+        "layout": unit["layout"],
+        "file": unit["file"],
+        "entry": unit["_entry"].to_dict(),
+        "skipped": unit["skipped"],
+        "catalogue_number": unit["catalogue_number"],
+        "family_files": unit["family_files"],
     }
 
 
@@ -561,12 +822,12 @@ def _placement_info(placement):
 
 
 def recommend_layouts(doc, reference, program=None, limit=10):
-    """Rank the catalogue layouts for a target Room or Area.
+    """Rank the catalogue layouts for a target unit.
 
     Args:
         doc: Revit Document
-        reference: Element id of a Room or Area, or a Room number
-        program (str): Layouts for this program come first. Default: the Room name
+        reference: Id of the unit's Area or data silo, or its Program UID
+        program (str): Layouts for this program come first. Default: the Area name
         limit (int): Largest number of layouts in the reply
 
     Returns:
@@ -574,20 +835,20 @@ def recommend_layouts(doc, reference, program=None, limit=10):
             "program", "score", "area_score", "snug_score", "program_match",
             "shape_match", "placement"}], "rejected": [{"layout_id", "reason"}]}
     """
-    element = get_spatial_element(doc, reference)
+    element = get_unit(doc, reference)
     frame, local_outline, area = layout_service.describe_target(element)
     if frame is None:
         raise PDSOError(
-            "The Room or Area is not placed or not enclosed. It has no boundary.", 409
+            "The Area is not placed or not enclosed. It has no boundary.", 409
         )
     if program is None:
-        program = layout_service.get_room_name(element)
+        program = layout_service.get_name(element)
 
     entries, errors = _entries()
     recommendations, rejected = recommend(
         entries, frame.width, frame.depth, area, local_outline, program
     )
-    target = _spatial_info(element)
+    target = _unit_info(element)
     target.update({"width": frame.width, "depth": frame.depth, "program": program})
     return {
         "target": target,
@@ -613,28 +874,29 @@ def recommend_layouts(doc, reference, program=None, limit=10):
 
 
 def place_layout(doc, reference, entry_id, clear_first=False):
-    """Place a catalogue layout into a target Room or Area.
+    """Place a catalogue layout into a target unit.
 
     The recommender selects the orientation. If the layout fits in no
     orientation, nothing is placed.
 
     Args:
         clear_first (bool): Delete the free-standing families in the target
-            first (as clear_room_items does). The delete and the placement
+            first (as clear_unit_items does). The delete and the placement
             are one transaction: if the placement fails, nothing is deleted.
 
     Returns:
         dict: {"target": {...}, "layout_id", "placement", "placed": [element
-            ids], "missing": {"Family : Type": count}, "tagged_programs":
+            ids], "missing": {"Family : Type": count}, "loaded_families":
+            {family name: where it came from}, "tagged_programs":
             [element ids], "deleted": number of elements deleted first,
             "warnings": [str]}
     """
-    element = get_spatial_element(doc, reference)
+    element = get_unit(doc, reference)
     entry = get_entry(entry_id)
     frame, local_outline, area = layout_service.describe_target(element)
     if frame is None:
         raise PDSOError(
-            "The Room or Area is not placed or not enclosed. It has no boundary.", 409
+            "The Area is not placed or not enclosed. It has no boundary.", 409
         )
     recommendations, rejected = recommend(
         [entry], frame.width, frame.depth, area, local_outline, entry.program
@@ -645,16 +907,22 @@ def place_layout(doc, reference, entry_id, clear_first=False):
             409,
         )
     chosen = recommendations[0]
+    placement = refine_placement(
+        entry, chosen.placement, frame.width, frame.depth, local_outline
+    )
+    # Families the model hasn't got are loaded first (their own undo step):
+    # from the family files of the catalogue, or from another open model
+    families = layout_service.load_missing_families(doc, entry, catalogue_folders())
     deleted = 0
     with Transaction(doc, "PDSO - Place Unit Layout") as transaction:
         if clear_first:
-            ids = [instance.Id for instance in _room_instances(element)]
+            ids = [instance.Id for instance in _unit_instances(element)]
             if ids:
                 doc.Delete(id_list(ids))
             deleted = len(ids)
-        result = layout_service.create(element, entry, chosen.placement)
+        result = layout_service.create(element, entry, placement)
         # create() skips items whose family is not loaded. If it placed
-        # nothing, the room must not stay emptied: roll everything back.
+        # nothing, the unit must not stay emptied: roll everything back.
         if clear_first and deleted and not result.placed:
             reasons = list(result.warnings)
             if result.missing:
@@ -665,24 +933,25 @@ def place_layout(doc, reference, entry_id, clear_first=False):
                 )
             raise PDSOError(
                 "No item of layout '{}' could be placed, so the furniture in the "
-                "room was not deleted. {}".format(entry_id, " ".join(reasons)).strip(),
+                "unit was not deleted. {}".format(entry_id, " ".join(reasons)).strip(),
                 409,
             )
     return {
         "deleted": deleted,
-        "target": _spatial_info(element),
+        "target": _unit_info(element),
         "layout_id": entry.id,
         "score": chosen.score,
-        "placement": _placement_info(chosen.placement),
+        "placement": _placement_info(placement),
         "placed": [id_value(element_id) for element_id in result.placed],
         "missing": result.missing,
+        "loaded_families": families["loaded"],
         "tagged_programs": [id_value(element_id) for element_id in result.tagged_silos],
         "warnings": list(result.warnings) + list(transaction.warnings),
     }
 
 
 # =============================================================================
-# Similar rooms
+# Similar units
 # =============================================================================
 
 
@@ -694,7 +963,7 @@ def shape_match(entry, frame, local_outline):
 
     Args:
         entry (LayoutEntry): The layout
-        frame (RoomFrame): Frame of the target
+        frame (UnitFrame): Frame of the target
         local_outline (list): Target outline in its frame
 
     Returns:
@@ -726,61 +995,46 @@ def area_match(entry, area):
     return max(0.0, 1.0 - abs(area - entry.area) / entry.area)
 
 
-def _spatial_elements(doc, kind, level):
-    level_element = find_level(doc, level) if level is not None else None
-    category = (
-        DB.BuiltInCategory.OST_Areas if kind == "areas" else DB.BuiltInCategory.OST_Rooms
-    )
-    elements = []
-    for element in (
-        DB.FilteredElementCollector(doc)
-        .OfCategory(category)
-        .WhereElementIsNotElementType()
-    ):
-        if not layout_service.is_spatial_element(element) or element.Area <= 0:
-            continue
-        if level_element is not None and element.LevelId != level_element.Id:
-            continue
-        elements.append(element)
-    return elements
+def find_similar_units(doc, entry_id, scheme=None, level=None, limit=20):
+    """Find the units of a model that are similar to a layout.
 
-
-def find_similar_rooms(doc, entry_id, kind="rooms", level=None, limit=20):
-    """Find the Rooms (or Areas) of a model that are similar to a layout.
-
-    Each Room gets these numbers:
+    Each unit gets these numbers:
         similarity: the average of area_match and shape_match (0.0 to 1.0). It
             does not depend on the items of the layout
         area_match: how well the two areas agree
         shape_match: how well the two outlines cover each other
-        fits: True if all items of the layout land in the Room in an orientation
+        fits: True if all items of the layout land in the unit in an orientation
         score: the recommender's score if the layout fits, else 0.0
 
     Args:
         doc: Revit Document
         entry_id (str): Id of the layout
-        kind (str): "rooms" or "areas"
+        scheme (str): Area scheme of the units. Default: unit_scheme
         level: Level name or id (optional)
-        limit (int): Largest number of Rooms in the reply
+        limit (int): Largest number of units in the reply
 
     Returns:
-        dict: {"layout": summary, "rooms_checked": int, "rooms": [{"id",
-            "number", "name", "level", "area", "similarity", "area_match",
-            "shape_match", "fits", "score", "placement", "reason"}]} ranked by
-            similarity
+        dict: {"layout": summary, "units_checked": int, "units": [{"id",
+            "number", "name", "scheme", "level", "area", "similarity",
+            "area_match", "shape_match", "fits", "score", "placement",
+            "reason"}]} ranked by similarity
     """
-    if kind not in ("rooms", "areas"):
-        raise PDSOError("kind must be 'rooms' or 'areas'.")
     entry = get_entry(entry_id)
     source_id = str(entry.source.get("element_id", ""))
     source_project = entry.source.get("project")
+    level_element = find_level(doc, level) if level is not None else None
+    found, _ = layout_service.units(
+        doc,
+        scheme=scheme or unit_scheme(doc),
+        level_id=id_value(level_element.Id) if level_element is not None else None,
+    )
 
-    rooms = []
-    for element in _spatial_elements(doc, kind, level):
+    similar = []
+    for element, _silo in found:
         frame, local_outline, area = layout_service.describe_target(element)
         if frame is None:
             continue
-        info = _spatial_info(element)
+        info = _unit_info(element)
         info["is_source"] = (
             str(info["id"]) == source_id and doc.Title == source_project
         )
@@ -804,15 +1058,14 @@ def find_similar_rooms(doc, entry_id, kind="rooms", level=None, limit=20):
                 "reason": None if recommendations else rejected[0][1],
             }
         )
-        rooms.append(info)
+        similar.append(info)
 
-    rooms.sort(key=lambda item: (-item["similarity"], -item["shape_match"]))
+    similar.sort(key=lambda item: (-item["similarity"], -item["shape_match"]))
     return {
         "layout": entry_summary(entry),
-        "rooms_checked": len(rooms),
-        "rooms": rooms[: int(limit)],
+        "units_checked": len(similar),
+        "units": similar[: int(limit)],
     }
-
 
 
 # =============================================================================
@@ -943,9 +1196,9 @@ def _box_for(known, hand, facing):
 
 
 def _current_items(element):
-    """The free-standing items in a Room or Area now, for a preview."""
+    """The free-standing items in a unit now, for a preview."""
     current = []
-    for instance in _room_instances(element):
+    for instance in _unit_instances(element):
         point = instance.Location.Point
         angle = instance.Location.Rotation
         box = _own_box(instance)
@@ -970,21 +1223,21 @@ def _current_items(element):
     return current
 
 
-def preview_layout_in_room(doc, reference, entry_id, lookups=None):
-    """Data for a picture of a layout in a Room or Area. The model does not change.
+def preview_layout_in_unit(doc, reference, entry_id, lookups=None):
+    """Data for a picture of a layout in a unit. The model does not change.
 
     The items of the layout get the positions and rotations that place_layout
     would use. If the layout does not fit, the orientation with the best
-    outline match is used, and each item says if it is inside the Room.
+    outline match is used, and each item says if it is inside the unit.
     All points are in project coordinates.
 
     lookups (dict, optional): pass the same dict to several calls on a model
     that doesn't change between them (the Pull window's rows). The family
-    types, their plan boxes and each Room's current items are then collected
+    types, their plan boxes and each unit's current items are then collected
     once, not once per call.
 
     Returns:
-        dict: {"room": {..., "outline", "width", "depth", "frame_angle"},
+        dict: {"unit": {..., "outline", "width", "depth", "frame_angle"},
             "layout": summary, "match": {"similarity", "area_match",
             "shape_match", "fits", "score", "reason", "placement",
             "orientation_from", "items_outside", "items_not_loaded"},
@@ -993,13 +1246,13 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
             "current_items": [{"id", "category", "family", "type", "x", "y",
             "rotation", "footprint"}]}
     """
-    element = get_spatial_element(doc, reference)
+    element = get_unit(doc, reference)
     entry = get_entry(entry_id)
     outline = layout_service.get_outline(element)
     frame, local_outline, area = layout_service.describe_target(element)
     if frame is None:
         raise PDSOError(
-            "The Room or Area is not placed or not enclosed. It has no boundary.", 409
+            "The Area is not placed or not enclosed. It has no boundary.", 409
         )
 
     recommendations, rejected = recommend(
@@ -1008,7 +1261,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
     shape, shape_orientation = shape_match(entry, frame, local_outline)
     area_score = area_match(entry, area)
     if recommendations:
-        placement = recommendations[0].placement
+        placement = refine_placement(
+            entry, recommendations[0].placement, frame.width, frame.depth, local_outline
+        )
         orientation_from = "placement"
     else:
         turns, mirror = shape_orientation
@@ -1021,6 +1276,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
     if "symbols" not in lookups:
         lookups["symbols"] = layout_service._symbol_lookup(doc)
     symbols = lookups["symbols"]
+    # Families that place_layout would load first count as loaded
+    loadable = layout_service.loadable_families(doc, entry, catalogue_folders())
+    to_load = 0
     boxes = lookups.setdefault("boxes", {})
     missing = set(item.symbol_key for item in entry.items) - set(boxes)
     if missing:
@@ -1038,6 +1296,9 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
         )
         inside = point_in_or_near_polygon(local_point, local_outline, FIT_TOLERANCE)
         loaded = item.symbol_key in symbols
+        if not loaded and item.family in loadable:
+            loaded = True
+            to_load += 1
         outside += 0 if inside else 1
         not_loaded += 0 if loaded else 1
         known = boxes.get(item.symbol_key)
@@ -1046,7 +1307,7 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
         box = _box_for(known, hand, facing)
         footprint = _box_corners(box, x, y, angle) if box else None
         # place_layout checks the insertion point only. The body of an item
-        # can be in a wall: a corner of its plan box outside the Room outline.
+        # can be in a wall: a corner of its plan box outside the unit outline.
         is_across = bool(
             inside
             and footprint
@@ -1074,26 +1335,26 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
             }
         )
 
-    current_by_room = lookups.setdefault("current", {})
-    current = current_by_room.get(id_value(element.Id))
+    current_by_unit = lookups.setdefault("current", {})
+    current = current_by_unit.get(id_value(element.Id))
     if current is None:
-        current = current_by_room[id_value(element.Id)] = _current_items(element)
+        current = current_by_unit[id_value(element.Id)] = _current_items(element)
 
-    room = _spatial_info(element)
-    room.update(
+    unit = _unit_info(element)
+    unit.update(
         {
             "outline": [[x, y] for x, y in outline],
             "width": frame.width,
             "depth": frame.depth,
             "frame_angle": frame.angle,
             "is_source": (
-                str(room["id"]) == str(entry.source.get("element_id", ""))
+                str(unit["id"]) == str(entry.source.get("element_id", ""))
                 and doc.Title == entry.source.get("project")
             ),
         }
     )
     return {
-        "room": room,
+        "unit": unit,
         "layout": entry_summary(entry),
         "match": {
             "similarity": (area_score + shape) / 2.0,
@@ -1107,6 +1368,8 @@ def preview_layout_in_room(doc, reference, entry_id, lookups=None):
             "items_outside": outside,
             "items_across_outline": across,
             "items_not_loaded": not_loaded,
+            "items_to_load": to_load,
+            "families_to_load": sorted(loadable),
         },
         "layout_outline": [
             list(frame.to_world(point))

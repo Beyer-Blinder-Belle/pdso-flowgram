@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PDSO Program Service - create, read, change, delete and select programs.
 
-A "program" (a room type or unit type in a building program) is one Data Silo:
+A "program" (a space type or unit type in a building program) is one Data Silo:
 an instance of the Data Silo family that holds the PDSO parameters. A Data Silo
 gets its areas from the Areas that contain its location point on its level.
 

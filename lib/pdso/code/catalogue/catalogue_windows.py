@@ -2,7 +2,7 @@
 """Windows of the Unit Layout Catalogue buttons.
 
 The suggestion window shows a ranked list: one row for each suggestion, with a
-plan thumbnail, the data of the Room or the layout, and the match in percent.
+plan thumbnail, the data of the unit or the layout, and the match in percent.
 The best row is highlighted. A double-click on a row, or the action button,
 accepts the row.
 
@@ -53,8 +53,7 @@ from System.Windows.Controls import (  # noqa: E402
     TextBlock,
     TextBox,
 )
-from System.Windows import Visibility  # noqa: E402
-from System.Windows.Input import Cursors, Key  # noqa: E402
+from System.Windows.Input import Cursors  # noqa: E402
 from System.Windows.Interop import WindowInteropHelper  # noqa: E402
 from System.Windows.Media import (  # noqa: E402
     Color,
@@ -86,8 +85,8 @@ WARN = brush(176, 96, 0)
 BAD = brush(196, 40, 40)
 STATE = {"good": GOOD, "warn": WARN, "bad": BAD}
 
-ROOM_FILL = brush(250, 250, 247)
-ROOM_LINE = brush(35, 35, 35)
+UNIT_FILL = brush(250, 250, 247)
+UNIT_LINE = brush(35, 35, 35)
 CURRENT_FILL = brush(214, 214, 214)
 CURRENT_LINE = brush(165, 165, 165)
 ITEM_FILL = brush(33, 111, 219, 95)
@@ -184,10 +183,10 @@ def _turned(point, turn):
     return (point[1], -point[0]) if turn else (point[0], point[1])
 
 
-def plan_extent(preview, turn=False, room=True):
+def plan_extent(preview, turn=False, unit=True):
     points = list(preview["layout_outline"])
-    if room:
-        points = points + list(preview["room"]["outline"])
+    if unit:
+        points = points + list(preview["unit"]["outline"])
     points = [_turned(point, turn) for point in points]
     xs = [point[0] for point in points]
     ys = [point[1] for point in points]
@@ -212,22 +211,22 @@ def _polygon(canvas, points, fill, stroke, thickness, dash=None):
     canvas.Children.Add(shape)
 
 
-def plan_canvas(preview, width, height, scale, turn=False, room=True):
-    """Draw a Room with the items of a layout in it.
+def plan_canvas(preview, width, height, scale, turn=False, unit=True):
+    """Draw a unit with the items of a layout in it.
 
     Args:
-        preview (dict): Reply of catalogue_api_service.preview_layout_in_room
+        preview (dict): Reply of catalogue_api_service.preview_layout_in_unit
         width, height (float): Size of the canvas
         scale (float): Pixels for each foot
         turn (bool): Turn the plan 90 degrees clockwise
-        room (bool): Draw the Room and its current items. False: only the layout
+        unit (bool): Draw the unit and its current items. False: only the layout
     """
     canvas = Canvas()
     canvas.Width = width
     canvas.Height = height
     canvas.Background = WHITE
     canvas.ClipToBounds = True
-    min_x, min_y, max_x, max_y = plan_extent(preview, turn, room)
+    min_x, min_y, max_x, max_y = plan_extent(preview, turn, unit)
     left = width / 2.0 - (max_x - min_x) * scale / 2.0
     top = height / 2.0 - (max_y - min_y) * scale / 2.0
 
@@ -235,8 +234,8 @@ def plan_canvas(preview, width, height, scale, turn=False, room=True):
         x, y = _turned(point, turn)
         return (left + (x - min_x) * scale, top + (max_y - y) * scale)
 
-    if room:
-        _polygon(canvas, [px(p) for p in preview["room"]["outline"]], ROOM_FILL, ROOM_LINE, 1.6)
+    if unit:
+        _polygon(canvas, [px(p) for p in preview["unit"]["outline"]], UNIT_FILL, UNIT_LINE, 1.6)
         for item in preview["current_items"]:
             if item["footprint"]:
                 _polygon(
@@ -246,13 +245,13 @@ def plan_canvas(preview, width, height, scale, turn=False, room=True):
             canvas, [px(p) for p in preview["layout_outline"]], None, LAYOUT_OUTLINE, 1.0, (4, 3)
         )
     else:
-        _polygon(canvas, [px(p) for p in preview["layout_outline"]], ROOM_FILL, ROOM_LINE, 1.6)
+        _polygon(canvas, [px(p) for p in preview["layout_outline"]], UNIT_FILL, UNIT_LINE, 1.6)
 
     for item in preview["items"]:
         fill, line = ITEM_FILL, ITEM_LINE
-        if room and item.get("across"):
+        if unit and item.get("across"):
             fill, line = CROSS_FILL, CROSS_LINE
-        if room and (not item["inside"] or not item["loaded"]):
+        if unit and (not item["inside"] or not item["loaded"]):
             fill, line = OUTSIDE_FILL, OUTSIDE_LINE
         x, y = px((item["x"], item["y"]))
         if item["footprint"]:
@@ -305,7 +304,7 @@ def sketch_canvas(outline, width, height, boxes=None, points=None):
     def px(point):
         return (left + (point[0] - min_x) * scale, top + (max_y - point[1]) * scale)
 
-    _polygon(canvas, [px(p) for p in outline], ROOM_FILL, ROOM_LINE, 1.2)
+    _polygon(canvas, [px(p) for p in outline], UNIT_FILL, UNIT_LINE, 1.2)
     for box in boxes or []:
         _polygon(canvas, [px(p) for p in box], CURRENT_FILL, CURRENT_LINE, 0.5)
     for point in points or []:
@@ -316,7 +315,7 @@ def sketch_canvas(outline, width, height, boxes=None, points=None):
         Canvas.SetLeft(dot, x - dot.Width / 2.0)
         Canvas.SetTop(dot, y - dot.Height / 2.0)
         canvas.Children.Add(dot)
-    _polygon(canvas, [px(p) for p in outline], None, ROOM_LINE, 1.2)
+    _polygon(canvas, [px(p) for p in outline], None, UNIT_LINE, 1.2)
     return canvas
 
 
@@ -341,38 +340,43 @@ def plan_image(path, width, height):
 
 
 def fit_line(preview):
-    """One line that says if the layout fits the Room, and "good", "warn" or "bad"."""
+    """One line that says if the layout fits the unit, and "good", "warn" or "bad"."""
     match = preview["match"]
     count = len(preview["items"])
     if match["fits"]:
-        line = "Fits: all {} insertion points are in the Room ({})".format(
+        line = "Fits: all {} insertion points are in the unit ({})".format(
             count, match["placement"]["description"]
         )
         state = "good"
         across = match.get("items_across_outline", 0)
         if across:
-            line += ", but {} item{} across the Room outline".format(
+            line += ", but {} item{} across the unit outline".format(
                 across, " goes" if across == 1 else "s go"
             )
             state = "warn"
+        if match.get("families_to_load"):
+            line += "; {} famil{} will be loaded".format(
+                len(match["families_to_load"]),
+                "y" if len(match["families_to_load"]) == 1 else "ies",
+            )
         if match["items_not_loaded"]:
             line += "; {} items: family not loaded".format(match["items_not_loaded"])
             state = "warn"
         return line, state
     if match["items_outside"]:
         return (
-            "Does not fit: {} of {} items are outside the Room".format(
+            "Does not fit: {} of {} items are outside the unit".format(
                 match["items_outside"], count
             ),
             "bad",
         )
     return (
-        "Does not fit: the layout ({:.1f} x {:.1f} ft) is larger than the Room"
+        "Does not fit: the layout ({:.1f} x {:.1f} ft) is larger than the unit"
         " ({:.1f} x {:.1f} ft)".format(
             preview["layout"]["width"],
             preview["layout"]["depth"],
-            preview["room"]["width"],
-            preview["room"]["depth"],
+            preview["unit"]["width"],
+            preview["unit"]["depth"],
         ),
         "bad",
     )
@@ -394,7 +398,7 @@ class SuggestionWindow(object):
         action_label (str): Text of the action button
         option_label (str): Text of a check box, or None
         reference (dict): The original, shown as a fixed first row for a
-            comparison by eye: "preview", "room" (draw the Room, or only the
+            comparison by eye: "preview", "unit" (draw the unit, or only the
             layout), "tag", "title", "lines", "right"
         owner_handle: Window handle of Revit
     """
@@ -417,7 +421,7 @@ class SuggestionWindow(object):
 
         extents = [plan_extent(row["preview"]) for row in rows]
         if reference is not None:
-            extents.append(plan_extent(reference["preview"], room=reference["room"]))
+            extents.append(plan_extent(reference["preview"], unit=reference["unit"]))
         span_x = max([e[2] - e[0] for e in extents] + [1.0])
         span_y = max([e[3] - e[1] for e in extents] + [1.0])
         self.turn = span_y > span_x
@@ -468,8 +472,8 @@ class SuggestionWindow(object):
             self.check.VerticalContentAlignment = VerticalAlignment.Center
             left.Children.Add(self.check)
         legend = text(
-            "Blue: items of the layout.  Grey: furniture in the Room now.  Dashed: outline of"
-            " the source room.  Amber: item across a wall.  Red: item outside."
+            "Blue: items of the layout.  Grey: furniture in the unit now.  Dashed: outline of"
+            " the source unit.  Amber: item across a wall.  Red: item outside."
             + ("  Plans turned 90 deg." if self.turn else ""),
             11,
             MUTED,
@@ -541,7 +545,7 @@ class SuggestionWindow(object):
                 self.ROW_HEIGHT - 4,
                 self.scale,
                 self.turn,
-                room=reference["room"],
+                unit=reference["unit"],
             )
         grid.Children.Add(picture)
         middle = StackPanel()
@@ -665,18 +669,18 @@ class SuggestionWindow(object):
 
 
 class HarvestWindow(object):
-    """Ask for the Room and the names of a new layout.
+    """Ask for the unit and the names of a new layout.
 
     Args:
-        describe_room: Function (text) -> dict {"number", "name", "level",
-            "area", "items", "outline", "boxes"} or None if no Room has that
-            number
-        room_number (str): Number of the selected Room, or ""
+        describe_unit: Function (Program UID) -> dict {"uid", "number", "name",
+            "level", "area", "items", "outline", "boxes"} or None if no unit
+            has that UID
+        uid (str): Program UID of the selected unit, or ""
         owner_handle: Window handle of Revit
     """
 
-    def __init__(self, describe_room, room_number="", owner_handle=None):
-        self.describe_room = describe_room
+    def __init__(self, describe_unit, uid="", owner_handle=None):
+        self.describe_unit = describe_unit
         self.result = None
         self._auto_name = ""
         self._auto_program = ""
@@ -688,7 +692,7 @@ class HarvestWindow(object):
         side.Width = 270
         side.Margin = Thickness(22, 44, 0, 0)
         DockPanel.SetDock(side, Dock.Right)
-        side.Children.Add(text("Room preview", 12, MUTED))
+        side.Children.Add(text("Unit preview", 12, MUTED))
         self.preview = Border()
         self.preview.BorderBrush = brush(200, 200, 200)
         self.preview.BorderThickness = Thickness(1)
@@ -702,7 +706,10 @@ class HarvestWindow(object):
         outer.Children.Add(root)
         root.Children.Add(text("Harvest Layout", 22))
         hint = text(
-            "Save the free-standing furniture of a Room as one layout in the catalogue.", 13, MUTED
+            "Save the free-standing furniture of a unit (an Area with a PDSO data silo)"
+            " as one layout in the catalogue.",
+            13,
+            MUTED,
         )
         hint.Margin = Thickness(0, 2, 0, 12)
         root.Children.Add(hint)
@@ -738,8 +745,10 @@ class HarvestWindow(object):
             control.Padding = Thickness(6, 0, 6, 0)
             return control
 
-        self.room_box = add("Room number", box())
-        self.room_info = add("", text("Type the number of a Room.", 13, MUTED, wrap=True))
+        self.unit_box = add("Program UID", box())
+        self.unit_info = add(
+            "", text("Type the Program UID of a unit, or select it first.", 13, MUTED, wrap=True)
+        )
         self.name_box = add("Layout name", box())
         self.program_box = add("Program", box())
         self.type_box = add("Project type", ComboBox())
@@ -759,33 +768,34 @@ class HarvestWindow(object):
         buttons.Children.Add(button("Cancel", 110, cancel=True))
         root.Children.Add(buttons)
 
-        self.room_box.TextChanged += self._room_changed
-        self.room_box.Text = room_number or ""
-        if room_number:
-            self.room_info.Text = "From the selection: " + self.room_info.Text
-        self.window.Loaded += lambda sender, args: self.room_box.Focus()
+        self.unit_box.TextChanged += self._unit_changed
+        self.unit_box.Text = uid or ""
+        if uid:
+            self.unit_info.Text = "From the selection: " + self.unit_info.Text
+        self.window.Loaded += lambda sender, args: self.unit_box.Focus()
 
-    def _room_changed(self, sender, args):
-        room = self.describe_room(self.room_box.Text.strip())
-        if room is None:
-            self.room_info.Text = "No Room has this number."
-            self.room_info.Foreground = MUTED
+    def _unit_changed(self, sender, args):
+        unit = self.describe_unit(self.unit_box.Text.strip())
+        if unit is None:
+            self.unit_info.Text = "No unit has this Program UID."
+            self.unit_info.Foreground = MUTED
             self.ok.IsEnabled = False
             self.preview.Child = None
             return
-        self.preview.Child = sketch_canvas(room["outline"], 268, 208, room["boxes"])
-        self.room_info.Text = "{} on {}, {:,.0f} SF, {} free-standing items".format(
-            room["name"], room["level"], room["area"], room["items"]
+        self.preview.Child = sketch_canvas(unit["outline"], 268, 208, unit["boxes"])
+        area_name = unit["name"] or ""
+        self.unit_info.Text = "Area {} {} on {}, {:,.0f} SF, {} free-standing items".format(
+            unit["number"] or "", area_name, unit["level"], unit["area"], unit["items"]
         )
-        self.room_info.Foreground = GOOD
+        self.unit_info.Foreground = GOOD
         self.ok.IsEnabled = True
-        name = "{} {} ({})".format(room["name"], room["number"], room["level"])
+        name = "{} {} ({})".format(area_name, unit["uid"], unit["level"]).strip()
         if self.name_box.Text in ("", self._auto_name):
             self.name_box.Text = name
         if self.program_box.Text in ("", self._auto_program):
-            self.program_box.Text = room["name"]
-        self._auto_name, self._auto_program = name, room["name"]
-        lowered = room["name"].lower()
+            self.program_box.Text = area_name
+        self._auto_name, self._auto_program = name, area_name
+        lowered = area_name.lower()
         guess = "Other"
         if "office" in lowered:
             guess = "Office"
@@ -797,7 +807,7 @@ class HarvestWindow(object):
         if not self.name_box.Text.strip() or not self.program_box.Text.strip():
             return
         self.result = {
-            "room": self.room_box.Text.strip(),
+            "unit": self.unit_box.Text.strip(),
             "name": self.name_box.Text.strip(),
             "program": self.program_box.Text.strip(),
             "project_type": str(self.type_box.SelectedItem),
@@ -873,7 +883,7 @@ def show_layout_result(harvest, owner_handle=None):
     def px(point):
         return (left + point[0] * scale, top + (entry["depth"] - point[1]) * scale)
 
-    _polygon(canvas, [px(p) for p in entry["boundary"]], ROOM_FILL, ROOM_LINE, 1.6)
+    _polygon(canvas, [px(p) for p in entry["boundary"]], UNIT_FILL, UNIT_LINE, 1.6)
     for item in entry["items"]:
         x, y = px((item["x"], item["y"]))
         dot = Ellipse()
@@ -909,7 +919,7 @@ def show_layout_result(harvest, owner_handle=None):
         right.Children.Add(text("... and {} more types".format(len(families) - 11), 13, MUTED))
     stored = text(
         "Each item has its position, rotation, flips, height and instance parameters,"
-        " in the frame of the room.",
+        " in the frame of the unit.",
         13,
         MUTED,
         wrap=True,
@@ -941,219 +951,3 @@ def show_message(title, lines, owner_handle=None):
     buttons.Children.Add(button("OK", 110, default=True, cancel=True))
     root.Children.Add(buttons)
     window.ShowDialog()
-
-
-class PickerWindow(object):
-    """A table with a plan thumbnail for each row and a search filter.
-
-    Args:
-        title (str): Title in the window
-        hint (str): Text below the title
-        columns (list): (heading, relative width) pairs
-        rows (list): dicts with "values" (one text for each column), "thumb"
-            (function () -> Canvas), "data", and "key" (optional, a text
-            that selects the row at the start)
-        action_label (str): Text of the action button
-        selected_key (str): Key of the row that is selected at the start
-        owner_handle: Window handle of Revit
-        alternate_label (str): Text of a second button, or None. A click on
-            it closes the window and sets ``alternate`` to True
-    """
-
-    THUMB_WIDTH = 96.0
-    ROW_HEIGHT = 50.0
-
-    def __init__(
-        self, title, hint, columns, rows, action_label, selected_key=None,
-        owner_handle=None, alternate_label=None,
-    ):
-        self.rows = rows
-        self.columns = columns
-        self.result = None
-        self.alternate = False
-        self._selected = None
-        self._parts = []
-        self.window = base_window(1180, 700, owner_handle)
-        root = DockPanel()
-        root.Margin = Thickness(18, 10, 18, 12)
-        self.window.Content = root
-
-        head = DockPanel()
-        DockPanel.SetDock(head, Dock.Top)
-        search = StackPanel()
-        search.Orientation = Orientation.Horizontal
-        search.VerticalAlignment = VerticalAlignment.Bottom
-        DockPanel.SetDock(search, Dock.Right)
-        label = text("Search", 13, MUTED)
-        label.VerticalAlignment = VerticalAlignment.Center
-        label.Margin = Thickness(0, 0, 8, 0)
-        search.Children.Add(label)
-        self.search_box = TextBox()
-        self.search_box.Width = 280
-        self.search_box.Height = 30
-        self.search_box.FontSize = 14
-        self.search_box.VerticalContentAlignment = VerticalAlignment.Center
-        self.search_box.Padding = Thickness(6, 0, 6, 0)
-        search.Children.Add(self.search_box)
-        self.count = text("", 12.5, MUTED)
-        self.count.VerticalAlignment = VerticalAlignment.Center
-        self.count.Margin = Thickness(10, 0, 0, 0)
-        self.count.Width = 70
-        search.Children.Add(self.count)
-        head.Children.Add(search)
-        titles = StackPanel()
-        titles.Children.Add(text(title, 21))
-        titles.Children.Add(text(hint, 13, MUTED))
-        head.Children.Add(titles)
-        root.Children.Add(head)
-
-        bottom = DockPanel()
-        bottom.Margin = Thickness(0, 10, 0, 0)
-        DockPanel.SetDock(bottom, Dock.Bottom)
-        buttons = StackPanel()
-        buttons.Orientation = Orientation.Horizontal
-        DockPanel.SetDock(buttons, Dock.Right)
-        self.action = button(action_label, 190, default=True)
-        self.action.Click += self._accept
-        buttons.Children.Add(self.action)
-        buttons.Children.Add(button("Cancel", 110, cancel=True))
-        bottom.Children.Add(buttons)
-        other = StackPanel()
-        other.Orientation = Orientation.Horizontal
-        if alternate_label:
-            switch = button(alternate_label, 190)
-            switch.Margin = Thickness(0)
-            switch.Click += self._switch
-            other.Children.Add(switch)
-        bottom.Children.Add(other)
-        root.Children.Add(bottom)
-
-        header = self._grid([text(name, 12, MUTED, bold=True) for name, _ in columns], None)
-        header.Margin = Thickness(0, 10, 18, 4)
-        DockPanel.SetDock(header, Dock.Top)
-        root.Children.Add(header)
-
-        self.scroll = ScrollViewer()
-        self.scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Visible
-        self.scroll.BorderBrush = brush(200, 200, 200)
-        self.scroll.BorderThickness = Thickness(1)
-        stack = StackPanel()
-        self.scroll.Content = stack
-        root.Children.Add(self.scroll)
-        start = 0
-        for index, row in enumerate(rows):
-            stack.Children.Add(self._row(index, row))
-            if selected_key and row.get("key") == selected_key:
-                start = index
-        self.search_box.TextChanged += self._filter
-        self.window.PreviewKeyDown += self._key
-        self._filter(None, None)
-        if rows:
-            self._select(start)
-        self.window.Loaded += self._loaded
-
-    def _loaded(self, sender, args):
-        self.search_box.Focus()
-        if self._selected is not None:
-            self._parts[self._selected][0].BringIntoView()
-
-    def _grid(self, cells, thumb):
-        grid = Grid()
-        first = ColumnDefinition()
-        first.Width = GridLength(self.THUMB_WIDTH + 14)
-        grid.ColumnDefinitions.Add(first)
-        for _, width in self.columns:
-            column = ColumnDefinition()
-            column.Width = GridLength(width, GridUnitType.Star)
-            grid.ColumnDefinitions.Add(column)
-        if thumb is not None:
-            grid.Children.Add(thumb)
-        for number, cell in enumerate(cells):
-            cell.VerticalAlignment = VerticalAlignment.Center
-            cell.Margin = Thickness(0, 0, 12, 0)
-            Grid.SetColumn(cell, number + 1)
-            grid.Children.Add(cell)
-        return grid
-
-    def _row(self, index, row):
-        border = Border()
-        border.Margin = Thickness(0, 0, 0, 3)
-        border.Cursor = Cursors.Hand
-        thumb = Border()
-        thumb.Background = WHITE
-        thumb.BorderThickness = Thickness(2)
-        thumb.HorizontalAlignment = HorizontalAlignment.Left
-        thumb.Child = row["thumb"](self.THUMB_WIDTH - 4, self.ROW_HEIGHT - 4)
-        cells = []
-        for number, value in enumerate(row["values"]):
-            cells.append(text(value, 14.5 if number == 0 else 13))
-        border.Child = self._grid(cells, thumb)
-        border.MouseLeftButtonDown += lambda sender, args, i=index: self._clicked(i, args)
-        self._parts.append((border, thumb, cells))
-        return border
-
-    def _visible(self):
-        return [
-            index
-            for index, part in enumerate(self._parts)
-            if part[0].Visibility == Visibility.Visible
-        ]
-
-    def _filter(self, sender, args):
-        words = self.search_box.Text.lower().split()
-        for index, (border, _, _) in enumerate(self._parts):
-            haystack = " ".join(self.rows[index]["values"]).lower()
-            shown = all(word in haystack for word in words)
-            border.Visibility = Visibility.Visible if shown else Visibility.Collapsed
-        visible = self._visible()
-        self.count.Text = "{} of {}".format(len(visible), len(self.rows))
-        if visible and self._selected not in visible:
-            self._select(visible[0])
-        self.action.IsEnabled = bool(visible)
-
-    def _key(self, sender, args):
-        if args.Key not in (Key.Down, Key.Up):
-            return
-        visible = self._visible()
-        if not visible:
-            return
-        if self._selected in visible:
-            position = visible.index(self._selected) + (1 if args.Key == Key.Down else -1)
-            position = max(0, min(len(visible) - 1, position))
-        else:
-            position = 0
-        self._select(visible[position])
-        self._parts[visible[position]][0].BringIntoView()
-        args.Handled = True
-
-    def _clicked(self, index, args):
-        self._select(index)
-        if args.ClickCount >= 2:
-            self._accept(None, None)
-
-    def _select(self, index):
-        self._selected = index
-        for number, (border, thumb, cells) in enumerate(self._parts):
-            selected = number == index
-            border.Background = ACCENT if selected else ROW
-            thumb.BorderBrush = ACCENT if selected else ROW
-            for position, cell in enumerate(cells):
-                if selected:
-                    cell.Foreground = WHITE
-                else:
-                    cell.Foreground = TEXT if position == 0 else MUTED
-
-    def _switch(self, sender, args):
-        self.alternate = True
-        self.window.DialogResult = False
-
-    def _accept(self, sender, args):
-        if self._selected is None or self._selected not in self._visible():
-            return
-        self.result = self.rows[self._selected]["data"]
-        self.window.DialogResult = True
-
-    def show(self):
-        """Show the window. Returns the data of the accepted row, or None."""
-        self.window.ShowDialog()
-        return self.result

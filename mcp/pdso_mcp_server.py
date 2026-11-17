@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mcp>=2,<3", "pillow>=10.1", "shapely>=2"]
+# dependencies = ["mcp>=2,<3", "pillow>=10.1"]
 # ///
 """MCP server for PDSO Flowgram.
 
@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.8"
+EXPECTED_API_VERSION = "1.9"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -76,9 +76,10 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 mcp = MCPServer(
     "pdso",
     instructions=(
-        "Tools for the PDSO Flowgram Revit plugin: programs (room types and unit "
+        "Tools for the PDSO Flowgram Revit plugin: programs (space types and unit "
         "types, stored as Data Silos), Area outlines, Program Volumes, sync and "
-        "audit. All lengths are decimal feet and all areas are square feet.\n"
+        "audit. All lengths are decimal feet and all areas are square feet. PDSO "
+        "works with Revit Areas and area schemes only, never Revit Rooms.\n"
         "The user does not need to know PDSO. Work from the user's intent and "
         "decide the PDSO steps yourself, but keep the user in the loop for "
         "setup: it adds items to their model.\n"
@@ -102,19 +103,20 @@ mcp = MCPServer(
         "get_setup_status, agree the scope, then setup_model one time. (3) "
         "update_config with levels_mapping: one "
         "two-digit stacking key for each occupied level, lowest first (01, 02, "
-        "...). (4) list_rooms(level, include_outline=false) to see the Rooms. (5) "
-        "draft_areas_from_rooms for the Rooms that fit the user's intent, with "
-        "one inset for each scheme. (6) create_programs with the area_id of each "
-        "Area of the scheme that feeds PDSO - GSF, or create_program at the "
-        "program_point. (7) run_preflight, then run_sync. (8) color_areas, "
-        "show_program_volumes, summarize_programs, get_audit_report.\n"
+        "...). (4) draft_area for each GSF Area (the scheme that feeds PDSO - "
+        "GSF): outlines from the user's intent, render_plan with draft_outlines "
+        "to preview them. (5) derive_areas for the other schemes, from the GSF "
+        "Areas, with one inset for each scheme (for example NSF 0.25 ft in). (6) "
+        "create_programs with the area_id of each GSF Area. (7) run_preflight, "
+        "then run_sync. (8) color_areas, show_program_volumes, "
+        "summarize_programs, get_audit_report.\n"
         "Rules: call run_sync again after each change of programs or Areas, "
         "before you show results or totals. Program UID: it must match the "
         "uid_pattern of get_config (default: two characters, two digits, two "
         "characters, for example CL-02-18) and be unique. Stacking: the stacking "
         "keys of the levels where the program repeats (\"02\", \"01-03\", \"01, "
         "03\"); default is the level of the program only. show_view(view, "
-        "fit=true) shows a plan and zooms it to its Areas or Rooms. If two views "
+        "fit=true) shows a plan and zooms it to its Areas. If two views "
         "have the same name, give view_type or the view id. Do not select "
         "elements in a view after color_areas.\n"
         "When the user describes data that no program field holds, call "
@@ -195,7 +197,7 @@ _READ_ONLY_POSTS = (
     "views/export",
     "views/activate",
     "catalogue/recommend",
-    "catalogue/similar-rooms",
+    "catalogue/similar-units",
 )
 
 
@@ -466,28 +468,6 @@ def list_levels() -> list:
 
 
 @mcp.tool()
-def list_rooms(
-    level: str | None = None,
-    name: str | None = None,
-    include_outline: bool = True,
-) -> list:
-    """List the placed Rooms of the model (read-only): id, number, name, level, area (SF), bbox ([x_min, y_min, x_max, y_max] in feet), and the outline as [x, y] points in feet. To select Rooms or to draft Areas with draft_areas_from_rooms, the outlines are not necessary: give include_outline=false.
-
-    Args:
-        level: Level name.
-        name: Text that the Room name or number must contain.
-        include_outline: Include the outline points of each Room.
-    """
-    return api(
-        "GET",
-        "rooms",
-        level=level,
-        name=name,
-        outline="true" if include_outline else "false",
-    )
-
-
-@mcp.tool()
 def create_level(name: str, elevation: float) -> dict:
     """Create a level.
 
@@ -519,18 +499,11 @@ def setup_model(
     """Make the model ready for PDSO, the same way as the ribbon's three setup buttons: the PDSO configuration, the parameters, then the chosen Quick Setup parts from the model's standards files. This adds items to the user's model: agree the scope with the user first (see get_setup_status), unless they already said what they want. Items that are there are left alone. It is safe to call again, for example to add parts later. The reply has "setup": the Quick Setup report rows (step, item, status, message); look at rows with status "Failed" or "Warning".
 
     Args:
-        levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
+        levels: Names of the levels that get area plans. Default: the levels views.json gives area plans to (all levels but Roof and Parapet), as the ribbon's Quick Setup.
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
         parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": the views views.json turns on: by default a GSF area plan for each level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. Area plans of the other schemes are made when Areas are drawn in them. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
         parameters: Used only if the model tracks no parameters yet. "all": the 20 built-in parameters (unit data such as bedroom, bathroom and kitchen counts, use group, load factor). "required": only Program UID, Program Stacking, Last Synced and the area parameters; add others later with create_parameter. With "required", the schedules leave out the columns of untracked parameters and report that in "Warning" rows; that is expected, not an error.
     """
-    if not levels:
-        with_rooms = {room["level"] for room in api("GET", "rooms", outline="false")}
-        levels = [
-            level["name"]
-            for level in api("GET", "levels")
-            if level["name"] in with_rooms
-        ] or None
     body = _clean(
         {
             "levels": levels,
@@ -641,13 +614,13 @@ def get_audit_report() -> str:
 
 
 # =============================================================================
-# Programs (room types and unit types)
+# Programs (space types and unit types)
 # =============================================================================
 
 
 @mcp.tool()
 def get_program_fields() -> list:
-    """List the fields of a program (a room type or unit type), the Revit parameter of each field, its type, and if you can set it. The sync writes the fields zfa, nsf, gsf and last_synced."""
+    """List the fields of a program (a space type or unit type), the Revit parameter of each field, its type, and if you can set it. The sync writes the fields zfa, nsf, gsf and last_synced."""
     return api("GET", "programs/schema")
 
 
@@ -689,7 +662,7 @@ def list_programs(
     use_group: str | None = None,
     market_segment: str | None = None,
 ) -> list:
-    """List the programs (room types and unit types) in the model with all their fields, level and position. Give filters to get only the programs that match.
+    """List the programs (space types and unit types) in the model with all their fields, level and position. Give filters to get only the programs that match.
 
     Args:
         level: Level name.
@@ -737,7 +710,7 @@ def create_program(
     y: float,
     fields: dict[str, Any] | None = None,
 ) -> dict:
-    """Create a program (a room type or unit type): place a Data Silo at a point and set its fields. Put the point in the Area that the program is for. Call run_sync afterward to get its areas and Program Volumes.
+    """Create a program (a space type or unit type): place a Data Silo at a point and set its fields. Put the point in the Area that the program is for. Call run_sync afterward to get its areas and Program Volumes.
 
     Args:
         uid: Unique id of the program. It must match the configured UID pattern (default: two characters, two digits, two characters, for example A1-01-1B).
@@ -915,176 +888,33 @@ def draft_area(
     return api("POST", "areas", body)
 
 
-# Simplify tolerances (feet) to try when an inset splits a Room outline.
-_INSET_TOLERANCES = (0.3, 0.8, 1.5)
-
-
-def _room_polygon(room: dict, inset: float, tolerance: float):
-    """Make the Area outline of a Room: simplify, then move to the inside.
-
-    A Room with many small wall offsets (window bays, columns) can break into
-    more than one piece when the outline moves to the inside. Then a larger
-    simplify tolerance is used. If the outline still has more than one piece,
-    the largest piece is used. Returns (polygon, warnings).
-    """
-    from shapely.geometry import Polygon
-
-    number = room["number"]
-    if len(room.get("outline") or []) < 3:
-        raise ToolError(f"Room {number} has no closed outline.")
-    source = Polygon(room["outline"])
-    if not source.is_valid:
-        source = source.buffer(0)
-    warnings: list[str] = []
-
-    def build(simplify_tolerance: float):
-        shape = source.simplify(simplify_tolerance, preserve_topology=True)
-        if inset:
-            shape = shape.buffer(-abs(inset), join_style=2).simplify(
-                min(simplify_tolerance, 0.02), preserve_topology=True
-            )
-        return shape
-
-    polygon = build(tolerance)
-    if polygon.geom_type != "Polygon" or polygon.is_empty:
-        for larger in _INSET_TOLERANCES:
-            if larger <= tolerance:
-                continue
-            candidate = build(larger)
-            if candidate.geom_type == "Polygon" and not candidate.is_empty:
-                polygon = candidate
-                warnings.append(
-                    f"Room {number}: the outline with inset {inset} ft was not one closed shape at tolerance {tolerance} ft. Tolerance {larger} ft was used."
-                )
-                break
-    if polygon.geom_type == "MultiPolygon" and not polygon.is_empty:
-        parts = sorted(polygon.geoms, key=lambda part: part.area, reverse=True)
-        lost = sum(part.area for part in parts[1:])
-        polygon = parts[0]
-        warnings.append(
-            f"Room {number}: the outline with inset {inset} ft has {len(parts)} pieces. The largest piece was used ({lost:.1f} SF in the other pieces is not in the Area)."
-        )
-    if polygon.is_empty or polygon.geom_type != "Polygon":
-        raise ToolError(
-            f"The outline of Room {number} with inset {inset} ft is not one closed shape."
-        )
-    return polygon, warnings
-
-
-def _draft_from_room(scheme: str, level: str, room: dict, inset: float, tolerance: float) -> dict:
-    polygon, warnings = _room_polygon(room, inset, tolerance)
-    points = [[round(x, 3), round(y, 3)] for x, y in list(polygon.exterior.coords)[:-1]]
-    body = {
-        "scheme": scheme,
-        "level": level,
-        "points": points,
-        "name": room["name"],
-        "number": str(room["number"]),
-    }
-    area = api("POST", "areas", body)
-    inner = polygon.buffer(-0.5, join_style=2)
-    point = (inner if not inner.is_empty else polygon).representative_point()
-    result = {key: value for key, value in area.items() if key not in ("outline", "holes")}
-    result["warnings"] = list(result.get("warnings") or []) + warnings
-    result["room"] = {
-        "number": str(room["number"]),
-        "name": room["name"],
-        "room_area": room["area"],
-        "room_outline_points": len(room["outline"]),
-    }
-    result["outline_points"] = len(points)
-    result["inset"] = inset
-    result["program_point"] = {"x": round(point.x, 2), "y": round(point.y, 2)}
-    return result
-
-
 @mcp.tool()
-def draft_area_from_room(
+def derive_areas(
     scheme: str,
-    level: str,
-    room_number: str,
-    inset: float = 0.0,
-    tolerance: float = 0.05,
+    offset: float = 0.0,
+    area_ids: list[int] | None = None,
+    from_scheme: str | None = None,
+    level: str | None = None,
 ) -> dict:
-    """Draft a new Area from the boundary of a placed Room. Reads the Room outline, removes the very short segments, optionally moves the outline to the inside, then drafts the Area (same as draft_area). The Area gets the name and number of the Room. Returns the Area with the area that Revit computed, and program_point: a point inside the Area where a program (create_program) can go. If the inset splits the outline, a larger tolerance or the largest piece is used and "warnings" says so. For more than one Room, use draft_areas_from_rooms.
+    """Make Areas in one scheme from the Areas of another scheme: the same outline, moved in by offset, with the source's name and number. Use it for the NSF and ZFA Areas of programs whose GSF Areas are drawn, for example derive_areas("PDSO - NSF", 0.25, from_scheme="PDSO - GSF", level="L2"). Arcs stay arcs and holes grow by the offset. One Area that fails doesn't stop the others; see "errors".
 
     Args:
-        scheme: Area scheme name, for example "PDSO - GSF".
-        level: Level name of the Room.
-        room_number: Number of the Room, for example "303".
-        inset: Distance in feet to move the outline to the inside (0 keeps the Room boundary).
-        tolerance: Simplify tolerance in feet. Outline points that change the shape less than this are removed.
+        scheme: Area scheme to make the new Areas in.
+        offset: Distance in feet that the outline moves in (0 copies it).
+        area_ids: Element ids of the source Areas. Or give from_scheme and level.
+        from_scheme: Take every placed Area of this scheme on the level.
+        level: Level name, with from_scheme.
     """
-    rooms = [
-        room
-        for room in api("GET", "rooms", level=level)
-        if str(room["number"]) == str(room_number)
-    ]
-    if not rooms:
-        raise ToolError(f"No placed Room with number '{room_number}' on level '{level}'.")
-    return _draft_from_room(scheme, level, rooms[0], inset, tolerance)
-
-
-@mcp.tool()
-def draft_areas_from_rooms(
-    level: str,
-    room_numbers: list[str],
-    insets: dict[str, float] | None = None,
-    tolerance: float = 0.05,
-) -> dict:
-    """Draft the Areas of many Rooms in one step: one Area for each Room in each area scheme. This is the fast way to map out the program of a floor. Each Area gets the name and number of its Room. A Room that fails does not stop the other Rooms: see "errors".
-
-    Returns "areas": for each Area its scheme, number, name, id, area (SF), warnings and program_point (a point inside the Area for create_program); "created": the count for each scheme; "errors": the Rooms that failed, with the reason.
-
-    Args:
-        level: Level name of the Rooms.
-        room_numbers: Numbers of the Rooms, for example ["216", "218", "219"].
-        insets: Area scheme name to the distance in feet that the outline moves to the inside of the Room boundary (0 keeps the Room boundary). One Area is drafted in each scheme that you give, for example {"PDSO - GSF": 0, "PDSO - ZFA": 0, "PDSO - NSF": 0.25}. Default: all area schemes of the PDSO configuration, with inset 0.
-        tolerance: Simplify tolerance in feet.
-    """
-    if not room_numbers:
-        raise ToolError("Give at least one Room number.")
-    if insets is None:
-        mappings = api("GET", "config").get("area_scheme_mappings") or {}
-        insets = {scheme: 0.0 for scheme in mappings.values() if scheme}
-    if not insets:
-        raise ToolError(
-            "The model has no configured area scheme. Call setup_model first, or give insets."
-        )
-    by_number = {str(room["number"]): room for room in api("GET", "rooms", level=level)}
-    areas: list[dict] = []
-    errors: list[dict] = []
-    created: dict[str, int] = {}
-    for number in [str(number) for number in room_numbers]:
-        if number not in by_number:
-            errors.append(
-                {"room_number": number, "error": f"No placed Room with number '{number}' on level '{level}'."}
-            )
-    for scheme, inset in insets.items():
-        created[scheme] = 0
-        for number in [str(number) for number in room_numbers]:
-            room = by_number.get(number)
-            if room is None:
-                continue
-            try:
-                result = _draft_from_room(scheme, level, room, float(inset or 0), tolerance)
-            except ToolError as error:
-                errors.append({"room_number": number, "scheme": scheme, "error": str(error)})
-                continue
-            created[scheme] += 1
-            areas.append(
-                {
-                    "scheme": scheme,
-                    "number": result.get("number"),
-                    "name": result.get("name"),
-                    "id": result.get("id"),
-                    "area": result.get("area"),
-                    "inset": result["inset"],
-                    "warnings": result["warnings"],
-                    "program_point": result["program_point"],
-                }
-            )
-    return {"level": level, "created": created, "areas": areas, "errors": errors}
+    body = _clean(
+        {
+            "scheme": scheme,
+            "offset": offset,
+            "areas": area_ids,
+            "from_scheme": from_scheme,
+            "level": level,
+        }
+    )
+    return api("POST", "areas/derive", body, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
@@ -1168,7 +998,7 @@ def show_view(
     Args:
         view: View name or element id.
         zoom_box: Zoom a plan view to this rectangle: [x_min, y_min, x_max, y_max] in feet.
-        fit: Zoom a plan view to its content: the Areas of an area plan, or the Rooms of the level if the view has no Areas. Ignored if zoom_box is given.
+        fit: Zoom an area plan to its Areas. Ignored if zoom_box is given.
         view_type: Revit view type, for example FloorPlan or AreaPlan. Give it when two views have the same name (a floor plan and an area plan of the same level).
     """
     body = _clean({"view": view, "type": view_type})
@@ -1177,7 +1007,7 @@ def show_view(
         zoom_box = _content_box(info)
         if zoom_box is None:
             info["zoomed"] = False
-            info["zoom_note"] = "No Areas and no Rooms to zoom to."
+            info["zoom_note"] = "The view has no Areas to zoom to."
             return info
     if zoom_box is None:
         return info
@@ -1194,7 +1024,7 @@ def show_view(
 
 
 def _content_box(view_info: dict) -> list[float] | None:
-    """Rectangle around the Areas (or the Rooms) of a plan view, with a margin."""
+    """Rectangle around the Areas of an area plan, with a margin."""
     level = view_info.get("level")
     if not level:
         return None
@@ -1202,11 +1032,6 @@ def _content_box(view_info: dict) -> list[float] | None:
     if view_info.get("area_scheme"):
         for area in api("GET", "areas", scheme=view_info["area_scheme"], level=level):
             points.extend(area.get("outline") or [])
-    if not points:
-        for room in api("GET", "rooms", level=level, outline="false"):
-            if room.get("bbox"):
-                points.append(room["bbox"][:2])
-                points.append(room["bbox"][2:])
     if not points:
         return None
     x_min = min(point[0] for point in points)
@@ -1400,7 +1225,7 @@ def close_background_document(document: str, save: bool = False) -> dict:
 
 @mcp.tool()
 def list_layouts(program: str | None = None, project_type: str | None = None) -> dict:
-    """List the layouts in the Unit Layout Catalogue: id, name, program, size, number of items, families, and the source room. A layout is the furniture, casework and equipment of one room, stored as a JSON file.
+    """List the layouts in the Unit Layout Catalogue: id, name, program, size, number of items, families, and the source unit. A layout is the furniture, casework and equipment of one unit, stored as a JSON file.
 
     Args:
         program: Only layouts for this program, for example "Studio Unit".
@@ -1411,7 +1236,7 @@ def list_layouts(program: str | None = None, project_type: str | None = None) ->
 
 @mcp.tool()
 def get_layout(layout_id: str) -> list:
-    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame), its SVG plan sketch, and the plan image that Harvest saved, if there is one.
+    """Get one layout completely: the stored JSON entry (unit outline and each item with family, type, x, y, rotation, in the unit's own frame), its SVG plan sketch, and the plan image that Harvest saved, if there is one.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
@@ -1426,24 +1251,24 @@ def get_layout(layout_id: str) -> list:
 
 @mcp.tool()
 def harvest_layout(
-    room: str,
+    unit: str,
     name: str | None = None,
     program: str | None = None,
     project_type: str = "Other",
     notes: str = "",
 ) -> dict:
-    """Save the layout of a Room or Area into the catalogue. The free-standing families in the room (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the room's own frame, so the layout can go into a room of a different building. Wall-hosted and face-based families are skipped and listed. Returns the JSON entry and its file path.
+    """Save the layout of one unit (an Area with a PDSO data silo inside) into the catalogue. The free-standing families in the unit (furniture, casework, equipment, plumbing fixtures) are stored with their positions in the unit's own frame, so the layout can go into a unit of a different building. Wall-hosted and face-based families are skipped and listed. PDSO data silos and Program Volumes are not part of a layout. The family of each item is saved as a file in the families folder of the catalogue folder (family_files), so that place_layout can load it into a model that doesn't have it. The layout gets a catalogue number: the same shape keeps its number. Returns the JSON entry and its file path. To harvest every unit of an area plan, use harvest_units.
 
     Args:
-        room: Room number (for example "304"), or the element id of a Room or Area.
-        name: Name of the layout. Default: "<program> - <area> sf". Each harvest makes a new layout (its id ends with the date and time); it never replaces an earlier one. To replace one, delete_layout the old id.
-        program: Program that the layout serves. Default: the Room name.
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
+        name: Name of the layout. Default: "<program> - <area> sf - Area <number>". Each harvest_layout makes a new layout (its id ends with the date and time); it never replaces an earlier one. To replace one, delete_layout the old id.
+        program: Program that the layout serves. Default: from the unit's data silo (its layout type, display name or program type, else its bedroom count), else the Area name.
         project_type: For example "Residential", "Office" or "K-12".
         notes: Free text.
     """
     body = _clean(
         {
-            "room": room,
+            "unit": unit,
             "name": name,
             "program": program,
             "project_type": project_type,
@@ -1454,64 +1279,81 @@ def harvest_layout(
 
 
 @mcp.tool()
-def recommend_layouts(room: str, program: str | None = None, limit: int = 10) -> dict:
-    """Rank the catalogue layouts for one target Room or Area. A layout is in the list only if all its items are inside the target in one of 8 orientations. score is 60% area match and 40% size fit. shape_match (0 to 1) is how well the two outlines cover each other. Layouts for the same program come first.
+def harvest_units(
+    view: str | None = None,
+    areas: list[int] | None = None,
+    project_type: str = "Other",
+) -> dict:
+    """Harvest units into the catalogue, as the Harvest All Units button does: every Area of an area plan that has a PDSO data silo inside, or the given Areas. Each gets a name, a catalogue number (the same shape keeps its number), its family files and a plan image from the view. Running again replaces the earlier harvest of the same units. This writes files to the catalogue folder; the model does not change.
 
     Args:
-        room: Room number, or the element id of a Room or Area.
-        program: Program of the target. Default: the Room name.
+        view: Name or id of the area plan. Default: the active view.
+        areas: Element ids of the Areas to harvest. Default: every Area in the view with a data silo inside.
+        project_type: For example "Residential", "Office" or "K-12".
+    """
+    body = _clean({"view": view, "areas": areas, "project_type": project_type})
+    return api("POST", "catalogue/harvest-units", body, timeout=LONG_TIMEOUT)
+
+
+@mcp.tool()
+def recommend_layouts(unit: str, program: str | None = None, limit: int = 10) -> dict:
+    """Rank the catalogue layouts for one target unit. A layout is in the list only if all its items are inside the target in one of 8 orientations. score is 60% area match and 40% size fit. shape_match (0 to 1) is how well the two outlines cover each other. Layouts for the same program come first.
+
+    Args:
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
+        program: Program of the target. Default: the Area name.
         limit: Largest number of layouts in the reply.
     """
-    body = _clean({"room": room, "program": program, "limit": limit})
+    body = _clean({"unit": unit, "program": program, "limit": limit})
     return api("POST", "catalogue/recommend", body, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
-def find_similar_rooms(
+def find_similar_units(
     layout_id: str,
-    kind: str = "rooms",
+    scheme: str | None = None,
     level: str | None = None,
     limit: int = 20,
 ) -> dict:
-    """Find the Rooms (or Areas) of the model that are similar to a catalogue layout, ranked. Use it to find all rooms that can get the same layout. similarity is the average of area_match (the areas agree) and shape_match (the outlines cover each other); 1.0 is the same room shape and size. fits says if all items of the layout land in the room, and score is the recommender's score for that.
+    """Find the units (Areas with a PDSO data silo inside) of the model that are similar to a catalogue layout, ranked. Use it to find all units that can get the same layout. similarity is the average of area_match (the areas agree) and shape_match (the outlines cover each other); 1.0 is the same shape and size. fits says if all items of the layout land in the unit, and score is the recommender's score for that.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
-        kind: "rooms" or "areas".
-        level: Only Rooms on this level.
-        limit: Largest number of Rooms in the reply.
+        scheme: Area scheme of the units. Default: the scheme that feeds PDSO - GSF.
+        level: Only units on this level.
+        limit: Largest number of units in the reply.
     """
     body = _clean(
-        {"layout_id": layout_id, "kind": kind, "level": level, "limit": limit}
+        {"layout_id": layout_id, "scheme": scheme, "level": level, "limit": limit}
     )
-    return api("POST", "catalogue/similar-rooms", body, timeout=LONG_TIMEOUT)
+    return api("POST", "catalogue/similar-units", body, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
-def place_layout(room: str, layout_id: str, clear_first: bool = False) -> dict:
-    """Place a catalogue layout into a target Room or Area. The recommender selects the orientation. Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the room that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
+def place_layout(unit: str, layout_id: str, clear_first: bool = False) -> dict:
+    """Place a catalogue layout into a target unit. The recommender selects the orientation, then moves the layout to where its outline agrees best with the target, so furniture stays against its walls. A family the model doesn't have is loaded first (its own undo step), from the family files harvest saved or from another open model (see loaded_families). Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the unit that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
 
     Args:
-        room: Room number, or the element id of a Room or Area.
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
         layout_id: Id of the layout.
-        clear_first: Delete the furniture in the room first (as clear_room_items does), in the same undo step as the placement. If the placement fails, nothing is deleted. Ask the user before you set it.
+        clear_first: Delete the furniture in the unit first (as clear_unit_items does), in the same undo step as the placement. If the placement fails, nothing is deleted. Ask the user before you set it.
     """
     return api(
         "POST",
         "catalogue/place",
-        {"room": room, "layout_id": layout_id, "clear_first": clear_first},
+        {"unit": unit, "layout_id": layout_id, "clear_first": clear_first},
         timeout=LONG_TIMEOUT,
     )
 
 
 @mcp.tool()
-def list_room_items(room: str) -> dict:
-    """List the free-standing families in a Room or Area (the items that harvest_layout takes): id, category, family, type, x, y, z (project elevation), z_offset (height above the level), rotation.
+def list_unit_items(unit: str) -> dict:
+    """List the free-standing families in a unit (the items that harvest_layout takes): id, category, family, type, x, y, z (project elevation), z_offset (height above the level), rotation.
 
     Args:
-        room: Room number, or the element id of a Room or Area.
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
     """
-    return api("GET", "catalogue/room-items", room=room)
+    return api("GET", "catalogue/unit-items", unit=unit)
 
 
 @mcp.tool()
@@ -1519,19 +1361,19 @@ def describe_item(element_id: int) -> dict:
     """Describe one family instance (read-only): family, type, position, rotation, flips, its plan box in project coordinates, and the instance parameters that the family defines (for example the length of a counter top). Use it to compare a placed item with the original item.
 
     Args:
-        element_id: Element id of the family instance (see list_room_items or the "placed" list of place_layout).
+        element_id: Element id of the family instance (see list_unit_items or the "placed" list of place_layout).
     """
     return api("GET", "catalogue/item", id=element_id)
 
 
 @mcp.tool()
-def clear_room_items(room: str) -> dict:
-    """Delete the free-standing families in a Room or Area. Use it to make a furnished room empty before place_layout. This deletes elements from the model.
+def clear_unit_items(unit: str) -> dict:
+    """Delete the free-standing families in a unit. Use it to make a furnished unit empty before place_layout. This deletes elements from the model.
 
     Args:
-        room: Room number, or the element id of a Room or Area.
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
     """
-    return api("DELETE", "catalogue/room-items", room=room)
+    return api("DELETE", "catalogue/unit-items", unit=unit)
 
 
 @mcp.tool()
@@ -1876,11 +1718,11 @@ def render_plan(
 
 
 # =============================================================================
-# Unit Layout Catalogue: previews of the suggested Rooms
+# Unit Layout Catalogue: previews of the suggested units
 # =============================================================================
 
 # Colors of the preview images. The list window follows the suggestion list of
-# a layout recommendation dialog: a thumbnail, the data of the Room, and the
+# a layout recommendation dialog: a thumbnail, the data of the unit, and the
 # match in percent for each row, with the best row highlighted.
 UI_WINDOW = (255, 255, 255)
 UI_BORDER = (63, 169, 216)
@@ -1891,8 +1733,8 @@ UI_MUTED = (105, 105, 105)
 UI_CHIP = (238, 238, 238)
 UI_GOOD = (22, 130, 60)
 UI_BAD = (196, 40, 40)
-ROOM_FILL = (250, 250, 247, 255)
-ROOM_LINE = (35, 35, 35, 255)
+UNIT_FILL = (250, 250, 247, 255)
+UNIT_LINE = (35, 35, 35, 255)
 CURRENT_FILL = (214, 214, 214, 255)
 CURRENT_LINE = (165, 165, 165, 255)
 ITEM_FILL = (33, 111, 219, 95)
@@ -1902,8 +1744,6 @@ OUTSIDE_LINE = (200, 30, 30, 255)
 CROSS_FILL = (245, 150, 20, 115)
 CROSS_LINE = (200, 105, 0, 255)
 UI_WARN = (176, 96, 0)
-# A footprint corner this far outside the Room outline counts as a crossing (ft)
-CROSS_TOLERANCE = 0.5
 LAYOUT_OUTLINE = (150, 60, 190, 255)
 
 
@@ -1928,40 +1768,14 @@ def _dashed_line(draw, start, end, fill, width, dash=9, gap=6) -> None:
         position += dash + gap
 
 
-def _edge_distance(point, polygon) -> float:
-    """Shortest distance from a point to the edges of a polygon."""
-    best = float("inf")
-    for i in range(len(polygon)):
-        ax, ay = polygon[i]
-        bx, by = polygon[(i + 1) % len(polygon)]
-        dx, dy = bx - ax, by - ay
-        squared = dx * dx + dy * dy
-        t = 0.0
-        if squared > 1e-12:
-            t = max(0.0, min(1.0, ((point[0] - ax) * dx + (point[1] - ay) * dy) / squared))
-        best = min(best, math.hypot(point[0] - ax - t * dx, point[1] - ay - t * dy))
-    return best
-
-
 def _crossing_items(preview: dict) -> set[int]:
-    """Indexes of the items whose footprint goes across the Room outline.
+    """Indexes of the items whose footprint goes across the unit outline.
 
     place_layout only checks the insertion point of each item. An item can be
-    in the Room by that check while its body is in a wall.
+    in the unit by that check while its body is in a wall. The API marks
+    those items ("across" in the preview).
     """
-    outline = preview["room"]["outline"]
-    crossing = set()
-    for index, item in enumerate(preview["items"]):
-        if not item["inside"] or not item["footprint"]:
-            continue
-        for corner in item["footprint"]:
-            if (
-                not _inside(corner[0], corner[1], outline)
-                and _edge_distance(corner, outline) > CROSS_TOLERANCE
-            ):
-                crossing.add(index)
-                break
-    return crossing
+    return {index for index, item in enumerate(preview["items"]) if item.get("across")}
 
 
 def _turned(point, turn: bool) -> tuple[float, float]:
@@ -1969,10 +1783,10 @@ def _turned(point, turn: bool) -> tuple[float, float]:
     return (point[1], -point[0]) if turn else (point[0], point[1])
 
 
-def _plan_extent(preview: dict, turn: bool, room: bool = True) -> tuple:
+def _plan_extent(preview: dict, turn: bool, unit: bool = True) -> tuple:
     points = list(preview["layout_outline"])
-    if room:
-        points += preview["room"]["outline"]
+    if unit:
+        points += preview["unit"]["outline"]
     points = [_turned(p, turn) for p in points]
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
@@ -1993,10 +1807,10 @@ def _draw_plan(
     box: tuple,
     scale: float,
     turn: bool,
-    room: bool = True,
+    unit: bool = True,
     numbers: bool = False,
 ) -> None:
-    """Draw one Room with the items of the layout in it.
+    """Draw one unit with the items of the layout in it.
 
     Args:
         draw: ImageDraw with RGBA mode.
@@ -2004,10 +1818,10 @@ def _draw_plan(
         box: (left, top, right, bottom) in pixels. The plan is in its middle.
         scale: Pixels for each foot.
         turn: Turn the plan 90 degrees clockwise.
-        room: Draw the Room and its current items. False: only the layout.
+        unit: Draw the unit and its current items. False: only the layout.
         numbers: Write the item numbers and the family names.
     """
-    min_x, min_y, max_x, max_y = _plan_extent(preview, turn, room)
+    min_x, min_y, max_x, max_y = _plan_extent(preview, turn, unit)
     left = (box[0] + box[2]) / 2 - (max_x - min_x) * scale / 2
     top = (box[1] + box[3]) / 2 - (max_y - min_y) * scale / 2
 
@@ -2017,9 +1831,9 @@ def _draw_plan(
 
     line = max(2, int(round(scale / 5)))
     thin = max(1, int(round(scale / 9)))
-    if room:
-        outline = [px(p) for p in preview["room"]["outline"]]
-        draw.polygon(outline, fill=ROOM_FILL)
+    if unit:
+        outline = [px(p) for p in preview["unit"]["outline"]]
+        draw.polygon(outline, fill=UNIT_FILL)
         for item in preview["current_items"]:
             if item["footprint"]:
                 draw.polygon(
@@ -2031,24 +1845,24 @@ def _draw_plan(
                 x, y = px((item["x"], item["y"]))
                 r = 0.4 * scale
                 draw.ellipse((x - r, y - r, x + r, y + r), fill=CURRENT_FILL)
-        draw.line(outline + [outline[0]], fill=ROOM_LINE, width=line, joint="curve")
+        draw.line(outline + [outline[0]], fill=UNIT_LINE, width=line, joint="curve")
     layout_outline = [px(p) for p in preview["layout_outline"]]
-    if room:
+    if unit:
         loop = layout_outline + [layout_outline[0]]
         for start, end in zip(loop, loop[1:]):
             _dashed_line(draw, start, end, LAYOUT_OUTLINE, thin + 1)
     else:
-        draw.polygon(layout_outline, fill=ROOM_FILL)
+        draw.polygon(layout_outline, fill=UNIT_FILL)
         draw.line(
             layout_outline + [layout_outline[0]],
-            fill=ROOM_LINE,
+            fill=UNIT_LINE,
             width=line,
             joint="curve",
         )
 
     label_font = _font(max(11, min(17, int(scale * 0.62))))
     number_font = _font(max(11, min(18, int(scale * 0.7))), bold=True)
-    crossing = _crossing_items(preview) if room else set()
+    crossing = _crossing_items(preview) if unit else set()
     taken: list[tuple] = []
     for number, item in enumerate(preview["items"], start=1):
         x, y = px((item["x"], item["y"]))
@@ -2118,30 +1932,32 @@ def _draw_plan(
 
 
 def _fit_text_line(preview: dict) -> tuple[str, str]:
-    """One line that says if the layout fits the Room, and "good", "warn" or "bad"."""
+    """One line that says if the layout fits the unit, and "good", "warn" or "bad"."""
     match = preview["match"]
     count = len(preview["items"])
     if match["fits"]:
-        text = f"Fits: all {count} insertion points are in the Room ({match['placement']['description']})"
+        text = f"Fits: all {count} insertion points are in the unit ({match['placement']['description']})"
         state = "good"
         crossing = len(_crossing_items(preview))
         if crossing:
-            text += f", but {crossing} item{' goes' if crossing == 1 else 's go'} across the Room outline"
+            text += f", but {crossing} item{' goes' if crossing == 1 else 's go'} across the unit outline"
             state = "warn"
+        if match.get("families_to_load"):
+            text += f"; {len(match['families_to_load'])} families will be loaded"
         if match["items_not_loaded"]:
             text += f"; {match['items_not_loaded']} items: family not loaded"
             state = "warn"
         return text, state
     if match["items_outside"]:
         return (
-            f"Does not fit: {match['items_outside']} of {count} items are outside the Room",
+            f"Does not fit: {match['items_outside']} of {count} items are outside the unit",
             "bad",
         )
     layout = preview["layout"]
-    room = preview["room"]
+    unit = preview["unit"]
     return (
         f"Does not fit: the layout ({layout['width']:.1f} x {layout['depth']:.1f} ft) is larger"
-        f" than the Room ({room['width']:.1f} x {room['depth']:.1f} ft)",
+        f" than the unit ({unit['width']:.1f} x {unit['depth']:.1f} ft)",
         "bad",
     )
 
@@ -2166,14 +1982,14 @@ def _window(width: int, height: int, title: str):
     return image, draw
 
 
-def _legend(draw, x: float, y: float, font, room: bool = True) -> float:
+def _legend(draw, x: float, y: float, font, unit: bool = True) -> float:
     """Draw the legend of the plan symbols in one row. Returns the right end."""
     entries = [("box", ITEM_FILL, ITEM_LINE, "item of the layout (tick: direction)")]
-    if room:
+    if unit:
         entries += [
-            ("box", CURRENT_FILL, CURRENT_LINE, "furniture in the Room now"),
-            ("dash", None, LAYOUT_OUTLINE, "source room outline"),
-            ("box", CROSS_FILL, CROSS_LINE, "item across the Room outline"),
+            ("box", CURRENT_FILL, CURRENT_LINE, "furniture in the unit now"),
+            ("dash", None, LAYOUT_OUTLINE, "source unit outline"),
+            ("box", CROSS_FILL, CROSS_LINE, "item across the unit outline"),
             ("box", OUTSIDE_FILL, OUTSIDE_LINE, "item outside, or family not loaded"),
         ]
     for kind, fill, edge, text in entries:
@@ -2186,12 +2002,12 @@ def _legend(draw, x: float, y: float, font, room: bool = True) -> float:
     return x
 
 
-def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, width: int):
-    """The list window: one row for each suggested Room, ranked."""
+def _draw_unit_list(layout: dict, previews: list[dict], units_checked: int, width: int):
+    """The list window: one row for each suggested unit, ranked."""
     extents = [_plan_extent(p, False) for p in previews]
     span_x = max(e[2] - e[0] for e in extents)
     span_y = max(e[3] - e[1] for e in extents)
-    turn = span_y > span_x  # show the long side of the Rooms horizontal
+    turn = span_y > span_x  # show the long side of the units horizontal
     if turn:
         span_x, span_y = span_y, span_x
     pad = 12
@@ -2233,14 +2049,14 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
     project = source.get("project") or "?"
     draw.text(
         (30, 158),
-        f"Source: Room '{source.get('room_name', '')}' on {source.get('level', '?')} of {project}"
+        f"Source: Area '{source.get('area_name') or source.get('room_name') or ''}' on {source.get('level', '?')} of {project}"
         f", harvested {source.get('harvested', '?')}",
         fill=UI_MUTED,
         font=label,
     )
     draw.text(
         (30, 212),
-        f"Suggested Rooms  (best {len(previews)} of {rooms_checked} Rooms; no change to the model."
+        f"Suggested units  (best {len(previews)} of {units_checked} units; no change to the model."
         f" All plans: same scale{', turned 90 deg clockwise' if turn else ''})",
         fill=UI_TEXT,
         font=_font(23),
@@ -2259,7 +2075,7 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
         (stored_left, 90, stored_left + stored_width, header - 14),
         min(scale * 0.62, (header - 104 - 2 * pad) / span_y),
         turn,
-        room=False,
+        unit=False,
     )
 
     title_font = _font(27)
@@ -2268,7 +2084,7 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
     for index, preview in enumerate(previews):
         top = header + index * (row_height + gap)
         selected = index == 0
-        room = preview["room"]
+        unit = preview["unit"]
         match = preview["match"]
         draw.rectangle(
             (30, top, width - 30, top + row_height),
@@ -2283,11 +2099,11 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
         y = top + max(14, (row_height - 150) // 2)
         draw.text(
             (x, y),
-            f"{index + 1}.  Room {room['number']}: {room['name']}",
+            f"{index + 1}.  Area {unit['number']}: {unit['name']}",
             fill=ink,
             font=title_font,
         )
-        draw.text((x, y + 38), f"Level {room['level']}", fill=soft, font=text_font)
+        draw.text((x, y + 38), f"Level {unit['level']}", fill=soft, font=text_font)
         fit, state = _fit_text_line(preview)
         draw.text(
             (x, y + 68),
@@ -2297,7 +2113,7 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
         )
         draw.text(
             (x, y + 106),
-            f"Area: {room['area']:,.0f} SF   ({room['width']:.1f} x {room['depth']:.1f} ft)",
+            f"Area: {unit['area']:,.0f} SF   ({unit['width']:.1f} x {unit['depth']:.1f} ft)",
             fill=ink,
             font=text_font,
         )
@@ -2324,10 +2140,10 @@ def _draw_room_list(layout: dict, previews: list[dict], rooms_checked: int, widt
     return image
 
 
-def _draw_room_panel(layout: dict, preview: dict, rank: int, count: int, width: int):
-    """The large picture of one suggested Room, north up, with the item list."""
+def _draw_unit_panel(layout: dict, preview: dict, rank: int, count: int, width: int):
+    """The large picture of one suggested unit, north up, with the item list."""
     height = int(width * 0.62)
-    room = preview["room"]
+    unit = preview["unit"]
     match = preview["match"]
     image, draw = _window(
         width,
@@ -2362,10 +2178,10 @@ def _draw_room_panel(layout: dict, preview: dict, rank: int, count: int, width: 
     x = width - side + 6
     wide = side - 40
     draw.rectangle((x - 10, 70, width - 30, 70 + 196), fill=UI_ROW_SELECTED)
-    draw.text((x + 6, 82), f"Room {room['number']}: {room['name']}", fill="white", font=_font(31))
+    draw.text((x + 6, 82), f"Area {unit['number']}: {unit['name']}", fill="white", font=_font(31))
     draw.text(
         (x + 6, 124),
-        f"Level {room['level']}   |   {room['area']:,.0f} SF   |   {room['width']:.1f} x {room['depth']:.1f} ft",
+        f"Level {unit['level']}   |   {unit['area']:,.0f} SF   |   {unit['width']:.1f} x {unit['depth']:.1f} ft",
         fill="white",
         font=_font(22),
     )
@@ -2392,7 +2208,7 @@ def _draw_room_panel(layout: dict, preview: dict, rank: int, count: int, width: 
     for part in _wrap(
         draw,
         f"Layout: {layout['name']} ({layout['area']:,.0f} SF). Orientation from: {match['orientation_from']}."
-        f" Furniture in the Room now: {len(preview['current_items'])} items.",
+        f" Furniture in the unit now: {len(preview['current_items'])} items.",
         small,
         wide,
     ):
@@ -2437,61 +2253,61 @@ def _wrap(draw, text: str, font, width: float) -> list[str]:
 
 
 @mcp.tool()
-def preview_similar_rooms(
+def preview_similar_units(
     layout_id: str,
     limit: int = 5,
-    kind: str = "rooms",
+    scheme: str | None = None,
     level: str | None = None,
-    include_source_room: bool = False,
+    include_source_unit: bool = False,
     pixel_width: int = 1920,
 ) -> list:
-    """Show pictures of the Rooms that find_similar_rooms suggests for a layout, before anything is placed. This tool does not change the model. The first image is a ranked list: one row for each Room with a plan thumbnail, the Room number, name, level and area, the area match, the shape match, the match in percent (the similarity), and if the layout fits. Then there is one large image for each Room (north up) with the item numbers and the family names. Each plan shows the Room outline, the items of the layout at the positions and rotations that place_layout would use (blue, with a direction tick), the furniture that is in the Room now (grey), and the outline of the source room (dashed). All thumbnails have the same scale.
+    """Show pictures of the units that find_similar_units suggests for a layout, before anything is placed. This tool does not change the model. The first image is a ranked list: one row for each unit with a plan thumbnail, the Area number, name, level and area, the area match, the shape match, the match in percent (the similarity), and if the layout fits. Then there is one large image for each unit (north up) with the item numbers and the family names. Each plan shows the unit outline, the items of the layout at the positions and rotations that place_layout would use (blue, with a direction tick), the furniture that is in the unit now (grey), and the outline of the source unit (dashed). All thumbnails have the same scale.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
-        limit: Number of Rooms (1 to 12). Default: the best 5.
-        kind: "rooms" or "areas".
-        level: Only Rooms on this level.
-        include_source_room: Keep the Room that the layout came from in the list.
+        limit: Number of units (1 to 12). Default: the best 5.
+        scheme: Area scheme of the units. Default: the scheme that feeds PDSO - GSF.
+        level: Only units on this level.
+        include_source_unit: Keep the unit that the layout came from in the list.
         pixel_width: Width of each image in pixels (1200 to 4000).
     """
     limit = max(1, min(int(limit), 12))
     pixel_width = max(1200, min(int(pixel_width), 4000))
-    body = _clean({"layout_id": layout_id, "kind": kind, "level": level, "limit": limit + 1})
-    similar = api("POST", "catalogue/similar-rooms", body, timeout=LONG_TIMEOUT)
-    rooms = [
-        room
-        for room in similar["rooms"]
-        if include_source_room or not room.get("is_source")
+    body = _clean({"layout_id": layout_id, "scheme": scheme, "level": level, "limit": limit + 1})
+    similar = api("POST", "catalogue/similar-units", body, timeout=LONG_TIMEOUT)
+    units = [
+        unit
+        for unit in similar["units"]
+        if include_source_unit or not unit.get("is_source")
     ][:limit]
-    if not rooms:
-        raise ToolError("The model has no Room to compare with this layout.")
+    if not units:
+        raise ToolError("The model has no unit (an Area with a data silo) to compare with this layout.")
     previews = [
-        api("GET", "catalogue/preview", room=room["id"], layout_id=layout_id, timeout=LONG_TIMEOUT)
-        for room in rooms
+        api("GET", "catalogue/preview", unit=unit["id"], layout_id=layout_id, timeout=LONG_TIMEOUT)
+        for unit in units
     ]
     layout = similar["layout"]
     stem = f"preview_{layout_id[:40]}"
     images = []
-    sheet = _draw_room_list(layout, previews, similar["rooms_checked"], pixel_width)
+    sheet = _draw_unit_list(layout, previews, similar["units_checked"], pixel_width)
     sheet_path = _image_path(f"{stem}_list")
     sheet.save(sheet_path)
     images.append(Image(data=sheet_path.read_bytes(), format="png"))
-    summary = {"layout_id": layout_id, "rooms_checked": similar["rooms_checked"], "list_image": str(sheet_path), "rooms": []}
+    summary = {"layout_id": layout_id, "units_checked": similar["units_checked"], "list_image": str(sheet_path), "units": []}
     for rank, preview in enumerate(previews, start=1):
-        panel = _draw_room_panel(layout, preview, rank, len(previews), pixel_width)
-        path = _image_path(f"{stem}_{rank}_room_{preview['room']['number']}")
+        panel = _draw_unit_panel(layout, preview, rank, len(previews), pixel_width)
+        path = _image_path(f"{stem}_{rank}_area_{preview['unit']['number']}")
         panel.save(path)
         images.append(Image(data=path.read_bytes(), format="png"))
         match = preview["match"]
-        summary["rooms"].append(
+        summary["units"].append(
             {
                 "rank": rank,
-                "id": preview["room"]["id"],
-                "number": preview["room"]["number"],
-                "name": preview["room"]["name"],
-                "level": preview["room"]["level"],
-                "area": preview["room"]["area"],
+                "id": preview["unit"]["id"],
+                "number": preview["unit"]["number"],
+                "name": preview["unit"]["name"],
+                "level": preview["unit"]["level"],
+                "area": preview["unit"]["area"],
                 "similarity": match["similarity"],
                 "area_match": match["area_match"],
                 "shape_match": match["shape_match"],

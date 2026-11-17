@@ -63,7 +63,7 @@ def to_json(data):
     """Serialize to JSON text that is pure ASCII.
 
     json.dumps of IronPython 2.7 fails on a string with a non-ASCII character
-    (for example a Room with the name "Caf\u00e9"): it tries to decode the text
+    (for example an Area with the name "Caf\u00e9"): it tries to decode the text
     as UTF-8 bytes. Thus each such character is written as a \\uXXXX escape.
     """
     text = json.dumps(_mark_non_ascii(data), indent=2, sort_keys=True)
@@ -398,17 +398,18 @@ _EDGE_COLORS = {
     "exterior": "#1f77b4",
     "corridor": "#d62728",
     "party": "#333333",
-    "unroomed": "#aaaaaa",
+    "no_area": "#aaaaaa",
+    "unroomed": "#aaaaaa",  # the same kind, in entries harvested before Areas
 }
 
 
 def entry_to_svg(entry, scale=12.0, margin=24.0):
-    """A small top-down sketch: room outline, one marker per item.
+    """A small top-down sketch: unit outline, one marker per item.
 
     Each marker is a dot with a tick showing the item's rotation, colored by
     category. Where the entry has features, walls are colored by what is
     beyond them (blue exterior, red corridor, black a neighbour), partitions
-    are grey, rooms are named, windows
+    are grey, Rooms of older entries are named, windows
     are light blue bars, doors are white gaps, and an arrow marks the entry.
     Scale is pixels per foot. Y is flipped so the frame's Y axis points up.
     """
@@ -464,11 +465,12 @@ def entry_to_svg(entry, scale=12.0, margin=24.0):
                 cx, cy, _xml(door.get("family", "")), _xml(door.get("type", ""))
             )
         )
-    for room in features.get("rooms", []):
-        cx, cy = px(room["x"], room["y"])
+    # Entries harvested before Areas only also listed the Revit Rooms inside
+    for space in features.get("rooms", []):
+        cx, cy = px(space["x"], space["y"])
         parts.append(
             '<text x="{:.1f}" y="{:.1f}" font-size="10" fill="#555" '
-            'text-anchor="middle">{}</text>'.format(cx, cy, _xml(room.get("name", "")))
+            'text-anchor="middle">{}</text>'.format(cx, cy, _xml(space.get("name", "")))
         )
 
     for opening in features.get("openings", []):

@@ -16,7 +16,7 @@ Orientation for coding agents. Read this first, then open only the doc you need.
 A pyRevit extension (the **PDSO** ribbon tab) that keeps architectural program data in one place:
 
 - **Data Silo**: a point-based Generic Model family instance, one per unit ("program"). It is the **only** place program data is entered.
-- **Areas** in the mapped area schemes (default `PDSO - GSF`, `PDSO - NSF`, `PDSO - ZFA`) are where SF comes from.
+- **Areas** in the mapped area schemes (default `PDSO - GSF`, `PDSO - NSF`, `PDSO - ZFA`) are where SF comes from. PDSO works with Areas and area schemes only, never with Revit Rooms.
 - **Program Volume**: a generated Generic Model family per Data Silo, placed on every stacked level. It is a taggable copy of the Data Silo's tracked data.
 
 Data flow: **Area SF → Data Silo → Program Volumes.** Nothing flows back to Areas.
@@ -48,9 +48,9 @@ The same UI-free services in `lib/pdso/code/business/` drive the ribbon windows,
     3.RunScripts.pushbutton/ → view_models/body_2_harvest_areas.py (ribbon title "Sync Data")
     4.Audit.pushbutton/      → business/audit_service.py (prints to the output window)
   PDSO.tab/Unit Layout Catalogue.panel/
-    1.HarvestUnits.pushbutton/ → every Area with a data silo in the active area plan ("Harvest All Units")
-    1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout")
-    2.Pull.pushbutton/       → SuggestionWindow ("Pull from Catalogue": needs a selection; layouts for the selected Room)
+    1.HarvestUnits.pushbutton/ → every Area with a data silo in the active area plan, or the selected Areas ("Harvest All Units")
+    1.Harvest.pushbutton/    → catalogue/catalogue_windows.HarvestWindow ("Harvest Layout": a unit's Program UID, or the selected unit)
+    2.Pull.pushbutton/       → SuggestionWindow ("Pull from Catalogue": needs a selected unit; layouts for that unit)
   lib/extensible_storage/    vendored third-party ES library (don't edit)
   lib/pdso/code/
     api/        dispatcher.py (routing, {"ok","data"|"error"} envelope), handlers.py (route table)
@@ -87,7 +87,7 @@ families/               Data Silo .rfa (Revit 2026)
 | Read/write Project Config as plain dicts | `business/config_service.get_config` / `update_config` |
 | Make a fresh model PDSO-ready | `business/bootstrap_service.bootstrap(doc, ...)` |
 | Create/read/update Data Silos ("programs") | `business/program_service.py` (API field names such as `uid`) |
-| Draw or edit Area outlines | `business/area_drafting_service.py` |
+| Draw, derive (`derive_areas`: another scheme's Areas, moved in by an offset) or edit Area outlines | `business/area_drafting_service.py` |
 | HTTP route → service | `api/handlers.py` (`@route(METHOD, "pattern")`) |
 | MCP tool → route | `mcp/pdso_mcp_server.py` (`@mcp.tool()` functions calling `api(...)`) |
 | Built-in parameter catalog (names, types, GUIDs, roles) | `data/shared_parameter_constants.py`; roles in `data/extended_shared_parameter.py` |
@@ -108,6 +108,7 @@ families/               Data Silo .rfa (Revit 2026)
 - **Program Volumes are found by family name `{prefix}{UID}`.** After a UID or prefix change, phase 2 finds the old family through `parent_data_silo_id` on its instances and renames it. Families last synced before that field was written are still left behind (see architecture.md).
 - **Setup order is Project Config → Parameter Manager → Quick Setup.** Quick Setup has no parameters step; it reads area scheme mappings and the Data Silo family from Project Config and creates the area schemes, family, templates, views and schedules. Its families step keeps a Data Silo family the user chose in Project Config if that family is loaded, and adds the tracked parameters to the Data Silo family. The API's bootstrap does the same three steps and calls Quick Setup's `run_setup`, so change setup behavior in `setup/` (and the JSON standards), not in `bootstrap_service`. Its `parts` and `parameters` arguments narrow the scope; agents agree that scope with the user first (`get_setup_status`, see docs/agent/pyrevit-mcp.md).
 - **The shipped Data Silo family carries only Program UID, Program Stacking and Last Synced.** Every other parameter reaches Data Silos through the Generic Models binding. Never assume a built-in parameter is in the family or on an element: check the registry.
+- **A catalogue "unit" is an Area with a Data Silo inside**, by default in the area scheme that feeds `PDSO - GSF`. Callers name it by Program UID (`CL-02-18`) or the element id of its Area or Data Silo. Room numbers and Room ids are refused. Catalogue entries harvested before this change still carry Room fields (`room_name`, `features["rooms"]`); see [catalogue/README.md](catalogue/README.md).
 - **Large files:** `audit_service.py`, `sync_service.py`, `preflight_service.py`, `body_3_parameters.py`, `mcp/pdso_mcp_server.py` (1–1.5k lines each). Navigate with `grep -n "def "`.
 - **The intranet docs predate this code.** Where they disagree, the code wins. Differences are listed at the end of [docs/parameter-reference.md](docs/parameter-reference.md).
 
