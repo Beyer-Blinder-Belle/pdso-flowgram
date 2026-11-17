@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """ViewModel for Setup and Configuration UI.
 
-This ViewModel manages the PDSO configuration interface with four tabs:
-- Tab 1: Model and Setup Checks
-- Tab 2: Data Silo Settings
-- Tab 3: Program Volume Settings
-- Tab 4: Level Ranges Mapping
+This ViewModel manages the PDSO configuration interface: Data Silo settings,
+Program Volume settings, area scheme mappings, worksets and level mapping.
+Save goes through config_service.update_config, so the window and the API
+check and store the configuration the same way.
 """
 
 # Python standard libraries
@@ -44,10 +43,9 @@ from config_mapping_item import ConfigMappingItem
 from common.code.view_model_external_events import CustomizableEvent
 from common.code import generic_utils
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
-from pdso.code.business.level_mapping_service import level_key_problem
-from pdso.code.business.parameter_registry_service import (
-    check_parameter_bindings,
-)
+from pdso.code.business import config_service
+from pdso.code.business.errors import PDSOError
+from pdso.code.business.revit_helpers import id_value
 from pdso.code.data.shared_parameter_constants import standard_pdso_parameters
 
 
@@ -101,14 +99,6 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         self._data_silo_workset = "Not enforced"
         self._program_volume_workset = "Not enforced"
         self._area_workset = "Not enforced"
-
-        # Backing fields for check results (Tab 1)
-        self._check_schema_status = "[ - ]"
-        self._check_data_silo_family_status = "[ - ]"
-        self._check_data_silo_instances_status = "[ - ]"
-        self._check_shared_parameters_status = "[ - ]"
-        self._check_area_schemes_status = "[ - ]"
-        self._check_area_instances_status = "[ - ]"
 
         # Unsaved changes tracking
         self._has_unsaved_changes = False
@@ -283,82 +273,6 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             self.on_property_changed("area_workset")
             if not self._is_initializing:
                 self.has_unsaved_changes = True
-
-    # =============================================================================
-    # Observable Properties - Check Results (Tab 1)
-    # =============================================================================
-
-    @property
-    def check_schema_status(self):
-        """Get schema check status."""
-        return self._check_schema_status
-
-    @check_schema_status.setter
-    def check_schema_status(self, value):
-        """Set schema check status and notify UI."""
-        if self._check_schema_status != value:
-            self._check_schema_status = value
-            self.on_property_changed("check_schema_status")
-
-    @property
-    def check_data_silo_family_status(self):
-        """Get Data Silo family check status."""
-        return self._check_data_silo_family_status
-
-    @check_data_silo_family_status.setter
-    def check_data_silo_family_status(self, value):
-        """Set Data Silo family check status and notify UI."""
-        if self._check_data_silo_family_status != value:
-            self._check_data_silo_family_status = value
-            self.on_property_changed("check_data_silo_family_status")
-
-    @property
-    def check_data_silo_instances_status(self):
-        """Get Data Silo instances check status."""
-        return self._check_data_silo_instances_status
-
-    @check_data_silo_instances_status.setter
-    def check_data_silo_instances_status(self, value):
-        """Set Data Silo instances check status and notify UI."""
-        if self._check_data_silo_instances_status != value:
-            self._check_data_silo_instances_status = value
-            self.on_property_changed("check_data_silo_instances_status")
-
-    @property
-    def check_shared_parameters_status(self):
-        """Get shared parameters check status."""
-        return self._check_shared_parameters_status
-
-    @check_shared_parameters_status.setter
-    def check_shared_parameters_status(self, value):
-        """Set shared parameters check status and notify UI."""
-        if self._check_shared_parameters_status != value:
-            self._check_shared_parameters_status = value
-            self.on_property_changed("check_shared_parameters_status")
-
-    @property
-    def check_area_schemes_status(self):
-        """Get area schemes check status."""
-        return self._check_area_schemes_status
-
-    @check_area_schemes_status.setter
-    def check_area_schemes_status(self, value):
-        """Set area schemes check status and notify UI."""
-        if self._check_area_schemes_status != value:
-            self._check_area_schemes_status = value
-            self.on_property_changed("check_area_schemes_status")
-
-    @property
-    def check_area_instances_status(self):
-        """Get area instances check status."""
-        return self._check_area_instances_status
-
-    @check_area_instances_status.setter
-    def check_area_instances_status(self, value):
-        """Set area instances check status and notify UI."""
-        if self._check_area_instances_status != value:
-            self._check_area_instances_status = value
-            self.on_property_changed("check_area_instances_status")
 
     @property
     def has_unsaved_changes(self):
@@ -649,131 +563,6 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             self.logger.error("Error caching ComboBox data: {}".format(e))
 
     # =============================================================================
-    # Model Validation Checks (Tab 1)
-    # =============================================================================
-
-    def run_model_checks(self):
-        """Run all model validation checks and update status properties."""
-        self.logger.info("Running model validation checks...")
-
-        try:
-            doc = revit.doc
-
-            # Check 1: Ensure schemas are loaded and config is saved
-            schema_exists = (
-                self.ext_storage_service.check_document_pdso_config_schema_exists()
-            )
-            if schema_exists:
-                self.check_schema_status = "✓ Schema loaded and config saved"
-            else:
-                self.check_schema_status = "✗ Schema not initialized"
-
-            # Check 2: Is the Data Silo Family loaded?
-            family_name = self.data_silo_family_name
-            if family_name:
-                family_collector = db.Collector(
-                    of_class="Family", doc=doc
-                ).get_elements(wrapped=False)
-                family_found = any(f.Name == family_name for f in family_collector)
-
-                if family_found:
-                    self.check_data_silo_family_status = "[OK]"
-                else:
-                    self.check_data_silo_family_status = "[ X ]"
-            else:
-                self.check_data_silo_family_status = "[ ! ]"
-
-            # Check 3: How many instances of the data silo family are placed?
-            if family_name:
-                instance_collector = db.Collector(
-                    of_class="FamilyInstance", of_category="GenericModel", doc=doc
-                ).get_elements(wrapped=True)
-
-                ds_instances = [
-                    inst
-                    for inst in instance_collector
-                    if inst.Symbol.Family.Name == family_name
-                ]
-
-                count = len(ds_instances)
-                if count > 0:
-                    self.check_data_silo_instances_status = "[OK] {}".format(count)
-                else:
-                    self.check_data_silo_instances_status = "[ ! ]"
-            else:
-                self.check_data_silo_instances_status = "[ ! ]"
-
-            # Check 4: Are the tracked shared parameters present?
-            binding_check = check_parameter_bindings(doc)
-            if not binding_check["configured"]:
-                self.check_shared_parameters_status = (
-                    "✗ Not set up - run the Parameter Manager"
-                )
-            elif binding_check["missing"] or binding_check["missing_core"]:
-                missing = binding_check["missing_core"] + binding_check["missing"]
-                self.check_shared_parameters_status = (
-                    "✗ Missing {} parameter(s): {}".format(
-                        len(missing), ", ".join(missing[:3])
-                    )
-                )
-            else:
-                self.check_shared_parameters_status = (
-                    "✓ All {} tracked parameters present".format(
-                        len(binding_check["found"])
-                    )
-                )
-
-            # Check 5: Do the Area Schemes exist?
-            area_scheme_names = [item.key for item in self.area_scheme_mappings]
-            existing_schemes = [s["name"] for s in self._cached_area_schemes]
-
-            missing_schemes = [
-                name for name in area_scheme_names if name not in existing_schemes
-            ]
-
-            if len(area_scheme_names) == 0:
-                self.check_area_schemes_status = "⚠ No area schemes configured"
-            elif len(missing_schemes) == 0:
-                self.check_area_schemes_status = (
-                    "✓ All {} configured area schemes exist".format(
-                        len(area_scheme_names)
-                    )
-                )
-            else:
-                self.check_area_schemes_status = "✗ Missing {} scheme(s): {}".format(
-                    len(missing_schemes), ", ".join(missing_schemes)
-                )
-
-            # Check 6: How many Area instances are in each Area Scheme?
-            area_counts = {}
-            area_collector = db.Collector(of_class="Area", doc=doc).get_elements(
-                wrapped=True
-            )
-
-            for area in area_collector:
-                try:
-                    scheme_name = area.AreaScheme.Name
-                    area_counts[scheme_name] = area_counts.get(scheme_name, 0) + 1
-                except:
-                    pass
-
-            if len(area_counts) > 0:
-                count_summary = ", ".join(
-                    ["{}: {}".format(k, v) for k, v in area_counts.items()]
-                )
-                self.check_area_instances_status = "✓ Area counts: {}".format(
-                    count_summary
-                )
-            else:
-                self.check_area_instances_status = "⚠ No areas found in any scheme"
-
-            self.logger.info("Model checks completed")
-
-        except Exception as e:
-            self.logger.error("Error running model checks: {}".format(e))
-            self.check_schema_status = "✗ Error: {}".format(str(e))
-
-    # =============================================================================
     # Event Handlers
     # =============================================================================
 
@@ -794,14 +583,6 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
                 return
 
             self.logger.debug("BodyContent found, wiring buttons...")
-
-            # Run Checks button (Tab 1)
-            run_checks_button = self.find_element_by_name(
-                presenter.Content, "RunChecksButton"
-            )
-            if run_checks_button:
-                run_checks_button.Click += self._on_run_checks_clicked
-                self.logger.debug("Wired Run Checks button")
 
             # Save button
             save_button = self.find_element_by_name(presenter.Content, "SaveButton")
@@ -837,14 +618,6 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
 
         except Exception as e:
             self.logger.error("Error wiring event handlers: {}".format(e))
-
-    def _on_run_checks_clicked(self, sender, args):
-        """Handle Run Checks button click."""
-        self.logger.info("Run Checks button clicked")
-        try:
-            self.run_model_checks()
-        except Exception as e:
-            self.logger.error("Error running checks: {}".format(e))
 
     def _on_save_clicked(self, sender, args):
         """Handle Save button click."""
@@ -1352,16 +1125,8 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             level_mappings_list = []
             for item in self.levels_mappings:
                 if item.key and item.value:
-                    level_mappings_list.append((item.key.strip(), item.value))
-
-            # Stacking reads "-" as a range and "," as a list: refuse such keys
-            problems = [level_key_problem(key) for key, _ in level_mappings_list]
-            problems = [problem for problem in problems if problem]
-            if problems:
-                self.logger.error(
-                    "❌ **Configuration not saved.** {}".format(" ".join(problems))
-                )
-                return
+                    # config_service finds the level by id (and checks the key)
+                    level_mappings_list.append((item.key.strip(), id_value(item.value)))
 
             # Apply natural sort to keys
             level_mappings_list.sort(
@@ -1383,20 +1148,19 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             for key in config_updates.keys():
                 self.logger.debug("Config field: {}".format(key))
 
-            # Save to extensible storage (transaction handled by service)
-            success = self.ext_storage_service.update_document_config(**config_updates)
-
-            if success:
-                self.logger.info("Configuration saved successfully")
-                self.logger.info("✅ **Configuration saved successfully**")
-                self.has_unsaved_changes = False  # Clear unsaved changes flag
-            else:
-                self.logger.error(
-                    "Failed to save configuration - check PyRevit log for details"
+            # Same checks and storage as the API (transaction handled there)
+            try:
+                config_service.update_config(
+                    self.ext_storage_service.document, config_updates
                 )
+            except PDSOError as error:
                 self.logger.error(
-                    "❌ **Failed to save configuration** - check PyRevit log for details"
+                    "❌ **Configuration not saved.** {}".format(error)
                 )
+                return
+            self.logger.info("Configuration saved successfully")
+            self.logger.info("✅ **Configuration saved successfully**")
+            self.has_unsaved_changes = False  # Clear unsaved changes flag
 
         except Exception as e:
             self.logger.error("Error saving configuration: {}".format(str(e)))

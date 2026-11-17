@@ -234,6 +234,9 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-U8. Area plan for another scheme** [K1]
   Steps: after T-U7, `draft_area` in the NSF scheme.
   Expected: an area plan "PDSO - NSF - <level>" with the working template is made.
+- [ ] **T-U9. Project Config refuses bad values** [K3]
+  Steps: in Project Config, set the UID pattern to `(`, then save. Then fix it, set the extrusion height to 0, and save.
+  Expected: each save says "Configuration not saved" with the reason, and nothing changes in the model. A good save still works and clears the unsaved mark.
 - [ ] **T-U6. Quick Setup keeps template changes** [U6]
   Steps: show a hidden category in "PDSO - 3D - Program Volumes", then run Quick Setup again.
   Expected: the template keeps the change, and the report says Skipped.
