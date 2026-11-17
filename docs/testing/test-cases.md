@@ -332,7 +332,7 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.9 with no version warning.
+  Expected: API 1.10 with no version warning.
 - [ ] **T-P13. Older catalogue names still work**
   Steps: `POST catalogue/similar-rooms` with `layout_id`, and `GET catalogue/room-items` with `room=<Program UID>`.
   Expected: both answer as `catalogue/similar-units` and `catalogue/unit-items` do. The replies carry the new keys (`unit`, `units`, `units_checked`) and the old ones (`room`, `rooms`, `rooms_checked`).

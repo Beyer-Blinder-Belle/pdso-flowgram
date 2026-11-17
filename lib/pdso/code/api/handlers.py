@@ -31,7 +31,7 @@ ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.9"
+API_VERSION = "1.10"
 
 
 def route(method, pattern):
