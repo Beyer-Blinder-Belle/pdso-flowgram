@@ -1100,7 +1100,7 @@ def adjust_area(
     name: str | None = None,
     number: str | None = None,
 ) -> dict:
-    """Adjust one Area. Give one geometry change: a new outline (points), a move (move_dx and move_dy), one moved outline point (vertex_index, vertex_x, vertex_y), or a scale factor. You can also change the name and number. Returns the Area after the change, with previous_area and the new area. If Revit cannot enclose the Area with the new outline, no change is made.
+    """Adjust one Area. Give one geometry change: a new outline (points), a move (move_dx and move_dy), one moved outline point (vertex_index, vertex_x, vertex_y), or a scale factor. You can also change the name and number. Returns the Area after the change, with previous_area and the new area. If Revit cannot enclose the Area with the new outline, no change is made. An Area that shares a boundary line with a neighbouring Area can't be moved or scaled, and its outline can't be changed in a way that leaves that line: the call fails and names the neighbour; tell the user to change the shared edge in Revit or redraw both Areas.
 
     Args:
         area_id: Revit element id of the Area.

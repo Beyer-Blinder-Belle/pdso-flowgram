@@ -153,7 +153,8 @@ class ExtendedDataSilo(object):
         """
 
         # To do - improve with fallback logic and/or multi-area logic
-        # related_area_elements is keyed by Area Scheme name.
+        # related_area_elements is keyed by DSO parameter ("PDSO - GSF"), not
+        # by the Revit scheme name (see correlation_service).
         # A model that uses the default scheme names: the GSF Area gives the shape
         gsf_area = self.related_area_elements.get("PDSO - GSF", None)
         if gsf_area is not None:

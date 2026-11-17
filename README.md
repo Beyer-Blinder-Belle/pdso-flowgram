@@ -120,7 +120,7 @@ All lengths are decimal feet. All areas are square feet.
 pyrevit configs routes enable
 ```
 
-Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). To check it, open `http://127.0.0.1:48884/pdso/status` in a browser on the Revit computer: it shows `"ok": true`, the open model and `api_version`. `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication and listens only on `127.0.0.1`. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
+Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.0.1:48884/pdso/` (48884 is the default pyRevit Routes port). To check it, open `http://127.0.0.1:48884/pdso/status` in a browser on the Revit computer: it shows `"ok": true`, the open model and `api_version`. `GET /pdso/routes` lists all routes. pyRevit Routes has no authentication. It listens on `127.0.0.1` by default; PDSO doesn't enforce that, so make sure the Routes host setting in pyRevit hasn't been changed to a network address. To use it from a different computer, use an SSH port forward. Do not open the port to a network.
 
 ### Routes
 
@@ -139,7 +139,7 @@ Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.
 
 A request can name the open document that it works on with the field `document` (a title or a file path). Without it, a request works on the active document. `POST documents/open` opens a file but does not show it, so a person or a different agent can use the same Revit at the same time.
 
-Requests are safe to send at the same time. The API runs them one at a time on Revit's main thread and gives each request its own reply.
+The API runs requests one at a time on Revit's main thread. Still, send them one at a time: when requests overlapped, pyRevit Routes sometimes gave a client the reply of a different request (see "Versions, reloads and more than one client").
 
 A reply is `{"ok": true, "data": ...}` or `{"ok": false, "error": {"type", "message", "traceback"}}`.
 
@@ -285,7 +285,7 @@ PDSO.tab/
 │   ├── 2.Setup.pushbutton/           # Quick Setup from JSON standards (Shift+Click: options)
 │   ├── 3.RunScripts.pushbutton/      # Harvest Areas and sync program volumes
 │   └── 4.Audit.pushbutton/           # Audit report
-└── Unit Layout Catalogue.panel/
+└── Unit Layout Catalogue.panel/      # Harvest All Units, Harvest Layout, Pull from Catalogue
 lib/
 ├── common/                           # Shared helpers and UI assets
 ├── extensible_storage/               # Vendored third-party library (don't edit)
@@ -293,7 +293,9 @@ lib/
     ├── code/
     │   ├── api/                      # HTTP API: request dispatcher and route handlers
     │   ├── business/                 # Services: sync, hashing, level mapping, storage, ...
+    │   ├── catalogue/                # Unit Layout Catalogue: harvest, store, recommend, place, windows
     │   ├── data/                     # Wrappers around Revit elements, schemas, parameter constants
+    │   ├── defaults.py               # Defaults of a new PDSO configuration
     │   ├── setup/                    # Quick Setup: standards loader, runner and steps
     │   └── view_models/              # WPF view models (MVVM)
     ├── standards/                    # Default JSON standards for Quick Setup

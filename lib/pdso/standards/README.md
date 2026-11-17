@@ -179,7 +179,7 @@ Useful categories: `OST_AreaSchemeLines` (area boundaries), `OST_Areas`, `OST_Ar
 | `template` | View template name to apply |
 | `parameters` | View parameters to set, e.g. `{ "View Subdiscipline": "PDSO" }` for browser organization. Parameters the template controls can't be set. |
 
-Setup doesn't create area schemes. If a scheme is missing, create it in **Area and Volume Computations** and run setup again.
+The `area_schemes` step runs first and creates the schemes Project Config maps. If a scheme is still missing (for example the step is turned off), the views of that scheme are skipped with a note: create it in **Area and Volume Computations** and run setup again.
 
 ## schedules.json
 

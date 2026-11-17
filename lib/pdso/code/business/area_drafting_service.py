@@ -21,6 +21,7 @@ from . import config_service, program_service
 from .bootstrap_service import ensure_area_plan, find_area_plan
 from pdso.code.setup.revit_utils import find_area_scheme
 from .errors import PDSOError
+from pdso.code.catalogue.layout_geometry import distance_to_polygon
 from .revit_helpers import (
     Transaction,
     TransactionGroup,
@@ -32,6 +33,7 @@ from .revit_helpers import (
     point_in_polygon,
     polygon_area,
     polygon_interior_point,
+    to_element_id,
     to_number,
 )
 
@@ -395,6 +397,63 @@ def _exclusive_line_ids(doc, area, loops=None):
     return sorted(own)
 
 
+# How far (feet) a kept shared line may be from the new outline and still lie on it
+ON_OUTLINE_TOLERANCE = 0.01
+
+
+def _shared_lines(doc, area, loops):
+    """Lines of these loops that another Area of the scheme also uses.
+
+    Returns:
+        dict: line id -> labels ("number name") of the other Areas
+    """
+    line_ids = set()
+    for loop in loops:
+        line_ids.update(loop["line_ids"])
+    shared = {}
+    scheme_name = _scheme_name(area)
+    for other in _all_areas(doc):
+        if other.Id == area.Id or other.LevelId != area.LevelId:
+            continue
+        if _scheme_name(other) != scheme_name:
+            continue
+        name_parameter = other.get_Parameter(DB.BuiltInParameter.ROOM_NAME)
+        label = "{} {}".format(
+            other.Number or "", (name_parameter.AsString() if name_parameter else "") or ""
+        ).strip() or "id {}".format(id_value(other.Id))
+        for loop in _loops(other):
+            for line_id in line_ids.intersection(loop["line_ids"]):
+                shared.setdefault(line_id, []).append(label)
+    return shared
+
+
+def _lies_on_outline(doc, line_id, outline):
+    """True if a boundary line lies along the polygon (ends and middle on it)."""
+    element = doc.GetElement(to_element_id(line_id))
+    curve = getattr(element, "GeometryCurve", None)
+    if curve is None:
+        return False
+    for parameter in (0.0, 0.5, 1.0):
+        point = curve.Evaluate(parameter, True)
+        if distance_to_polygon((point.X, point.Y), outline) > ON_OUTLINE_TOLERANCE:
+            return False
+    return True
+
+
+def _refuse_shared_edge_change(area, neighbours):
+    """Raise a 409: the change would leave a shared boundary line behind (K15)."""
+    raise PDSOError(
+        "Area {} shares a boundary line with {}, and this change would move it "
+        "off that line. The neighbour still needs the line, and it would keep "
+        "bounding this Area too (Revit would also split the neighbour with the "
+        "new line). Change the shared edge in Revit, or redraw both Areas.".format(
+            area.Number or id_value(area.Id),
+            ", ".join("Area {}".format(label) for label in sorted(set(neighbours))),
+        ),
+        409,
+    )
+
+
 def create_area(doc, scheme, level, points, name=None, number=None):
     """Draw an outline and place an Area in it.
 
@@ -495,6 +554,17 @@ def set_area_outline(doc, area_id, points):
                 "Its boundary lines were removed."
             )
 
+    # A line shared with a neighbour stays. That's right only if it is still
+    # on the new outline; otherwise it would bound both Areas wrongly (K15).
+    stranded = [
+        label
+        for line_id, labels in _shared_lines(doc, area, to_remove).items()
+        if not _lies_on_outline(doc, line_id, outline)
+        for label in labels
+    ]
+    if stranded:
+        _refuse_shared_edge_change(area, stranded)
+
     with TransactionGroup(doc, "PDSO - Set Area Outline"):
         view = _area_plan(doc, _scheme_name(area), level)
         with Transaction(doc, "PDSO - Redraw Area Outline") as transaction:
@@ -556,10 +626,10 @@ def _transform_area(doc, area, transform, name):
     """Move or scale an Area with a transform: its outline, holes and location.
 
     Each boundary curve keeps its kind: an arc stays an arc. The lines that
-    only this Area uses are deleted; lines that it shares with another Area
-    stay. Known issue (audit K15): the moved copy of a shared line is drawn
-    too, so it can split the neighbouring Area, and the moved Area stays
-    bounded by the kept line.
+    only this Area uses are deleted. An Area that shares a boundary line with
+    another Area is refused (409): the neighbour needs the line, so it would
+    stay, keep bounding the moved Area, and the moved copy would split the
+    neighbour (audit K15).
 
     Args:
         transform (DB.Transform): A move, or a uniform scale (conformal).
@@ -574,6 +644,12 @@ def _transform_area(doc, area, transform, name):
         raise PDSOError("The Area is not placed. Delete it and create a new Area.")
     level = doc.GetElement(area.LevelId)
     previous_area = area.Area
+
+    shared = _shared_lines(doc, area, _loops(area))
+    if shared:
+        _refuse_shared_edge_change(
+            area, [label for labels in shared.values() for label in labels]
+        )
 
     curves = []
     for loop in area.GetBoundarySegments(DB.SpatialElementBoundaryOptions()) or []:

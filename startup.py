@@ -9,12 +9,16 @@ can be replaced without a pyRevit reload (see ``POST /pdso/dev/reload``).
 The routes server must be enabled: ``pyrevit configs routes enable``.
 Base URL: ``http://127.0.0.1:<routes port>/pdso/``.
 
-Requests are safe to send at the same time. pyRevit Routes gives all requests
+The PDSO code runs one request at a time. pyRevit Routes gives all requests
 that need the Revit API one shared handler object, so two requests that overlap
 can get each other's reply. To prevent that, the route functions here take no
 Revit API argument. pyRevit then calls them on the HTTP thread of the request.
 Each call puts a job in a queue and waits. One external event runs the jobs on
 Revit's main thread, one at a time, and gives each job its own reply.
+
+That is not a full fix: in tests, Routes still gave a client the reply of a
+different request when requests overlapped. Clients send a request id (_rid)
+and check the "rid" of the reply; use one client for each Revit.
 """
 
 import threading

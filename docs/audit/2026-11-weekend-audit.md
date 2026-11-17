@@ -232,7 +232,7 @@ Still open from this review:
   - New `point_in_area` (outline minus holes) and `outline_and_holes` helpers. `program_service.containing_areas`, its Area placement, `visualization_service.program_by_area`, `move_area` and the MCP's `render_plan` now leave out holes.
   - `correlation_service` keeps its winding-number test on Revit curves, which handles holes and arcs.
   - The MCP keeps its own copy, since it can't import lib.
-- [ ] **K5. Docs that are stale or contradict each other:**
+- [x] **K5. Docs that are stale or contradict each other:**
   - concurrency: `startup.py` and README:142 vs README:242 and AGENTS.md
   - "127.0.0.1 only" isn't enforced: it depends on pyRevit's `routes.Host`
   - `architecture.md:31`: `related_area_elements` is keyed by parameter, not by scheme
@@ -242,6 +242,7 @@ Still open from this review:
   - "16 preflight checks" should be 17
   - the README tree omits the catalogue
   - `pyrevit-mcp.md`'s destructive-calls list predates the catalogue
+  *Done: all nine fixed. startup.py and the README no longer say overlapping requests are safe. The `127.0.0.1` claims say it's pyRevit's default. The code comment in `extended_data_silo.py` that repeated the wrong key was fixed too.*
 - [x] **K6.** `API_VERSION` wasn't bumped when 6e89d07 added `image` and `catalogue` to the layout replies. `image` is a local path, so remote agents can't use it. *Done: the bump to 1.6 (with B1) covers those reply changes. `GET catalogue/layouts/<id>` now also returns the image as `image_base64`, and the MCP's `get_layout` returns it as an image. The summary's `image` stays a path on the Revit computer, for local use.*
 - [x] **K7.** Duplicate routes: `document/save|close` vs `documents/save|close`, with different shapes. Read-only catalogue routes use POST. Parameter names differ between `handlers.py` and `catalogue_handlers.py`, and their `_flag` helpers are duplicated.
   *Done:*
@@ -288,7 +289,8 @@ Still open from this review:
   - "Warn" reports how many Data Silos, Areas and Program Volumes are on another workset than Project Config sets, and moves nothing. Families, whose workset can't change, are left out.
   - Found while fixing this: the Sync Data window sends "Fix (if configured)" and the sync only acted on "Fix", so workset enforcement never ran from the ribbon (besides S9). Option values are normalized now; the API lists "Fix", "Warn" and "Do Nothing" and still accepts the old labels. API 1.8.
   - `pdso_kinds` logs a warning when it can't read the configuration.
-- [ ] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
+- [x] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
+  *Done, by refusing: `move_area` and `scale_area` refuse an Area that shares a boundary line with another Area (409, naming the neighbour). `set_area_outline` refuses only if a shared line would be left off the new outline; a shared edge that stays in place is fine. Moving both Areas' shared edge is left to Revit.*
 - [x] **K16.** `move_area` picks the programs to move with a point-in-polygon test on the outer outline only, so it also moves the Data Silo of an island Area inside a hole. This was already on main.
   *Done: it uses `point_in_area` with the Area's holes (K4).*
 

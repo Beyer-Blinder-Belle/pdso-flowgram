@@ -154,6 +154,10 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-A5.
   Steps: move one Area by 2 ft towards the other.
   Expected (known failing): the neighbour is split and the moved Area shrinks. This test is for the K15 fix.
+- [ ] **T-A12. Areas that share an edge** [K15]
+  Model: M-A5.
+  Steps: `move_area` on one of the two Areas. Then `set_area_outline` that keeps the shared edge and moves another corner. Then `set_area_outline` that moves the shared edge.
+  Expected: the move is refused (409, names the other Area) and nothing changes. The outline that keeps the shared edge works, with no split in the neighbour. The one that moves the shared edge is refused.
 - [ ] **T-A8. Move an Area around an island** [K16]
   Model: M-A6.
   Steps: move the outer Area.
