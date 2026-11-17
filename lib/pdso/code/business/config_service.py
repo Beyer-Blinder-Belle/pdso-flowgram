@@ -20,6 +20,7 @@ from ..data.shared_parameter_constants import standard_pdso_parameters
 from .errors import PDSOError
 from . import parameter_registry_service
 from .extensible_storage_service import PDSOExtensibleStorageService
+from .level_mapping_service import level_key_problem
 from .revit_helpers import find_level, id_value
 
 logger = script.get_logger()
@@ -111,7 +112,8 @@ def update_config(doc, updates):
             are replaced as a whole and cannot be empty.
             "levels_mapping" maps each stacking key (for example "01") to a level
             name or level id. The "PDSO - Program Stacking" parameter of a Data
-            Silo uses these keys ("01-02" or "01, 03"). The tracked parameters
+            Silo uses these keys ("01-02" or "01, 03"), so a key can't contain
+            "-" or ",". The tracked parameters
             ("tethered_parameters") are not changed here: see parameter_service.
 
     Returns:
@@ -191,8 +193,12 @@ def update_config(doc, updates):
     if "levels_mapping" in updates:
         mapping = updates["levels_mapping"]
         _require_map(mapping, "levels_mapping")
+        problems = [level_key_problem(key) for key in mapping]
+        problems = [problem for problem in problems if problem]
+        if problems:
+            raise PDSOError(" ".join(problems))
         values["levels_mapping"] = dict(
-            (str(key), find_level(doc, reference).Id)
+            (str(key).strip(), find_level(doc, reference).Id)
             for key, reference in mapping.items()
         )
 

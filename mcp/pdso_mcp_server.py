@@ -553,7 +553,7 @@ def update_config(
         program_volume_family_name_prefix: Prefix of the Program Volume family names.
         program_volume_extrusion_height: Height of the Program Volumes in feet.
         area_scheme_mappings: PDSO area parameter name to area scheme name, for example {"PDSO - GSF": "PDSO - GSF"}.
-        levels_mapping: Stacking key to level name, for example {"01": "L1", "02": "L2"}. The "stacking" field of a program uses these keys ("01-02" or "01, 03").
+        levels_mapping: Stacking key to level name, for example {"01": "L1", "02": "L2"}. The "stacking" field of a program uses these keys ("01-02" or "01, 03"), so a key can't contain "-" or ",".
         worksets: Element kind to workset name.
     """
     body = _clean(

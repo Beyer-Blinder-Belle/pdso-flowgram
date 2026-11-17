@@ -7,13 +7,37 @@ This service handles the three-stage level mapping process:
 3. Validate and deduplicate results
 
 Supports key-based range expansion for multi-building projects where keys
-can include prefixes (e.g., "A07", "B03").
+can include prefixes (e.g., "A07", "B03"). A key can't contain "-" or ",":
+stacking uses them for ranges and lists (see level_key_problem).
 """
 
 from pyrevit import script
 
 # Custom Modules
 from pdso.code.view_models.config_mapping_item import ConfigMappingItem
+
+
+# Stacking uses "-" for ranges and "," between keys, so a key can't contain them
+RESERVED_KEY_CHARACTERS = ("-", ",")
+
+
+def level_key_problem(key):
+    """Why a level key can't be saved, or None if it can.
+
+    Project Config and the API check every key with this before saving.
+    Keys are compared after stripping spaces at the ends.
+    """
+    text = "{}".format(key if key is not None else "").strip()
+    if not text:
+        return "A level key can't be empty."
+    used = [c for c in RESERVED_KEY_CHARACTERS if c in text]
+    if used:
+        return (
+            "Level key '{}' contains {}. Stacking uses '-' for ranges and ',' "
+            "between keys. Use '.', '_' or a space instead, for example "
+            "'B1.03'.".format(text, " and ".join("'{}'".format(c) for c in used))
+        )
+    return None
 
 
 # TO DO - Review this class and make sure its architecture is consistent with other services. Consider moving certain methods.
@@ -160,7 +184,7 @@ class PDSOLevelMappingService(object):
                 self.level_mappings_cache = level_mappings
 
         # Build sorted keys list for range expansion
-        # Uses natural sort to handle "3" < "10" and compound keys like "B1-03"
+        # Uses natural sort to handle "3" < "10" and compound keys like "B1.03"
         self.sorted_keys = sorted(
             self.level_mappings_cache.keys(), key=ConfigMappingItem.natural_sort_key
         )
@@ -207,15 +231,17 @@ class PDSOLevelMappingService(object):
             if not segment:
                 continue
 
-            # A key may contain a hyphen itself ("B1-03"). A segment that is
-            # a key is that key, not a range.
-            if segment in self.level_mappings_cache:
-                keys.append(segment)
-                continue
-
             if "-" in segment:
-                # Range notation (e.g., "03-05", "A07-A09" or "B1-03-B1-05")
-                parts = self._split_range(segment)
+                if segment in self.level_mappings_cache:
+                    # A key saved before hyphens were refused
+                    errors.append(
+                        "Level key '{}' contains a hyphen, which stacking reads "
+                        "as a range. Rename it in Project Config.".format(segment)
+                    )
+                    continue
+
+                # Range notation (e.g., "03-05", "A07-A09")
+                parts = segment.split("-")
                 if len(parts) == 2:
                     start_key = parts[0].strip()
                     end_key = parts[1].strip()
@@ -299,31 +325,6 @@ class PDSOLevelMappingService(object):
                 unique_keys.append(key)
 
         return unique_keys, errors
-
-    def _split_range(self, segment):
-        """Split a range "start-end" where the keys may contain hyphens.
-
-        Each hyphen is tried as the separator. A split where both sides are
-        mapping keys wins ("B1-03-B1-05" gives "B1-03" and "B1-05"). If no
-        split has two known keys, a segment with one hyphen is split there
-        (the caller reports the unknown key); otherwise the parts of a plain
-        split are returned, which the caller reports as an invalid format.
-
-        Returns:
-            list: [start, end], or the parts of segment.split("-")
-        """
-        parts = segment.split("-")
-        if len(parts) == 2:
-            return parts
-        matches = []
-        for index in range(1, len(parts)):
-            start = "-".join(parts[:index]).strip()
-            end = "-".join(parts[index:]).strip()
-            if start in self.level_mappings_cache and end in self.level_mappings_cache:
-                matches.append([start, end])
-        if len(matches) == 1:
-            return matches[0]
-        return parts
 
     def map_keys_to_levels(self, keys, ext_level_collection):
         """Map list of keys to ExtendedLevel objects.

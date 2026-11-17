@@ -12,7 +12,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 
 ### Levels and stacking
 - [ ] **M-L1.** Four occupied levels with stacking keys `01`–`04`, and a Roof level with no key.
-- [ ] **M-L2.** One level with a key that contains a hyphen, for example `B1-03` [S7].
+- [ ] **M-L2.** One level with a key that contains a hyphen, for example `B1-03`, saved before this rule (or through `/pdso/dev/exec`) [S7].
 
 ### Areas (in the GSF scheme, plus NSF and ZFA where a case says so)
 - [ ] **M-A1.** A plain rectangle Area, about 20 × 30 ft.
@@ -90,8 +90,8 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: phase 2 doesn't stop. Record what actually happens.
 - [ ] **T-S9. Hyphenated level key** [S7]
   Model: M-L2.
-  Steps: set stacking `01, B1-03`, then sync.
-  Expected: `B1-03` is one level. `B1-03-B1-05` (if three B1 keys exist) is a range. [Fixed: S7]
+  Steps: (1) in Project Config, enter the key `B1-03` and save. (2) Call `update_config` with the key `B1,03`. (3) In M-L2, run preflight, then sync with stacking `01, B1-03`.
+  Expected: (1) nothing is saved, and the output names the key and suggests `B1.03`. (2) a 400 with the same message. (3) preflight warns that the key must be renamed. The sync reports a stacking error for that Data Silo only. [Fixed: S7]
 - [ ] **T-S11. Family documents are closed** [S1]
   Model: M-D1, M-D2.
   Steps: move both Data Silos, sync, then `list_open_documents` (or the Revit window list).

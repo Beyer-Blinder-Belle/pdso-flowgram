@@ -44,6 +44,7 @@ from config_mapping_item import ConfigMappingItem
 from common.code.view_model_external_events import CustomizableEvent
 from common.code import generic_utils
 from pdso.code.business.extensible_storage_service import PDSOExtensibleStorageService
+from pdso.code.business.level_mapping_service import level_key_problem
 from pdso.code.business.parameter_registry_service import (
     check_parameter_bindings,
 )
@@ -1232,7 +1233,8 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
         identifier_textbox.Margin = Thickness(5, 0, 10, 0)
         identifier_textbox.VerticalAlignment = VerticalAlignment.Center
         identifier_textbox.ToolTip = (
-            "Enter sortable identifier (e.g., 'Lvl 01', 'B1-03-A2')"
+            "Enter sortable identifier (e.g., 'Lvl 01', 'B1.03.A2'). "
+            "It can't contain '-' or ','."
         )
 
         key_binding = Binding("key")
@@ -1350,7 +1352,16 @@ class PDSO_View_Model_1_Setup(PDSO_Base_View_Model):
             level_mappings_list = []
             for item in self.levels_mappings:
                 if item.key and item.value:
-                    level_mappings_list.append((item.key, item.value))
+                    level_mappings_list.append((item.key.strip(), item.value))
+
+            # Stacking reads "-" as a range and "," as a list: refuse such keys
+            problems = [level_key_problem(key) for key, _ in level_mappings_list]
+            problems = [problem for problem in problems if problem]
+            if problems:
+                self.logger.error(
+                    "❌ **Configuration not saved.** {}".format(" ".join(problems))
+                )
+                return
 
             # Apply natural sort to keys
             level_mappings_list.sort(

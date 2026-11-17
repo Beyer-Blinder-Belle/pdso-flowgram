@@ -143,7 +143,7 @@ Still open from this review:
 - [x] **S6.** One failed instance rolls back the whole "Update Program Volume Instances" transaction, deletions included (`extended_program_volume_instance_collection.py:322-331`).
   *Done: a failed instance is logged and counted; the rest of the transaction commits.*
 - [x] **S7.** A level key that contains a hyphen (`B1-03-A2`, the format Project Config suggests) can't be used in stacking (`level_mapping_service.py:210-282`).
-  *Done: a segment that is a key is that key; a range is split at the hyphen where both sides are keys (`B1-03-B1-05`). Tested against seven sample inputs in CPython.*
+  *Done, by refusing such keys instead of parsing them (the first fix let the parser guess, which was ambiguous: with keys `B1`, `03` and `B1-03`, `B1-03` silently meant one level). Project Config and `update_config` refuse a key with `-` or `,` (`level_key_problem`), and the Project Config hint now suggests `B1.03.A2`. Preflight warns about keys saved before the rule. Stacking that names such a key gets a clear error for that Data Silo. Before S7 these keys never worked in stacking, so no model relies on them.*
 - [x] **S8.** The audit counts placeholder wrappers as "Families without geometry hashes", so the number is too high (`audit_service.py:1342-1346`).
 
   *Done: placeholder wrappers (no family) are not counted.*

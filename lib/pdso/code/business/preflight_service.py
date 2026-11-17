@@ -34,7 +34,7 @@ from .parameter_registry_service import (
 )
 from .correlation_service import PDSOCorrelationService
 from .extensible_storage_service import PDSOExtensibleStorageService
-from .level_mapping_service import PDSOLevelMappingService
+from .level_mapping_service import PDSOLevelMappingService, level_key_problem
 
 
 # (check key, status attribute, label), in the order that the checks run
@@ -396,7 +396,31 @@ class PDSOPreflightService(object):
                     )
                 )
 
-                if validation_result.passed:
+                # Keys saved before "-" and "," were refused can't be used
+                # in stacking. Only Data Silos that use them fail, so warn.
+                bad_keys = sorted(
+                    key
+                    for key in level_mapping_service.level_mappings_cache
+                    if level_key_problem(key)
+                )
+                if bad_keys:
+                    self.logger.warning(
+                        "Level key{} {} contain '-' or ','. Stacking can't use "
+                        "them. Rename them in Project Config.".format(
+                            "s" if len(bad_keys) != 1 else "",
+                            ", ".join("'{}'".format(key) for key in bad_keys),
+                        )
+                    )
+                    has_warnings = True
+
+                if validation_result.passed and bad_keys:
+                    self.check_level_mappings_status = (
+                        "⚠️ {} level key{} contain '-' or ','. Rename in "
+                        "Project Config".format(
+                            len(bad_keys), "s" if len(bad_keys) != 1 else ""
+                        )
+                    )
+                elif validation_result.passed:
                     self.check_level_mappings_status = "✓ All level mappings complete"
                 else:
                     # Count data silos with errors

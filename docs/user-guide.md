@@ -95,7 +95,7 @@ Program Volume shapes come from the Area in the `PDSO - GSF` scheme. If there's 
 | `03` | Level 3 |
 | `10` | Level 10 |
 
-Identifiers should sort correctly (`01`, `02`, ... `10`). For several buildings, prefix them, for example `A07` or `B03`. Click **Sort by Identifier**. You can add levels later too.
+Identifiers should sort correctly (`01`, `02`, ... `10`). For several buildings, prefix them, for example `A07` or `B03`. An identifier can't contain `-` or `,`, because stacking uses them for ranges and lists: write `B1.03`, not `B1-03`. Click **Sort by Identifier**. You can add levels later too.
 
 Click **Save Configuration**.
 
