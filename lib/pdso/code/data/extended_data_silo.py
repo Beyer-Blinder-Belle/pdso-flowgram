@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 
 # System Modules
@@ -7,6 +8,7 @@ from rpw import db
 from pyrevit import script
 
 # Custom Modules
+from pdso.code.data import parameter_access
 from pdso.code.data.shared_parameter_constants import LAST_SYNCED
 from pdso.code.data.extended_shared_parameter import ROLE_AREA
 from pdso.code.business.parameter_registry_service import get_registry
@@ -73,6 +75,18 @@ class ExtendedDataSilo(object):
         self.queue_resetting_params()
 
     @property
+    def uid(self):
+        """The Program UID, read by GUID (None if the parameter is missing)."""
+        return parameter_access.get_value(self.rpw_element, parameter_access.PROGRAM_UID)
+
+    @property
+    def stacking(self):
+        """The Program Stacking text, read by GUID (None if the parameter is missing)."""
+        return parameter_access.get_value(
+            self.rpw_element, parameter_access.PROGRAM_STACKING
+        )
+
+    @property
     def has_stacking_errors(self):
         """True if the stacking did not fully resolve to levels.
 
@@ -112,7 +126,7 @@ class ExtendedDataSilo(object):
 
         for param_name, new_value in self.params_to_update.items():
             try:
-                self.rpw_element.parameters[param_name].value = new_value
+                parameter_access.set_value(self.rpw_element, param_name, new_value)
             except Exception as e:
                 self.logger.error(
                     "Failed to update parameter '{}' on data silo {}: {}".format(
@@ -139,7 +153,8 @@ class ExtendedDataSilo(object):
         """
 
         # To do - improve with fallback logic and/or multi-area logic
-        # related_area_elements is keyed by Area Scheme name.
+        # related_area_elements is keyed by DSO parameter ("PDSO - GSF"), not
+        # by the Revit scheme name (see correlation_service).
         # A model that uses the default scheme names: the GSF Area gives the shape
         gsf_area = self.related_area_elements.get("PDSO - GSF", None)
         if gsf_area is not None:

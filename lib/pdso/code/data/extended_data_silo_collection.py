@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 from collections import defaultdict
 
@@ -9,7 +10,9 @@ from rpw.utils.dotnet import List
 from pyrevit import script
 
 # Custom Modules
+from pdso.code.data import parameter_access
 from pdso.code.data.extended_data_silo import ExtendedDataSilo
+from pdso.code.data.shared_parameter_constants import PROGRAM_UID
 
 
 class ExtendedDataSiloCollection(object):
@@ -143,7 +146,7 @@ class ExtendedDataSiloCollection(object):
 
         self.logger.debug("Checking if all PDSO UIDs in the collection are unique")
 
-        duplicates = self.get_elements_with_duplicate_values("PDSO - Program UID")
+        duplicates = self.get_elements_with_duplicate_values(PROGRAM_UID)
 
         if duplicates is None:
             return False
@@ -198,19 +201,20 @@ class ExtendedDataSiloCollection(object):
                         self.logger.debug("Parameter '{}' not found in element {}".format(parameter_name, str(ext_data_silo.rpw_element)))
                         continue
                     """
-                    param = ext_data_silo.rpw_element.parameters[parameter_name]
+                    param = parameter_access.get_parameter(
+                        ext_data_silo.rpw_element, parameter_name
+                    )
                     if param is None:
-                        # self.logger.debug("Parameter '{}' is None for element {}".format(parameter_name, str(ext_data_silo.rpw_element.Id)))
                         continue
 
-                    value = param.value
+                    value = db.Parameter(param).value
                     if value is None:
                         # self.logger.debug("Parameter '{}' has None value for element {}".format(parameter_name, str(ext_data_silo.rpw_element.Id)))
                         continue
 
                     value_to_elements[value].append(ext_data_silo)
 
-                    """    
+                    """
                     except (AttributeError, KeyError) as e:
                         self.logger.warning("Error accessing parameter '{}' for element : {}".format(
                             parameter_name, str(e)))
@@ -290,18 +294,6 @@ class ExtendedDataSiloCollection(object):
 
         return unavailable_element_ids
 
-    def set_element_pin_status(self, pin_status):
-        """Set the pin status for all ExtendedDataSilo elements in the collection.
-
-        Args:
-            pin_status (bool): True to pin elements, False to unpin
-        """
-        # to do - check if isModifiable, start transaction if not.
-
-        with db.Transaction("Set Data Silo Pin Status", doc=self.doc):
-            for ext_data_silo in self.extended_data_silos:
-                ext_data_silo.rpw_element.Pinned = pin_status
-
     def get_data_silos_with_partial_coverage(self, configured_schemes):
         """Get data silos that are missing correlations for some configured area schemes.
 
@@ -323,15 +315,7 @@ class ExtendedDataSiloCollection(object):
 
             if missing_schemes and len(missing_schemes) < len(configured_schemes):
                 # Has some but not all schemes
-                uid = "Unknown"
-                try:
-                    uid_param = ext_data_silo.rpw_element.parameters.get(
-                        "PDSO - Program UID"
-                    )
-                    if uid_param and uid_param.value:
-                        uid = uid_param.value
-                except:
-                    pass
+                uid = ext_data_silo.uid or "Unknown"
 
                 partial_coverage_silos.append(
                     {
@@ -357,15 +341,7 @@ class ExtendedDataSiloCollection(object):
                 not ext_data_silo.related_area_elements
                 or len(ext_data_silo.related_area_elements) == 0
             ):
-                uid = "Unknown"
-                try:
-                    uid_param = ext_data_silo.rpw_element.parameters.get(
-                        "PDSO - Program UID"
-                    )
-                    if uid_param and uid_param.value:
-                        uid = uid_param.value
-                except:
-                    pass
+                uid = ext_data_silo.uid or "Unknown"
 
                 no_coverage_silos.append(
                     {

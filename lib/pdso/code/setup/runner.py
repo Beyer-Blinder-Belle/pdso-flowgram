@@ -3,7 +3,7 @@
 
 Each step reads its own standards file (<step id>.json) and adds rows to the
 report with SetupContext.add(). Steps run inside one TransactionGroup, so the
-whole setup shows up as a single "PDSO Quick Setup" undo in Revit. Each item a
+whole setup shows up as a single "PDSO - Quick Setup" undo in Revit. Each item a
 step creates gets its own transaction, so one bad item doesn't roll back the rest.
 """
 
@@ -16,12 +16,11 @@ from contextlib import contextmanager
 from pyrevit import DB, script
 
 # Custom Modules
+from pdso.code import defaults
 from pdso.code.setup import revit_utils, status
 from pdso.code.setup.standards import StandardsError, base_tokens, expand_tokens
 from pdso.code.setup.steps import STEP_RUNNERS
 
-# Used when the model has no PDSO Project Config yet (matches extensible_storage_service)
-DEFAULT_PROGRAM_VOLUME_PREFIX = "PDSO_ProgramVolume-"
 
 class SetupStep(object):
     """A step listed in setup.json."""
@@ -101,6 +100,8 @@ class SetupContext(object):
     @contextmanager
     def transaction(self, name):
         """A transaction that hides Revit warnings and rolls back on errors."""
+        if not name.startswith("PDSO - "):
+            name = "PDSO - {}".format(name)
         transaction = DB.Transaction(self.doc, name)
         options = transaction.GetFailureHandlingOptions()
         options.SetFailuresPreprocessor(revit_utils.SwallowWarnings())
@@ -146,7 +147,7 @@ class SetupContext(object):
         """Read the values setup needs from the model's PDSO Project Config."""
         config = {
             "data_silo_family": None,
-            "program_volume_prefix": DEFAULT_PROGRAM_VOLUME_PREFIX,
+            "program_volume_prefix": defaults.PROGRAM_VOLUME_PREFIX,
             "area_scheme_mappings": {},
         }
         service = self._storage_service()
@@ -160,7 +161,7 @@ class SetupContext(object):
             config["data_silo_family"] = stored.data_silo_family_name or None
             config["program_volume_prefix"] = (
                 stored.program_volume_family_name_prefix
-                or DEFAULT_PROGRAM_VOLUME_PREFIX
+                or defaults.PROGRAM_VOLUME_PREFIX
             )
             if stored.area_scheme_mappings:
                 config["area_scheme_mappings"] = dict(stored.area_scheme_mappings)
@@ -217,7 +218,7 @@ def run_setup(doc, standards, steps, options=None):
     """
     ctx = SetupContext(doc, standards, options)
 
-    group = DB.TransactionGroup(doc, "PDSO Quick Setup")
+    group = DB.TransactionGroup(doc, "PDSO - Quick Setup")
     group.Start()
     try:
         for step in steps:

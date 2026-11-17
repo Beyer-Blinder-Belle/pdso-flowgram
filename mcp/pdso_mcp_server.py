@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.7"
+EXPECTED_API_VERSION = "1.8"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -92,8 +92,8 @@ mcp = MCPServer(
         "the scope before you call setup_model, unless they already said what "
         "they want. The full package (the default) is what the PDSO ribbon's "
         "setup buttons make: the configuration, the 20 built-in parameters, "
-        "area schemes, the Data Silo family, view templates, area plans for "
-        "each scheme and level, a 3D view and two schedules. The minimum to "
+        "area schemes, the Data Silo family, view templates, a GSF area plan "
+        "for each level, a 3D view and two schedules. The minimum to "
         "place programs and run the sync is parts=[\"area_schemes\", "
         "\"families\"] with parameters=\"required\". Offer both, or a scope in "
         "between; the user may not want views or schedules added to a working "
@@ -186,6 +186,10 @@ def _open_tunnel() -> None:
 # Title of the open Revit document that the tools work on. None: the active document.
 _target_document: str | None = None
 
+# True once a reply came back without the request id this server sent as a
+# query parameter: that pyRevit drops query parameters (see get_status)
+_query_dropped = False
+
 # Requests that change nothing in the model. It is safe to send them again.
 _READ_ONLY_POSTS = (
     "views/export",
@@ -203,9 +207,12 @@ def _request(method: str, path: str, body: Any, query: dict, timeout: int) -> An
         and not path.startswith("documents")
     ):
         query = dict(query, document=_target_document)
+    global _query_dropped
     read_only = method == "GET" or path in _READ_ONLY_POSTS
     for attempt in range(3):
         payload, request_id = _send(method, path, body, query, timeout)
+        if payload.get("rid") is None:
+            _query_dropped = True
         if payload.get("rid") in (None, request_id):
             break
         # pyRevit Routes gave this client the reply of a different request.
@@ -392,7 +399,7 @@ def _save_image(name: str, data: bytes) -> Path:
 
 @mcp.tool()
 def get_status() -> dict:
-    """Get the Revit version, the open document, its levels, and if the model has a PDSO configuration. Call this first. If the reply has "version_warning", the PDSO extension in Revit and this MCP server are not the same version: tell the user."""
+    """Get the Revit and pyRevit versions, the open document, its levels, and if the model has a PDSO configuration. Call this first. If the reply has "version_warning" (the PDSO extension in Revit and this MCP server are not the same version) or "pyrevit_warning" (this pyRevit drops query parameters), tell the user."""
     status = api("GET", "status")
     found = status.get("api_version")
     if found != EXPECTED_API_VERSION:
@@ -400,6 +407,12 @@ def get_status() -> dict:
             f"The PDSO extension in Revit has API version {found or 'unknown (older than 1.1)'}. "
             f"This MCP server expects {EXPECTED_API_VERSION}. Some tools can fail. "
             "Update the extension on the Revit computer and reload pyRevit, or update this server."
+        )
+    if _query_dropped or (status.get("pyrevit") or {}).get("query_parameters") is False:
+        status["pyrevit_warning"] = (
+            f"pyRevit {(status.get('pyrevit') or {}).get('version') or ''} drops the query parameters of "
+            "API requests. List filters, set_target_document for read tools, and the "
+            "request id check don't work. Update pyRevit on the Revit computer."
         )
     return status
 
@@ -431,19 +444,19 @@ def new_project(
 
 @mcp.tool()
 def close_project(title: str, save: bool = False) -> dict:
-    """Close an open Revit document that is not the active document.
+    """Close an open Revit document that is not the active document (the same as close_background_document).
 
     Args:
         title: Title of the document (the file name without ".rvt").
         save: Save the document before it closes.
     """
-    return api("POST", "document/close", {"title": title, "save": save})
+    return api("POST", "documents/close", {"title": title, "save": save})
 
 
 @mcp.tool()
 def save_project() -> dict:
-    """Save the active Revit document to its file."""
-    return api("POST", "document/save", {}, timeout=LONG_TIMEOUT)
+    """Save the active Revit document to its file. To save another open document, use save_document."""
+    return api("POST", "documents/save", {}, timeout=LONG_TIMEOUT)
 
 
 @mcp.tool()
@@ -508,7 +521,7 @@ def setup_model(
     Args:
         levels: Names of the levels that get area plans. Default: the levels that have Rooms (all levels if the model has no Rooms).
         area_scheme_mappings: PDSO area parameter name to the name of an area scheme of the model, for example {"PDSO - GSF": "Gross Building", "PDSO - NSF": "Rentable"}. Give this for a model that has its own area schemes and Areas (see list_area_schemes). Then no "PDSO - ..." scheme is made. The Program Volume of a program gets the shape of the smallest Area that contains the program. Default: three new schemes "PDSO - GSF", "PDSO - NSF", "PDSO - ZFA".
-        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": one area plan for each scheme and level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
+        parts: Quick Setup parts to run. "area_schemes": the configured area schemes. "families": the Data Silo family. "view_templates": PDSO view templates (the area plan template hides Program Volumes). "views": the views views.json turns on: by default a GSF area plan for each level (named like "PDSO - GSF - L1") and a 3D Program Volumes view. Area plans of the other schemes are made when Areas are drawn in them. "schedules": Data Silo and Program Volume schedules. Default: all of them (the full package). The sync needs only "area_schemes" and "families"; [] runs only the configuration and parameters.
         parameters: Used only if the model tracks no parameters yet. "all": the 20 built-in parameters (unit data such as bedroom, bathroom and kitchen counts, use group, load factor). "required": only Program UID, Program Stacking, Last Synced and the area parameters; add others later with create_parameter. With "required", the schedules leave out the columns of untracked parameters and report that in "Warning" rows; that is expected, not an error.
     """
     if not levels:
@@ -1087,7 +1100,7 @@ def adjust_area(
     name: str | None = None,
     number: str | None = None,
 ) -> dict:
-    """Adjust one Area. Give one geometry change: a new outline (points), a move (move_dx and move_dy), one moved outline point (vertex_index, vertex_x, vertex_y), or a scale factor. You can also change the name and number. Returns the Area after the change, with previous_area and the new area. If Revit cannot enclose the Area with the new outline, no change is made.
+    """Adjust one Area. Give one geometry change: a new outline (points), a move (move_dx and move_dy), one moved outline point (vertex_index, vertex_x, vertex_y), or a scale factor. You can also change the name and number. Returns the Area after the change, with previous_area and the new area. If Revit cannot enclose the Area with the new outline, no change is made. An Area that shares a boundary line with a neighbouring Area can't be moved or scaled, and its outline can't be changed in a way that leaves that line: the call fails and names the neighbour; tell the user to change the shared edge in Revit or redraw both Areas.
 
     Args:
         area_id: Revit element id of the Area.
@@ -1265,7 +1278,7 @@ def show_program_volumes(
     section_box: bool = True,
     show: bool = True,
 ) -> list:
-    """Make (or update) the shaded 3D view "PDSO - Program Volumes", color the Program Volumes by a program field, show the view in the Revit window, and return its image and legend. Program Volumes come from run_sync.
+    """Make (or update) the shaded 3D view "PDSO - Program Volumes - Colored", color the Program Volumes by a program field, show the view in the Revit window, and return its image and legend. Program Volumes come from run_sync.
 
     Args:
         color_by: Program field that gives the color.
@@ -1367,7 +1380,7 @@ def save_document(document: str | None = None) -> dict:
 
 @mcp.tool()
 def close_background_document(document: str, save: bool = False) -> dict:
-    """Close an open document that is not the active document. Use close_project for the active document.
+    """Close an open document that is not the active document (the same as close_project). Revit can't close the active document through the API: open another project first.
 
     Args:
         document: Title of the document.
@@ -1397,13 +1410,18 @@ def list_layouts(program: str | None = None, project_type: str | None = None) ->
 
 
 @mcp.tool()
-def get_layout(layout_id: str) -> dict:
-    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame) and its SVG plan sketch.
+def get_layout(layout_id: str) -> list:
+    """Get one layout completely: the stored JSON entry (room outline and each item with family, type, x, y, rotation, in the room's own frame), its SVG plan sketch, and the plan image that Harvest saved, if there is one.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
     """
-    return api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+    result = api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+    image = result.pop("image_base64", None)
+    content: list = [json.dumps(result)]
+    if image:
+        content.append(Image(data=base64.b64decode(image), format="png"))
+    return content
 
 
 @mcp.tool()
@@ -1581,6 +1599,13 @@ def _inside(x: float, y: float, polygon: list[list[float]]) -> bool:
     return inside
 
 
+def _inside_area(x: float, y: float, area: dict) -> bool:
+    """Inside the Area's outline and not in one of its holes."""
+    return _inside(x, y, area["outline"]) and not any(
+        _inside(x, y, hole) for hole in area.get("holes") or []
+    )
+
+
 def _centroid(polygon: list[list[float]]) -> tuple[float, float]:
     area = cx = cy = 0.0
     for i in range(len(polygon)):
@@ -1676,7 +1701,7 @@ def render_plan(
             (
                 p
                 for p in programs
-                if _inside(p["location"]["x"], p["location"]["y"], area["outline"])
+                if _inside_area(p["location"]["x"], p["location"]["y"], area)
             ),
             None,
         )
@@ -1751,9 +1776,7 @@ def render_plan(
     drawn = set()
     for area in areas:
         for program in programs:
-            if _inside(
-                program["location"]["x"], program["location"]["y"], area["outline"]
-            ):
+            if _inside_area(program["location"]["x"], program["location"]["y"], area):
                 drawn.add(program["id"])
     for program in programs:
         if program["id"] in drawn:

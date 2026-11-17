@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 import math
 
@@ -121,10 +122,10 @@ class PDSOCorrelationService(object):
         expected_family_names = set(
             "{}{}".format(
                 program_volume_family_name_prefix,
-                str(ext_data_silo.parameters["PDSO - Program UID"].value),
+                str(ext_data_silo.uid),
             )
             for ext_data_silo in ext_data_silo_collection.extended_data_silos
-            if ext_data_silo.parameters["PDSO - Program UID"].value
+            if ext_data_silo.uid
         )
         # {Data Silo id: Family}, read from the Program Volume instances on first use
         previous_families = None
@@ -133,7 +134,7 @@ class PDSOCorrelationService(object):
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
             # A Data Silo with no UID would expect the family "<prefix>None",
             # and every such Data Silo would claim the same family
-            if not ext_data_silo.parameters["PDSO - Program UID"].value:
+            if not ext_data_silo.uid:
                 self.logger.warning(
                     "Data Silo {} has no Program UID; it gets no Program Volume.".format(
                         ext_data_silo.Id
@@ -144,7 +145,7 @@ class PDSOCorrelationService(object):
             # Find Program Volume Families by matching family name. Family name is prefix + data silo UID
             expected_family_name = "{}{}".format(
                 program_volume_family_name_prefix,
-                str(ext_data_silo.parameters["PDSO - Program UID"].value),
+                str(ext_data_silo.uid),
             )
 
             # Use next() to find program volume family with matching family name (there can only be one)
@@ -362,7 +363,7 @@ class PDSOCorrelationService(object):
                 continue
 
             # Find Program Volumes by matching family name. Family name is prefix + data silo UID
-            data_silo_uid = str(ext_data_silo.parameters["PDSO - Program UID"].value)
+            data_silo_uid = str(ext_data_silo.uid)
             expected_family_name = "{}{}".format(
                 program_volume_family_name_prefix, data_silo_uid
             )

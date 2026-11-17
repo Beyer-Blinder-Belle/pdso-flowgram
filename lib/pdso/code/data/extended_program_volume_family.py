@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 
 # System Modules

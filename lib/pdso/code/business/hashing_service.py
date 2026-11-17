@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from pyrevit import DB, script
 import json
 import hashlib
@@ -102,7 +103,6 @@ class PDSOHashingService(object):
         Returns:
             str or dict: Hash hex string by default, or full signature dictionary if return_full_signature=True
         """
-        logger = script.get_logger()
         boundaries = wrapped_spatial_element.unwrap().GetBoundarySegments(
             DB.SpatialElementBoundaryOptions()
         )

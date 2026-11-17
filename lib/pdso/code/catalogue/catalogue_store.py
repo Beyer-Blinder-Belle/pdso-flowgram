@@ -227,6 +227,29 @@ class catalogue_lock(object):
         return False
 
 
+# Text of each entry file read, by path: (modified time, size, text). A file
+# that hasn't changed is not read again, which matters on a network folder
+# that Harvest All Units and Pull read many times in one run.
+_TEXT_CACHE = {}
+
+
+def _read_entry_text(path):
+    """The text of an entry file, from the cache if the file hasn't changed."""
+    stat = os.stat(path)
+    stamp = (stat.st_mtime, stat.st_size)
+    cached = _TEXT_CACHE.get(path)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    with codecs.open(path, "r", encoding="utf-8") as stream:
+        text = stream.read()
+    _TEXT_CACHE[path] = (stamp, text)
+    return text
+
+
+def _read_entry_json(path):
+    return json.loads(_read_entry_text(path))
+
+
 def remove_previous(folder, source, keep=None):
     """Delete earlier harvests of the same unit, so a re-run replaces them.
 
@@ -254,8 +277,7 @@ def remove_previous(folder, source, keep=None):
         if keep and os.path.normcase(os.path.abspath(path)) == keep:
             continue
         try:
-            with codecs.open(path, "r", encoding="utf-8") as stream:
-                other = json.loads(stream.read()).get("source") or {}
+            other = _read_entry_json(path).get("source") or {}
         except Exception:
             continue
         if str(other.get("element_id")) != str(element_id):
@@ -294,8 +316,8 @@ def catalogue_numbers(folder):
         if not file_name.lower().endswith(ENTRY_EXTENSION):
             continue
         try:
-            with codecs.open(os.path.join(folder, file_name), "r", encoding="utf-8") as stream:
-                group = (json.loads(stream.read()).get("features") or {}).get("catalogue") or {}
+            data = _read_entry_json(os.path.join(folder, file_name))
+            group = (data.get("features") or {}).get("catalogue") or {}
         except Exception:
             continue
         if group.get("key") and group.get("number"):
@@ -340,8 +362,7 @@ def load_folder(folder):
             continue
         path = os.path.join(folder, file_name)
         try:
-            with codecs.open(path, "r", encoding="utf-8") as stream:
-                entries.append(LayoutEntry.from_dict(json.loads(stream.read())))
+            entries.append(LayoutEntry.from_dict(_read_entry_json(path)))
         except Exception as error:
             errors.append("{}: {}".format(file_name, error))
     return entries, errors

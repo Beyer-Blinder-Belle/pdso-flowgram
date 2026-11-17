@@ -31,16 +31,19 @@ def polygon_area(points):
 
 
 def point_in_polygon(point, polygon):
-    """Ray-casting test. Points exactly on an edge may go either way."""
-    x, y = point
+    """Ray-casting test. Points exactly on an edge may go either way.
+
+    The one implementation in lib: revit_helpers.point_in_polygon calls it.
+    """
+    x, y = point[0], point[1]
     inside = False
     count = len(polygon)
     j = count - 1
     for i in range(count):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
+        xi, yi = polygon[i][0], polygon[i][1]
+        xj, yj = polygon[j][0], polygon[j][1]
         if (yi > y) != (yj > y):
-            x_cross = (xj - xi) * (y - yi) / (yj - yi) + xi
+            x_cross = (xj - xi) * (y - yi) / float(yj - yi) + xi
             if x < x_cross:
                 inside = not inside
         j = i

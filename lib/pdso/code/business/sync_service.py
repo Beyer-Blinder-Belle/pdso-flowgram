@@ -40,13 +40,17 @@ from .parameter_registry_service import get_registry
 
 
 # Option name -> (default value, permitted values)
-# "Fix", "Pin", "No" and RECOMPUTE_ALL_GEOMETRY change what the sync does. The
-# other values are the remaining choices of the Sync Data window and mean "do not
-# do this step" (or, for the geometry update, "use the geometry cache").
+# Workset options: "Fix" moves elements to the workset Project Config sets,
+# "Warn" only reports the elements that are on another workset, "Do Nothing"
+# skips the step. Pinning: "Pin", "Unpin" or "Maintain" (leave as it is).
 RECOMPUTE_ALL_GEOMETRY = "Yes - Recompute All Geometry (slow)"
 
+# The Sync Data window shows "Fix (if configured)"; older API callers sent
+# "Warn (if configured)". Both mean the short value.
+_OPTION_SUFFIX = " (if configured)"
+
 SYNC_OPTIONS = {
-    "area_harvest_workset": ("Fix", ["Fix", "Warn (if configured)", "Do Nothing"]),
+    "area_harvest_workset": ("Fix", ["Fix", "Warn", "Do Nothing"]),
     "area_harvest_pinning": ("Pin", ["Pin", "Maintain", "Unpin"]),
     "program_volume_geometry_update": (
         "Yes - Use Geometry Cache",
@@ -56,13 +60,35 @@ SYNC_OPTIONS = {
             "No",
         ],
     ),
-    "program_volume_geometry_workset": (
-        "Fix",
-        ["Fix", "Warn (if configured)", "Do Nothing"],
-    ),
+    "program_volume_geometry_workset": ("Fix", ["Fix", "Warn", "Do Nothing"]),
     "program_volume_geometry_pinning": ("Pin", ["Pin", "Maintain", "Unpin"]),
     "program_volume_data_update": ("Yes", ["Yes", "No"]),
 }
+
+
+def normalize_option(value):
+    """A sync option value as SYNC_OPTIONS lists it ("Fix (if configured)" -> "Fix")."""
+    if isinstance(value, basestring) and value.endswith(_OPTION_SUFFIX):  # noqa: F821 - IronPython 2.7 builtin
+        return value[: -len(_OPTION_SUFFIX)]
+    return value
+
+
+def _off_workset(elements, workset_id):
+    """The elements that could be moved to the workset but are on another one.
+
+    Elements whose workset can't change (families, for example) are left out.
+    """
+    off = []
+    for element in elements:
+        try:
+            param = element.get_Parameter(DB.BuiltInParameter.ELEM_PARTITION_PARAM)
+            if param is None or param.IsReadOnly:
+                continue
+            if element.WorksetId != workset_id:
+                off.append(element)
+        except Exception:
+            pass
+    return off
 
 
 def _workset_name(worksets, key, legacy_key):
@@ -119,6 +145,67 @@ class _PhaseSkipped(Exception):
     """A phase that cannot run because an earlier phase did not finish."""
 
 
+def check_options(options):
+    """Normalize sync options and check them against SYNC_OPTIONS.
+
+    Raises PDSOError (400) for an unknown option or value.
+
+    Returns:
+        dict: The options, with values as SYNC_OPTIONS lists them
+    """
+    from .errors import PDSOError
+
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        raise PDSOError("'options' must be an object.")
+    options = dict((name, normalize_option(value)) for name, value in options.items())
+    for name, value in options.items():
+        if name not in SYNC_OPTIONS:
+            raise PDSOError(
+                "Unknown sync option '{}'. Permitted: {}".format(
+                    name, ", ".join(sorted(SYNC_OPTIONS))
+                )
+            )
+        if value not in SYNC_OPTIONS[name][1]:
+            raise PDSOError(
+                "Sync option '{}' must be one of: {}".format(
+                    name, ", ".join(SYNC_OPTIONS[name][1])
+                )
+            )
+    return options
+
+
+def run_with_preflight(doc, options=None, force=False):
+    """Run the preflight checks, then the sync if they pass (or force is set).
+
+    The same gate as the Sync Data window: a failed (✗) check stops the
+    sync unless force is True.
+
+    Returns:
+        dict: {"ran": False, "reason", "preflight"} when stopped. Otherwise
+            the sync summary plus "ran", "preflight" and "log" (the warnings
+            and errors the services logged).
+    """
+    # Imported here: preflight and log capture are only needed for this path
+    from .log_capture import LogCapture
+    from .preflight_service import PDSOPreflightService
+
+    options = check_options(options)
+    checks = PDSOPreflightService(doc)
+    checks.run_preflight_checks()
+    preflight = checks.summary()
+    if not preflight["can_run_sync"] and not force:
+        return {"ran": False, "reason": "Preflight checks failed.", "preflight": preflight}
+
+    with LogCapture() as capture:
+        result = PDSOSyncService(doc, options=options).run()
+    result["ran"] = True
+    result["preflight"] = preflight
+    result["log"] = capture.records
+    return result
+
+
 class PDSOSyncService(object):
     """Runs the data synchronization without a UI.
 
@@ -159,7 +246,11 @@ class PDSOSyncService(object):
                     )
                 )
         for name, (default, _) in SYNC_OPTIONS.items():
-            setattr(self, "_{}_option".format(name), options.get(name) or default)
+            setattr(
+                self,
+                "_{}_option".format(name),
+                normalize_option(options.get(name)) or default,
+            )
 
         self.current_step = "Waiting to start..."
         self.progress_value = 0
@@ -172,6 +263,43 @@ class PDSOSyncService(object):
         self.completed = False
         self.errors = []
         self.phases = ["pending", "pending", "pending"]
+
+    def _warn_off_workset(
+        self, workset_coordinator, config, key, legacy_key, label, elements
+    ):
+        """The "Warn" workset option: report elements on another workset.
+
+        Moves nothing. Does nothing in a model that isn't workshared or when
+        Project Config sets no workset for this kind of element.
+        """
+        if not self.doc.IsWorkshared:
+            return
+        name = _workset_name(_as_dict(config.worksets), key, legacy_key)
+        if not name:
+            return
+        try:
+            workset = workset_coordinator.get_workset_by_name(name)
+            if workset is None:
+                self.logger.warning(
+                    "Workset '{}' from Project Config is not in this model.".format(
+                        name
+                    )
+                )
+                return
+            off = _off_workset(elements, workset.Id)
+        except Exception as error:
+            self.logger.warning(
+                "Couldn't check the {} workset: {}".format(label, error)
+            )
+            return
+        if off:
+            self.logger.warning(
+                "{} {} are not on workset '{}'. Choose 'Fix' to move them.".format(
+                    len(off), label, name
+                )
+            )
+        else:
+            self.logger.info("All {} are on workset '{}'".format(label, name))
 
     def _notify(self):
         """Tell the listener that the progress attributes changed."""
@@ -742,6 +870,31 @@ class PDSOSyncService(object):
             except Exception as e:
                 self.logger.error("Workset/pinning operation failed: {}".format(str(e)))
 
+        if self._area_harvest_workset_option == "Warn":
+            self._warn_off_workset(
+                workset_coordinator,
+                config,
+                "data-silos",
+                "Data Silo",
+                "Data Silos",
+                [
+                    ds.rpw_element.unwrap()
+                    for ds in ext_data_silo_collection.extended_data_silos
+                ],
+            )
+            self._warn_off_workset(
+                workset_coordinator,
+                config,
+                "areas",
+                "Area",
+                "Areas",
+                [
+                    area.rpw_element.unwrap()
+                    for scheme in area_scheme_objects
+                    for area in scheme.extended_areas
+                ],
+            )
+
         # Return collections for use in Phase 2 and 3
         return ext_data_silo_collection, ext_level_collection
 
@@ -782,7 +935,7 @@ class PDSOSyncService(object):
                 by_name[family.rpw_element.Name] = family
         linked = 0
         for ext_data_silo in ext_data_silo_collection.extended_data_silos:
-            uid = ext_data_silo.parameters["PDSO - Program UID"].value
+            uid = ext_data_silo.uid
             if not uid:
                 continue
             family = by_name.get("{}{}".format(prefix, uid))
@@ -958,6 +1111,20 @@ class PDSOSyncService(object):
                     self.logger.info("Program Volume workset not enforced")
             except Exception as e:
                 self.logger.error("Workset enforcement failed: {}".format(str(e)))
+
+        elif self._program_volume_geometry_workset_option == "Warn":
+            self._warn_off_workset(
+                WorksetCoordinationService(self.doc),
+                config,
+                "program-volumes",
+                "Program Volume",
+                "Program Volume families",
+                [
+                    fam.rpw_element.unwrap()
+                    for fam in ext_program_volume_families_collection.extended_program_volume_families
+                    if fam.rpw_element is not None
+                ],
+            )
 
         # Apply pinning if configured. "Maintain" leaves each family as it is.
         if self._program_volume_geometry_pinning_option in ("Pin", "Unpin"):
@@ -1237,6 +1404,20 @@ class PDSOSyncService(object):
                     self.logger.info("Program Volume workset not enforced")
             except Exception as e:
                 self.logger.error("Workset enforcement failed: {}".format(str(e)))
+
+        elif self._program_volume_geometry_workset_option == "Warn":
+            self._warn_off_workset(
+                workset_coordinator,
+                config,
+                "program-volumes",
+                "Program Volume",
+                "Program Volumes",
+                [
+                    inst.rpw_element.unwrap()
+                    for inst in ext_program_volume_instance_collection.extended_program_volume_instances
+                    if inst.rpw_element is not None and not inst.should_be_deleted
+                ],
+            )
 
         # Apply pinning. The instances were unpinned for the update above.
         # "Pin" pins every instance, "Maintain" pins again the instances that

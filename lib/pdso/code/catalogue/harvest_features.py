@@ -41,6 +41,9 @@ import math
 from rpw import DB
 from rpw.utils.dotnet import List
 
+from pdso.code import defaults
+from pdso.code.data import parameter_access
+
 from pdso.code.catalogue.layout_geometry import (
     extent_along,
     overlap_along,
@@ -75,11 +78,7 @@ BATHROOM_WORDS = ("bath", "wc", "toilet", "powder", "shower", "ensuite")
 KITCHEN_WORDS = ("kitchen",)
 
 PDSO_PREFIX = "PDSO - "
-DATA_SILO_PARAMETER = "PDSO - Program UID"
-
-# Used when a model has no PDSO configuration
-DEFAULT_DATA_SILO_FAMILY_PREFIX = "PDSO - Program Data Silo Object"
-DEFAULT_PROGRAM_VOLUME_PREFIX = "PDSO_ProgramVolume-"
+DATA_SILO_PARAMETER = parameter_access.PROGRAM_UID
 
 DATA_SILO = "data silo"
 PROGRAM_VOLUME = "program volume"
@@ -100,7 +99,7 @@ def pdso_kinds(doc):
             "PDSO - Program UID" and is not a Program Volume.
     """
     silo_family = None
-    volume_prefix = DEFAULT_PROGRAM_VOLUME_PREFIX
+    volume_prefix = defaults.PROGRAM_VOLUME_PREFIX
     try:
         from pdso.code.business.config_service import get_config
 
@@ -110,8 +109,13 @@ def pdso_kinds(doc):
             volume_prefix = (
                 config.get("program_volume_family_name_prefix") or volume_prefix
             )
-    except Exception:
-        pass
+    except Exception as error:
+        # Say so: in a model with its own names, Program Volumes would
+        # otherwise be harvested as furniture
+        _warn(
+            "Couldn't read the PDSO configuration ({}). Using the default Data "
+            "Silo and Program Volume names.".format(error)
+        )
 
     def kind(instance):
         try:
@@ -122,14 +126,26 @@ def pdso_kinds(doc):
             return PROGRAM_VOLUME
         if silo_family is not None and family_name == silo_family:
             return DATA_SILO
-        if family_name.startswith(DEFAULT_DATA_SILO_FAMILY_PREFIX):
+        if family_name.startswith(defaults.DATA_SILO_FAMILY_PREFIX):
             return DATA_SILO
-        parameter = instance.LookupParameter(DATA_SILO_PARAMETER)
+        # By GUID: a non-PDSO parameter named like it must not count
+        parameter = parameter_access.get_parameter(instance, DATA_SILO_PARAMETER)
         if parameter is not None and parameter.HasValue and parameter.AsString():
             return DATA_SILO
         return None
 
     return kind
+
+
+def _warn(message):
+    try:
+        from pyrevit import script
+
+        script.get_logger().warning(message)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(message)
 
 
 # ---------------------------------------------------------------------------

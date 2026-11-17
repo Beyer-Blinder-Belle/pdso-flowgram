@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """PDSO Extensible Storage Schemas - Document and element-level data persistence.
 
 This module defines extensible storage schemas for persisting PDSO configuration

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 
 # System Modules
@@ -236,17 +237,6 @@ class ExtendedProgramVolumeInstanceCollection(object):
 
         return unavailable_element_ids
 
-    # TO DO - Implement pinning and workset management
-    def set_element_pin_status(self, pin_status):
-        """Set the pin status for all ExtendedDataSilo elements in the collection.
-
-        Args:
-            pin_status (bool): True to pin elements, False to unpin
-        """
-        with db.Transaction("Set Data Silo Pin Status", doc=self.doc):
-            for extended_program_volume in self.extended_program_volume_instances:
-                extended_program_volume.rpw_element.Pinned = pin_status
-
     def commit_pending_changes(self):
         """Commit all pending changes and delete orphaned instances.
 
@@ -361,9 +351,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
                     element_id = ext_instance.Id
 
                     if ext_instance.parent_data_silo:
-                        parent_uid = ext_instance.parent_data_silo.parameters[
-                            "PDSO - Program UID"
-                        ].value
+                        parent_uid = ext_instance.parent_data_silo.uid
                         instance_uid = parent_uid or "UNKNOWN"
 
                     # Safely get level name using the Level property (which handles wrapping)

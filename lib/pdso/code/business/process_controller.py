@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 class PDSOProcessController(object):
     def __init__(self):
         """Initialize the process controller

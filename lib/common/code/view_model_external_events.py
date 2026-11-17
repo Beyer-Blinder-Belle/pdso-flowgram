@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from rpw import UI
 from Autodesk.Revit.Exceptions import InvalidOperationException
 

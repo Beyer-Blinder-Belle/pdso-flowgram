@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Python standard libraries
 
 # System Modules
@@ -125,18 +126,6 @@ class ExtendedProgramVolumeFamilyCollection(object):
                 unavailable_element_ids.append(element_id)
 
         return unavailable_element_ids
-
-    def set_element_pin_status(self, pin_status):
-        """Set the pin status for all ExtendedProgramVolumeFamily elements in the collection.
-
-        Args:
-            pin_status (bool): True to pin elements, False to unpin
-        """
-        # to do - check if isModifiable, start transaction if not.
-
-        with db.Transaction("Set Program Volume Family Pin Status", doc=self.doc):
-            for ext_program_volume_family in self.extended_program_volume_families:
-                ext_program_volume_family.rpw_element.Pinned = pin_status
 
     def get_orphaned_families(self):
         """Get program volume families without a parent data silo.

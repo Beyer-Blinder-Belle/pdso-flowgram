@@ -9,9 +9,8 @@ It does what a user does with the three setup buttons, in the same order:
     3. Quick Setup: the steps in setup.json (area schemes, the Data Silo family,
        view templates, working views, schedules), from the same JSON standards
        folders as the ribbon button (setup.runner.run_setup)
-Then it makes sure every mapped area scheme has an area plan on each level, named
-and templated as views.json says, and builds a placeholder Data Silo family if no
-family file could be loaded.
+It adds nothing of its own, so the API and the ribbon make the same model.
+Change setup behavior in setup/ and the JSON standards, not here.
 
 Items that are there already are left alone, as Quick Setup's standards say.
 
@@ -19,29 +18,21 @@ Example Usage:
     report = bootstrap(doc, levels=["L1", "L2"])
 """
 
-# Python standard libraries
-import os
-import tempfile
-
 # 3rd Party Modules
 from pyrevit import script, DB
 
 # Custom Modules
 from . import config_service, parameter_service
 from .errors import PDSOError
-from .family_manager_service import ProgramVolumeFamilyLoadOptions
 from .revit_helpers import Transaction, all_levels, find_level, id_value
-from pdso.code.setup import revit_utils
+from pdso.code import defaults
+from pdso.code.setup import revit_utils, status
+from pdso.code.setup.revit_utils import find_area_scheme, find_family
 from pdso.code.setup.runner import SetupContext, SetupStep, run_setup
 from pdso.code.setup.standards import Standards, StandardsError
 from pdso.code.setup.steps import views as views_step
 
 logger = script.get_logger()
-
-
-# Half of the side of the Data Silo marker (a square extrusion), in feet
-DATA_SILO_MARKER_HALF_SIZE = 1.0
-DATA_SILO_MARKER_HEIGHT = 1.0
 
 # The parts of a setup, in order. "configuration" and "parameters" always run
 # (the parameters only if the model tracks none); the others are Quick Setup
@@ -63,7 +54,11 @@ SETUP_PARTS = [
         "One Revit area scheme for each mapping (default: PDSO - GSF, PDSO - "
         "NSF, PDSO - ZFA). A model's own schemes can be mapped instead.",
     ),
-    ("families", "The Data Silo family: the point object that holds each program."),
+    (
+        "families",
+        "The Data Silo family: the point object that holds each program. In a "
+        "Revit older than the shipped family, a placeholder family is built.",
+    ),
     (
         "view_templates",
         "PDSO view templates: an area plan template that hides Program Volumes, "
@@ -71,8 +66,10 @@ SETUP_PARTS = [
     ),
     (
         "views",
-        "Working views: one area plan for each mapped scheme and level (all "
-        "levels but Roof and Parapet by default) and a 3D Program Volumes view.",
+        "Working views, as views.json lists them: by default an area plan of "
+        "the GSF scheme on each level but Roof and Parapet, and a 3D Program "
+        "Volumes view. Plans of other schemes are made when Areas are drawn "
+        "in them.",
     ),
     ("schedules", "A Data Silo schedule and a Program Volume schedule."),
 ]
@@ -88,9 +85,10 @@ def bootstrap(
 
     Args:
         doc: Revit Document (a project, with no open transaction)
-        levels (list): Level names or ids that get area plans. Default: the
-            levels views.json gives area plans to (all levels except the ones
-            its exclude_levels leaves out, such as Roof and Parapet).
+        levels (list): Level names or ids that get the views step's area
+            plans. Default: the levels views.json gives area plans to (all
+            levels except the ones its exclude_levels leaves out, such as Roof
+            and Parapet).
         area_scheme_mappings (dict): PDSO area parameter name -> name of the
             area scheme that gives its value. Written to the configuration
             before the area schemes and area plans are made. Use this for a
@@ -104,8 +102,9 @@ def bootstrap(
 
     Returns:
         dict: "config_created", "shared_parameters", "data_silo_family",
-            "area_schemes", "area_plans", "parts" (the parts that ran), and
-            "setup" (the Quick Setup report rows: step, item, status, message)
+            "area_schemes", "area_plans" (the area plans of the mapped schemes,
+            each with "created"), "parts" (the parts that ran), and "setup"
+            (the Quick Setup report rows: step, item, status, message)
     """
     if parameters not in parameter_service.PARAMETER_SETS:
         raise PDSOError(
@@ -166,20 +165,9 @@ def bootstrap(
     config = config_service.get_config(doc)
     family_name = config["data_silo_family_name"]
     family = find_family(doc, family_name)
-    if family is None and "families" not in chosen:
+    if family is None:
+        # Not chosen, or the families step reports why in "setup"
         report["data_silo_family"] = None
-    elif family is None:
-        report["data_silo_family"] = ensure_data_silo_family(doc, family_name)
-        rows.append(
-            {
-                "step": "families",
-                "item": family_name,
-                "status": "Created",
-                "message": "No Data Silo family file could be loaded, so a "
-                "placeholder family was built. Its parameters come from the "
-                "Generic Models binding.",
-            }
-        )
     else:
         report["data_silo_family"] = {
             "name": family_name,
@@ -196,21 +184,21 @@ def bootstrap(
         "existing": [name for name in scheme_names if name in schemes_before],
     }
 
-    # One area plan for each mapped scheme and level. Quick Setup made the ones
-    # views.json turns on; this adds the rest with the same names and template.
-    plans = []
-    views_data = _load_views_standards(standards)
-    if "views" in chosen and not level_elements:
-        level_elements = _default_area_plan_levels(ctx, views_data, doc)
-    for scheme_name in scheme_names if "views" in chosen else []:
-        if find_area_scheme(doc, scheme_name) is None:
-            continue  # the area_schemes step reported why
-        for level in level_elements:
-            plan = ensure_area_plan(doc, scheme_name, level, standards=standards)
-            # Made by this bootstrap: by Quick Setup's views step or just now
-            plan["created"] = plan["id"] not in area_plans_before
-            plans.append(plan)
-    report["area_plans"] = plans
+    # The area plans of the mapped schemes. Quick Setup's views step made the
+    # ones views.json turns on.
+    report["area_plans"] = [
+        {
+            "id": id_value(view.Id),
+            "name": view.Name,
+            "scheme": view.AreaScheme.Name,
+            "level": view.GenLevel.Name,
+            "created": id_value(view.Id) not in area_plans_before,
+        }
+        for view in _area_plans(doc)
+        if view.AreaScheme is not None
+        and view.GenLevel is not None
+        and view.AreaScheme.Name in scheme_names
+    ]
     report["setup"] = rows
     return report
 
@@ -277,11 +265,7 @@ def setup_status(doc):
     config = config_service.get_config(doc)
     standards = Standards(doc)
     ctx = SetupContext(doc, standards)
-    mappings = config.get("area_scheme_mappings") or {
-        "PDSO - GSF": "PDSO - GSF",
-        "PDSO - NSF": "PDSO - NSF",
-        "PDSO - ZFA": "PDSO - ZFA",
-    }
+    mappings = config.get("area_scheme_mappings") or defaults.AREA_SCHEME_MAPPINGS
     scheme_names = sorted(set(v for v in mappings.values() if v))
     states = {}
 
@@ -305,9 +289,9 @@ def setup_status(doc):
         },
     )
 
-    family_name = config.get("data_silo_family_name") or ctx.expand(
-        "PDSO - Program Data Silo Object - Rvt{revit_yy}"
-    )
+    family_name = config.get(
+        "data_silo_family_name"
+    ) or defaults.data_silo_family_name(doc.Application.VersionNumber)
     loaded = find_family(doc, family_name) is not None
     states["families"] = (
         "present" if loaded else "missing",
@@ -328,12 +312,11 @@ def setup_status(doc):
     levels = _default_area_plan_levels(ctx, views_data, doc)
     missing_plans = []
     expected = 0
-    for scheme_name in scheme_names:
+    for scheme_name, level in _expected_area_plans(ctx, views_data, scheme_names):
         scheme = find_area_scheme(doc, scheme_name)
-        for level in levels:
-            expected += 1
-            if scheme is None or find_area_plan(doc, scheme, level) is None:
-                missing_plans.append("{} / {}".format(scheme_name, level.Name))
+        expected += 1
+        if scheme is None or find_area_plan(doc, scheme, level) is None:
+            missing_plans.append("{} / {}".format(scheme_name, level.Name))
     views_3d = [
         ctx.expand(spec.get("name", ""))
         for spec in (views_data or {}).get("views", [])
@@ -392,6 +375,30 @@ def setup_status(doc):
     }
 
 
+def _expected_area_plans(ctx, views_data, scheme_names):
+    """(scheme name, level) of each area plan the views step makes.
+
+    From the enabled area plan entries of views.json. If views.json can't be
+    read, every mapped scheme on every level.
+    """
+    if views_data is None:
+        return [
+            (scheme_name, level)
+            for scheme_name in scheme_names
+            for level in all_levels(ctx.doc)
+        ]
+    expected = []
+    for spec in views_data.get("views", []):
+        if spec.get("view_type") != "AreaPlan" or not spec.get("enabled", True):
+            continue
+        scheme_name = ctx.area_scheme_name(spec.get("area_scheme", ""))
+        levels, _ = revit_utils.get_levels(
+            ctx.doc, spec.get("levels", "all"), spec.get("exclude_levels") or []
+        )
+        expected.extend((scheme_name, level) for level in levels)
+    return expected
+
+
 def _state(present, expected):
     """'present', 'partial' or 'missing' from the items found and expected."""
     return _state_counts(len(present), len(expected))
@@ -414,102 +421,8 @@ def _standards_items(standards, file_name, key):
 
 
 # =============================================================================
-# Data Silo family
+# Area plans
 # =============================================================================
-
-
-def find_family(doc, family_name):
-    """Find a loaded Family by name, or None."""
-    for family in DB.FilteredElementCollector(doc).OfClass(DB.Family):
-        if family.Name == family_name:
-            return family
-    return None
-
-
-def _generic_model_template(app):
-    path = os.path.join(app.FamilyTemplatePath, "English-Imperial", "Generic Model.rft")
-    if os.path.exists(path):
-        return path
-    for root, _, files in os.walk(app.FamilyTemplatePath):
-        if "Generic Model.rft" in files:
-            return os.path.join(root, "Generic Model.rft")
-    raise PDSOError(
-        "Family template 'Generic Model.rft' not found in {}".format(
-            app.FamilyTemplatePath
-        ),
-        500,
-    )
-
-
-def ensure_data_silo_family(doc, family_name):
-    """Load a Data Silo family with the configured name if there is none.
-
-    The new family is a Generic Model with a small square marker. The PDSO
-    parameters come from the project binding (see ensure_shared_parameters).
-
-    Returns:
-        dict: {"name", "id", "created"}
-    """
-    family = find_family(doc, family_name)
-    if family is not None:
-        return {"name": family_name, "id": id_value(family.Id), "created": False}
-
-    app = doc.Application
-    family_doc = app.NewFamilyDocument(_generic_model_template(app))
-    if family_doc is None:
-        raise PDSOError("Revit could not make a new family document.", 500)
-
-    try:
-        with Transaction(family_doc, "PDSO - Build Data Silo Marker"):
-            plane = DB.Plane.CreateByNormalAndOrigin(DB.XYZ.BasisZ, DB.XYZ.Zero)
-            sketch_plane = DB.SketchPlane.Create(family_doc, plane)
-            half = DATA_SILO_MARKER_HALF_SIZE
-            corners = [
-                DB.XYZ(-half, -half, 0),
-                DB.XYZ(half, -half, 0),
-                DB.XYZ(half, half, 0),
-                DB.XYZ(-half, half, 0),
-            ]
-            loop = DB.CurveArray()
-            for index in range(4):
-                loop.Append(
-                    DB.Line.CreateBound(corners[index], corners[(index + 1) % 4])
-                )
-            profile = DB.CurveArrArray()
-            profile.Append(loop)
-            family_doc.FamilyCreate.NewExtrusion(
-                True, profile, sketch_plane, DATA_SILO_MARKER_HEIGHT
-            )
-
-        folder = os.path.join(tempfile.gettempdir(), "pdso_families")
-        if not os.path.isdir(folder):
-            os.makedirs(folder)
-        path = os.path.join(folder, family_name + ".rfa")
-        options = DB.SaveAsOptions()
-        options.OverwriteExistingFile = True
-        family_doc.SaveAs(path, options)
-        family = family_doc.LoadFamily(doc, ProgramVolumeFamilyLoadOptions(True, True))
-    finally:
-        family_doc.Close(False)
-
-    if family is None:
-        family = find_family(doc, family_name)
-    if family is None:
-        raise PDSOError("Could not load the Data Silo family.", 500)
-    return {"name": family_name, "id": id_value(family.Id), "created": True}
-
-
-# =============================================================================
-# Area schemes and area plans
-# =============================================================================
-
-
-def find_area_scheme(doc, name):
-    """Find an AreaScheme by name, or None."""
-    for scheme in DB.FilteredElementCollector(doc).OfClass(DB.AreaScheme):
-        if scheme.Name == name:
-            return scheme
-    return None
 
 
 def find_area_plan(doc, scheme, level):
@@ -528,9 +441,11 @@ def ensure_area_plan(doc, scheme_name, level, standards=None):
     """Get the area plan of a scheme on a level. Create it if there is none.
 
     A new plan gets the name and view template of views.json's area plan entry
-    for the scheme, as Quick Setup makes it (for example "PDSO - GSF - L1").
-    Without such an entry, it is named "<scheme> - <level>" and gets bold area
-    boundary lines.
+    for the scheme, as Quick Setup makes it (for example "PDSO - GSF - L1"),
+    even if the entry is turned off. Only a scheme with no entry in views.json
+    gets a plain plan, named "<scheme> - <level>" with bold area boundary
+    lines. If views.json can't be read, or its plan can't be made, this raises
+    PDSOError instead of making a different plan.
 
     Args:
         standards (Standards): Standards to read views.json from. Default: the
@@ -546,11 +461,22 @@ def ensure_area_plan(doc, scheme_name, level, standards=None):
     view = find_area_plan(doc, scheme, level)
     created = False
     if view is None:
-        _create_area_plan_from_standards(doc, scheme_name, level, standards)
+        has_entry, problem = _create_area_plan_from_standards(
+            doc, scheme_name, level, standards
+        )
         view = find_area_plan(doc, scheme, level)
-        created = view is not None
-    if view is None:
-        view = _create_plain_area_plan(doc, scheme, scheme_name, level)
+        if view is None and has_entry:
+            raise PDSOError(
+                "Couldn't create the area plan of '{}' on '{}'. {}".format(
+                    scheme_name,
+                    level.Name,
+                    problem
+                    or "A view with the name views.json gives it may exist already.",
+                ),
+                500,
+            )
+        if view is None:
+            view = _create_plain_area_plan(doc, scheme, scheme_name, level)
         created = True
 
     return {
@@ -563,23 +489,29 @@ def ensure_area_plan(doc, scheme_name, level, standards=None):
 
 
 def _create_area_plan_from_standards(doc, scheme_name, level, standards=None):
-    """Create the plan as Quick Setup would. Returns False if that isn't possible."""
+    """Create the plan as Quick Setup would.
+
+    Returns:
+        tuple: (has_entry, problem). has_entry is False if views.json has no
+            area plan entry for the scheme; problem is what the views step
+            reported as failed, or None.
+    """
+    standards = standards or Standards(doc)
+    ctx = SetupContext(doc, standards)
+    ctx.current_step = "views"
     try:
-        standards = standards or Standards(doc)
-        ctx = SetupContext(doc, standards)
-        ctx.current_step = "views"
         ctx.current_file = standards.load("views.json")
-        return views_step.create_area_plan(
-            ctx, ctx.current_file.data, scheme_name, level
-        )
     except StandardsError as error:
-        logger.warning("views.json: {}".format(error))
-    except Exception as error:
-        logger.warning(
-            "Could not create the area plan of '{}' on '{}' from views.json: "
-            "{}".format(scheme_name, level.Name, error)
-        )
-    return False
+        raise PDSOError("views.json: {}".format(error), 500)
+    has_entry = views_step.create_area_plan(
+        ctx, ctx.current_file.data, scheme_name, level
+    )
+    problems = [
+        message
+        for _, _, row_status, message in ctx.results
+        if row_status == status.FAILED and message
+    ]
+    return has_entry, " ".join(problems) or None
 
 
 def _create_plain_area_plan(doc, scheme, scheme_name, level):

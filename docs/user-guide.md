@@ -82,7 +82,7 @@ Click **Project Config**. The settings are saved in the model, so set them once 
 | **Area Scheme to Parameter Mappings** | Which Revit area scheme fills which Data Silo parameter. The defaults are `PDSO - GSF`, `PDSO - NSF` and `PDSO - ZFA`, filling the parameters of the same names. Quick Setup creates any of these schemes that the model doesn't have. If the model already has its own schemes (for example **Gross Building** and **Rentable**), map those instead. |
 | **Program Volume Family Name Prefix** | PDSO names each Program Volume family `<prefix><Program UID>`, and uses the prefix to find them. Default `PDSO_ProgramVolume-`. |
 | **Program Volume Extrusion Height** | Height of Program Volumes, in feet. Default 8. |
-| **Data Silo / Program Volume / Area Workset** | Optional. If set, Sync Data can move elements to these worksets or warn when they're on the wrong one. |
+| **Data Silo / Program Volume Workset** | Optional. If set, Sync Data can move elements to these worksets or warn when they're on the wrong one. An Areas workset has no field here; it can be set over the API (`update_config`, `worksets.areas`). |
 | **Level Mapping** | Short identifiers for levels, used by stacking (see below). |
 
 Program Volume shapes come from the Area in the `PDSO - GSF` scheme. If there's no scheme with that name, they come from the smallest Area that contains the Data Silo.
@@ -163,7 +163,7 @@ Save (and sync with central) first. Then click **Sync Data**.
 
    | Setting | Options |
    | --- | --- |
-   | Data Silo Workset Enforcement | Fix (if configured), Warn (if configured), Do Nothing |
+   | Data Silo Workset Enforcement | Fix (if configured) moves Data Silos and Areas to the worksets set in Project Config. Warn (if configured) only lists how many are on another workset. Do Nothing. |
    | Data Silo Pinning | Pin, Unpin, Maintain |
    | Update Geometry | Yes - Use Geometry Cache (only rebuilds families whose Area outline, Data Silo location or extrusion height changed), Yes - Recompute All Geometry (rebuilds every family; slow), No |
    | Program Volume Workset / Pinning | as above |

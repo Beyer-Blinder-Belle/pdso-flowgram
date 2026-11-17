@@ -3,6 +3,7 @@
 
 # Python standard libraries
 import os
+from contextlib import contextmanager
 
 # 3rd Party Modules
 from pyrevit import DB
@@ -165,15 +166,13 @@ OPEN_DIALOG_ANSWERS = {
 }
 
 
-def open_project(uiapp, path):
-    """Open a project file and make it the active document.
+@contextmanager
+def _answering_open_dialogs(uiapp):
+    """Answer the dialogs of OPEN_DIALOG_ANSWERS while a project opens.
 
-    The dialogs of OPEN_DIALOG_ANSWERS get their answer automatically. The
-    result lists them in "dialogs_answered", and all other dialogs that showed
-    in "dialogs_seen".
+    Yields:
+        tuple: (answered, seen) lists of dialog ids, filled as dialogs show
     """
-    if not os.path.exists(path):
-        raise PDSOError("File not found: {}".format(path), 404)
     answered = []
     seen = []
 
@@ -190,12 +189,107 @@ def open_project(uiapp, path):
 
     uiapp.DialogBoxShowing += on_dialog
     try:
-        info = _open_project(uiapp, path)
+        yield answered, seen
     finally:
         uiapp.DialogBoxShowing -= on_dialog
+
+
+def open_project(uiapp, path):
+    """Open a project file and make it the active document.
+
+    The dialogs of OPEN_DIALOG_ANSWERS get their answer automatically. The
+    result lists them in "dialogs_answered", and all other dialogs that showed
+    in "dialogs_seen".
+    """
+    if not os.path.exists(path):
+        raise PDSOError("File not found: {}".format(path), 404)
+    with _answering_open_dialogs(uiapp) as (answered, seen):
+        info = _open_project(uiapp, path)
     info["dialogs_answered"] = answered
     info["dialogs_seen"] = seen
     return info
+
+
+# =============================================================================
+# Open documents (the active one and the ones open in the background)
+# =============================================================================
+
+
+def open_document_info(doc, active_doc):
+    """Describe an open project document in a few fields."""
+    return {
+        "title": doc.Title,
+        "path": doc.PathName,
+        "is_active": active_doc is not None and doc.Equals(active_doc),
+        "is_modified": doc.IsModified,
+        "is_workshared": doc.IsWorkshared,
+    }
+
+
+def list_documents(app, active_doc):
+    """The project documents that are open in Revit."""
+    return [
+        open_document_info(doc, active_doc)
+        for doc in app.Documents
+        if not doc.IsFamilyDocument and not doc.IsLinked
+    ]
+
+
+def open_in_background(uiapp, path, detach=False):
+    """Open a project file without showing it. An open file is not opened again.
+
+    Dialogs are answered as open_project answers them.
+    """
+    if not os.path.exists(path):
+        raise PDSOError("File not found: {}".format(path), 404)
+    app = uiapp.Application
+    active = uiapp.ActiveUIDocument.Document if uiapp.ActiveUIDocument else None
+    for doc in app.Documents:
+        if os.path.normcase(doc.PathName) == os.path.normcase(path):
+            return open_document_info(doc, active)
+    options = DB.OpenOptions()
+    if detach:
+        options.DetachFromCentralOption = (
+            DB.DetachFromCentralOption.DetachAndPreserveWorksets
+        )
+    model_path = DB.ModelPathUtils.ConvertUserVisiblePathToModelPath(path)
+    with _answering_open_dialogs(uiapp) as (answered, seen):
+        doc = app.OpenDocumentFile(model_path, options)
+    info = open_document_info(doc, active)
+    info["dialogs_answered"] = answered
+    info["dialogs_seen"] = seen
+    return info
+
+
+def find_open_document(app, title):
+    """An open project document by title, or a 404 PDSOError."""
+    titles = []
+    for doc in app.Documents:
+        if doc.IsLinked or doc.IsFamilyDocument:
+            continue
+        titles.append(doc.Title)
+        if doc.Title == title:
+            return doc
+    raise PDSOError(
+        "Document '{}' is not open. Open documents: {}".format(
+            title, ", ".join(titles)
+        ),
+        404,
+    )
+
+
+def close_document(doc, active_doc, save=False):
+    """Close an open document that is not the active one."""
+    if active_doc is not None and doc.Equals(active_doc):
+        raise PDSOError(
+            "'{}' is the active document. Open a different project first.".format(
+                doc.Title
+            ),
+            409,
+        )
+    title = doc.Title
+    doc.Close(bool(save))
+    return {"closed": title, "saved": bool(save)}
 
 
 def _open_project(uiapp, path):
@@ -296,32 +390,3 @@ def save_project(doc):
     return document_info(doc)
 
 
-def close_project(uiapp, title, save=False):
-    """Close an open document that is not the active document.
-
-    Args:
-        uiapp: UIApplication
-        title (str): Title of the document (the file name without ".rvt")
-        save (bool): Save the document before it closes
-    """
-    active = uiapp.ActiveUIDocument.Document if uiapp.ActiveUIDocument else None
-    titles = []
-    for document in uiapp.Application.Documents:
-        titles.append(document.Title)
-        if document.Title != title or document.IsLinked:
-            continue
-        if active is not None and document.Equals(active):
-            raise PDSOError(
-                "'{}' is the active document. Open a different project first.".format(
-                    title
-                ),
-                409,
-            )
-        document.Close(bool(save))
-        return {"closed": title, "saved": bool(save)}
-    raise PDSOError(
-        "Document '{}' is not open. Open documents: {}".format(
-            title, ", ".join(titles)
-        ),
-        404,
-    )

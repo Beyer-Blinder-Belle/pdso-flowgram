@@ -19,6 +19,7 @@ from datetime import datetime
 
 # 3rd Party Modules
 from pyrevit import script, DB
+from pdso.code import defaults
 from rpw.utils.dotnet import List
 
 # Custom Modules
@@ -310,7 +311,7 @@ class PDSOPreflightService(object):
                 config.program_volume_family_name_prefix
                 if config is not None
                 and getattr(config, "program_volume_family_name_prefix", None)
-                else "PDSO_ProgramVolume-"
+                else defaults.PROGRAM_VOLUME_PREFIX
             )
             ext_pv_instance_collection = ExtendedProgramVolumeInstanceCollection(
                 self.doc, pv_prefix
@@ -725,7 +726,7 @@ class PDSOPreflightService(object):
                 self.check_uid_pattern_status = uid_pattern_status(
                     config.uid_pattern,
                     [
-                        data_silo.parameters["PDSO - Program UID"].value
+                        data_silo.uid
                         for data_silo in data_silos
                     ],
                 )

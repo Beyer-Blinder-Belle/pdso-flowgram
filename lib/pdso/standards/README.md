@@ -101,7 +101,8 @@ python lib/pdso/code/setup/shared_parameter_file.py
 | `name` | Family name in Revit, or a list of names: the first that is loaded counts. A family keeps its file's name, so a Revit version with no family of its own uses the newest shipped one (for example `Rvt26` in Revit 2027). |
 | `files` | Paths to try in order. The first that exists is loaded. Relative paths resolve against this file's folder. Revit upgrades an older family file when it loads it; it can't load a newer one. |
 | `on_existing` | `skip` (default) leaves a loaded family alone. `reload` loads it again over the existing one. |
-| `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`) |
+| `overwrite_parameter_values` | With `reload`, also overwrite parameter values (default `false`). Values are always taken from the file when the family has no instances yet. |
+| `placeholder_if_missing` | If no file can be loaded (for example a Revit older than the shipped family), build a Generic Model with a small square marker under the first `name` instead (default `false`). The shipped Data Silo entry turns this on. |
 | `use_as_data_silo_family` | Set this family as the Data Silo family in Project Config. If Project Config already names a different family that is loaded, that family is kept, this one is not loaded, and the tracked parameters go into the chosen family. |
 | `add_tracked_parameters` | For the Data Silo family: add the parameters the model tracks (chosen in the Parameter Manager) to the family (default `true`). The shipped family only has Program UID, Program Stacking and Last Synced. |
 
@@ -178,7 +179,7 @@ Useful categories: `OST_AreaSchemeLines` (area boundaries), `OST_Areas`, `OST_Ar
 | `template` | View template name to apply |
 | `parameters` | View parameters to set, e.g. `{ "View Subdiscipline": "PDSO" }` for browser organization. Parameters the template controls can't be set. |
 
-Setup doesn't create area schemes. If a scheme is missing, create it in **Area and Volume Computations** and run setup again.
+The `area_schemes` step runs first and creates the schemes Project Config maps. If a scheme is still missing (for example the step is turned off), the views of that scheme are skipped with a note: create it in **Area and Volume Computations** and run setup again.
 
 ## schedules.json
 

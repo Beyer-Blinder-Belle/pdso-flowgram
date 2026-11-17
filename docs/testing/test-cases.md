@@ -108,6 +108,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S1, with a second user who has one Data Silo borrowed.
   Steps: sync with the Area workset option set to "Fix" and pinning set to "Pin".
   Expected: the other user's Data Silo is skipped; everything else gets its workset and is pinned.
+- [ ] **T-S16. Workset "Fix" from the ribbon, and "Warn"** [K14]
+  Model: M-S1.
+  Steps: put a Data Silo and an Area on the wrong workset. Sync from the Sync Data window with the Data Silo workset option at "Warn (if configured)", then again at "Fix (if configured)".
+  Expected: "Warn" logs that 1 Data Silo and 1 Area are not on their workset and moves nothing. "Fix" moves both.
+- [ ] **T-S17. A same-named project parameter** [K9]
+  Model: add a project parameter (not shared) with the name of a tracked parameter, for example "DU Bedroom Count", bound to Generic Models (if Revit allows it).
+  Steps: sync.
+  Expected: the sync reads and writes the shared parameter only. Results match a model without the project parameter.
 - [ ] **T-S14. The sync log comes back over the API** [A6]
   Steps: `run_sync` on a model with one warning (for example M-D5).
   Expected: the reply's `log` lists the warning.
@@ -146,10 +154,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-A5.
   Steps: move one Area by 2 ft towards the other.
   Expected (known failing): the neighbour is split and the moved Area shrinks. This test is for the K15 fix.
+- [ ] **T-A12. Areas that share an edge** [K15]
+  Model: M-A5.
+  Steps: `move_area` on one of the two Areas. Then `set_area_outline` that keeps the shared edge and moves another corner. Then `set_area_outline` that moves the shared edge.
+  Expected: the move is refused (409, names the other Area) and nothing changes. The outline that keeps the shared edge works, with no split in the neighbour. The one that moves the shared edge is refused.
 - [ ] **T-A8. Move an Area around an island** [K16]
   Model: M-A6.
   Steps: move the outer Area.
-  Expected (known failing): the island's Data Silo moves too.
+  Expected: the outer Area's Data Silo moves; the island's stays. [Fixed: K16]
 - [ ] **T-A10. A failed create leaves no area plan** [A10]
   Steps: on a level with no area plan for a scheme, `draft_area` with an outline over an existing Area (so Revit gives 0 SF).
   Expected: an error, and no new area plan in the Project Browser.
@@ -201,6 +213,14 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Steps: Harvest All Units on a view where a crop fails (if one can be found).
   Expected: the rest of the images still export, and nothing is left open.
 
+- [ ] **T-C11. Pull is quick on a big catalogue** [K13]
+  Model: a shared catalogue folder with 100+ layouts.
+  Steps: Pull for a Room; then Harvest All Units on 20 units.
+  Expected: Pull opens within a few seconds; Harvest All Units doesn't slow down unit by unit.
+- [ ] **T-C12. Catalogue numbers name their folder** [K17]
+  Steps: Pull for a Room that gets layouts from the sample and the local folder.
+  Expected: each row says "catalogue N, sample" or "catalogue N, local".
+
 ### Setup and ribbon
 
 - [ ] **T-U1. Two windows** [U1]
@@ -212,7 +232,7 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Expected: the Rvt26 family loads (upgraded) and is set as the Data Silo family. The second run skips it.
 - [ ] **T-U2b. Revit 2025** [U2]
   Steps: run Quick Setup in Revit 2025, if one is available.
-  Expected: the families step fails with the hint that the shipped family needs Revit 2026, and it doesn't try to load the 2026 file.
+  Expected: it doesn't try to load the 2026 file. It builds a placeholder Data Silo family (a small square marker) named "... - Rvt25", reports it as Created with the reason, and adds the tracked parameters to it. [U2, K1]
 - [ ] **T-U3. A chosen Data Silo family** [U3]
   Model: M-S3.
   Steps: Quick Setup.
@@ -224,6 +244,15 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
   Model: M-S2, and also a configured model.
   Steps: open Project Config and Parameter Manager, close them without saving, then check Undo.
   Expected: nothing to undo. In M-S2, Project Config shows the defaults marked as unsaved, and Save creates the configuration.
+- [ ] **T-U7. The API makes the same model as the ribbon** [K1]
+  Steps: in two new models, run Quick Setup from the ribbon in one, and `setup_model` with the full package in the other. Compare the Project Browser, then call `get_setup_status` on both.
+  Expected: the same views and families. Only GSF area plans, no NSF or ZFA ones. Both report "views" as present.
+- [ ] **T-U8. Area plan for another scheme** [K1]
+  Steps: after T-U7, `draft_area` in the NSF scheme.
+  Expected: an area plan "PDSO - NSF - <level>" with the working template is made.
+- [ ] **T-U9. Project Config refuses bad values** [K3]
+  Steps: in Project Config, set the UID pattern to `(`, then save. Then fix it, set the extrusion height to 0, and save.
+  Expected: each save says "Configuration not saved" with the reason, and nothing changes in the model. A good save still works and clears the unsaved mark.
 - [ ] **T-U6. Quick Setup keeps template changes** [U6]
   Steps: show a hidden category in "PDSO - 3D - Program Volumes", then run Quick Setup again.
   Expected: the template keeps the change, and the report says Skipped.
@@ -248,9 +277,26 @@ One Revit 2026 model built to hold every case below. Tick each item when the mod
 - [ ] **T-P7. SSH drop during a write** [A3, A4]
   Steps: with `PDSO_SSH_HOST` set, stop the tunnel during a long `run_sync`.
   Expected: the tool says the change may have been made and does not send it again. A timed-out write says Revit may still make it.
+- [ ] **T-P10. Layout image over the API** [K6]
+  Steps: from a computer other than the Revit one (SSH), `get_layout` for a harvested layout.
+  Expected: the reply shows the plan image.
+- [ ] **T-P11. Save and close** [K7]
+  Steps: `open_document_in_background`, then `save_document` and `close_background_document` for it. Then `close_project` with the active document's title.
+  Expected: the background document saves and closes. Closing the active one gives a 409.
+- [ ] **T-P12. pyRevit check** [K12]
+  Steps: `get_status`.
+  Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.7 with no version warning.
+  Expected: API 1.8 with no version warning.
+- [ ] **T-P8. Colored 3D view** [K1]
+  Model: one where `show_program_volumes` ran before (it has "PDSO - Program Volumes").
+  Steps: `show_program_volumes`.
+  Expected: that view is renamed "PDSO - Program Volumes - Colored" and used; no second view. Quick Setup's "PDSO - Program Volumes - 3D" is unchanged.
+- [ ] **T-P9. Programs in an Area with a hole** [K4]
+  Model: M-A6.
+  Steps: `render_plan` and `color_areas` on its level, and `describe_program` for the island's Data Silo.
+  Expected: the island's program is shown in the island Area only, and `describe_program` names the island Area.
 
 ---
 

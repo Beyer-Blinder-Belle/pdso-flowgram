@@ -22,16 +22,16 @@ from pdso.code.business import (
     visualization_service,
 )
 from pdso.code.business.audit_service import RecordingOutput, generate_detailed_report
-from pdso.code.business.log_capture import LogCapture
 from pdso.code.business.preflight_service import PDSOPreflightService
 from pdso.code.business.revit_helpers import all_levels, find_level, level_info
-from pdso.code.business.sync_service import SYNC_OPTIONS, PDSOSyncService
+from pdso.code.business import sync_service
+from pdso.code.business.sync_service import SYNC_OPTIONS
 
 ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.7"
+API_VERSION = "1.8"
 
 
 def route(method, pattern):
@@ -87,6 +87,11 @@ def get_status(ctx):
     """Get the Revit version, the open document and the PDSO setup state."""
     status = {
         "revit": {"version": HOST_APP.version, "build": HOST_APP.build},
+        "pyrevit": {
+            "version": _pyrevit_version(),
+            # False: list filters, "document" and "_rid" in a query are lost
+            "query_parameters": ctx.query_supported,
+        },
         "api_version": API_VERSION,
         "document": None,
         "pdso_config_exists": False,
@@ -96,6 +101,15 @@ def get_status(ctx):
         if not ctx.doc.IsFamilyDocument:
             status["pdso_config_exists"] = config_service.config_exists(ctx.doc)
     return status
+
+
+def _pyrevit_version():
+    try:
+        from pyrevit.versionmgr import get_pyrevit_version
+
+        return get_pyrevit_version().get_formatted()
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -126,18 +140,45 @@ def open_document(ctx):
     return model_service.open_project(ctx.uiapp, ctx.arg("path", required=True))
 
 
+@route("POST", "documents/close")
 @route("POST", "document/close")
 def close_document(ctx):
-    """Close an open document that is not the active one. Body: title, save?"""
-    return model_service.close_project(
-        ctx.uiapp, ctx.arg("title", required=True), save=_flag(ctx.arg("save"))
-    )
+    """Close an open document that is not the active one.
+
+    Body: document (or title), save?. "document/close" is the older name.
+    """
+    title = ctx.arg("title")
+    if title:
+        doc = model_service.find_open_document(ctx.app, str(title))
+    elif ctx.arg("document"):
+        doc = ctx.require_doc()
+    else:
+        raise ApiError("Give the document to close ('document').")
+    return model_service.close_document(doc, ctx.doc, save=_flag(ctx.arg("save")))
 
 
+@route("POST", "documents/save")
 @route("POST", "document/save")
 def save_document(ctx):
-    """Save the active document."""
+    """Save a document to its file. Body: document? (default: the active one).
+
+    "document/save" is the older name.
+    """
     return model_service.save_project(ctx.require_doc())
+
+
+@route("GET", "documents")
+def list_documents(ctx):
+    """List the project documents that are open in Revit."""
+    return model_service.list_documents(ctx.app, ctx.doc)
+
+
+@route("POST", "documents/open")
+def open_document_in_background(ctx):
+    """Open a project file but do not show it. Body: path, detach?"""
+    return model_service.open_in_background(
+        ctx.uiapp, ctx.arg("path", required=True), detach=_flag(ctx.arg("detach"))
+    )
 
 
 @route("GET", "levels")
@@ -286,36 +327,11 @@ def get_sync_options(ctx):
 def run_sync(ctx):
     """Run the preflight checks, then the sync. Body: options?, force?"""
     doc = ctx.require_doc()
-    options = ctx.arg("options") or {}
-    if not isinstance(options, dict):
-        raise ApiError("'options' must be an object.")
-    for name, value in options.items():
-        if name not in SYNC_OPTIONS:
-            raise ApiError(
-                "Unknown sync option '{}'. Permitted: {}".format(
-                    name, ", ".join(sorted(SYNC_OPTIONS))
-                )
-            )
-        if value not in SYNC_OPTIONS[name][1]:
-            raise ApiError(
-                "Sync option '{}' must be one of: {}".format(
-                    name, ", ".join(SYNC_OPTIONS[name][1])
-                )
-            )
-
-    preflight = _run_preflight(doc)
-    if not preflight["can_run_sync"] and not _flag(ctx.arg("force")):
-        return {
-            "ran": False,
-            "reason": "Preflight checks failed.",
-            "preflight": preflight,
-        }
-
-    with LogCapture() as capture:
-        result = PDSOSyncService(doc, options=options).run()
-    result["ran"] = True
-    result["preflight"] = preflight
-    result["log"] = capture.records
+    result = sync_service.run_with_preflight(
+        doc, ctx.arg("options"), force=_flag(ctx.arg("force"))
+    )
+    if not result["ran"]:
+        return result
     try:
         result["program_volumes"] = program_service.program_volume_summary(doc)
     except Exception as error:
@@ -597,7 +613,7 @@ def program_volume_view(ctx):
     """
     return visualization_service.ensure_program_volume_view(
         ctx.require_doc(),
-        name=ctx.arg("name", "PDSO - Program Volumes"),
+        name=ctx.arg("name", visualization_service.PROGRAM_VOLUME_VIEW),
         color_by=ctx.arg("color_by", "program_type"),
         building=ctx.arg("building", "ghost"),
         section_box=_flag(ctx.arg("section_box"), True),

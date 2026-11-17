@@ -211,15 +211,32 @@ Still open from this review:
   *Done: the route ignores `folder`.*
 ## K. Consistency
 
-- [ ] **K1. The ribbon and the API make different models.** `bootstrap_service.py:165-213, 444-614` still does three things itself: it builds a placeholder family, adds NSF and ZFA plans (which `views.json` disables), and falls back to a hardcoded "plain" plan that hides views.json errors. Also, `show_program_volumes` creates "PDSO - Program Volumes" while Quick Setup makes "PDSO - Program Volumes - 3D".
+- [x] **K1. The ribbon and the API make different models.** `bootstrap_service.py:165-213, 444-614` still does three things itself: it builds a placeholder family, adds NSF and ZFA plans (which `views.json` disables), and falls back to a hardcoded "plain" plan that hides views.json errors. Also, `show_program_volumes` creates "PDSO - Program Volumes" while Quick Setup makes "PDSO - Program Volumes - 3D".
+  *Done:*
+  - Bootstrap adds nothing of its own.
+  - The placeholder Data Silo family moved into the families step (`placeholder_if_missing` in families.json), so Quick Setup builds it too in an older Revit.
+  - The extra NSF and ZFA plans are gone: those plans are made when Areas are drawn in them.
+  - `ensure_area_plan` raises when views.json can't be read or its plan can't be made. A plain plan is only made for a scheme views.json has no entry for.
+  - `setup_status` expects the plans views.json turns on.
+  - The API's 3D view is now "PDSO - Program Volumes - Colored": it ghosts the building, so it can't share the working view's template. An old view with the previous name is renamed. API 1.8.
 - [ ] **K2. Business logic in the wrong layer:**
   - `1.HarvestUnits.pushbutton/script.py` holds unit finding, naming, numbering, replacement and images; the API `harvest_layout` has none of it.
   - The MCP holds the Room→Area outline algorithm, `render_plan`'s point-in-polygon test, the setup default levels and the crossing-items check.
   - The `documents/*` handlers call the Revit API directly; `documents/open` has no dialog suppression.
   - `run_sync` gating is in the handler.
-- [ ] **K3.** Project Config bypasses `config_service`, so its saves skip the service's validation. It also repeats `run_model_checks` (`body_1_setup.py:643-766, 1306-1365`).
-- [ ] **K4.** There are four point-in-polygon implementations; only `correlation_service` handles holes. The others are `program_service._outline`, `visualization_service.program_by_area` and `area_drafting_service`, plus the MCP's `_inside`.
-- [ ] **K5. Docs that are stale or contradict each other:**
+  *Partly done:*
+  - `documents/*` now go through `model_service`, and `documents/open` answers dialogs (K7).
+  - The sync gate and option checks are in `sync_service.run_with_preflight` and `check_options`; the handler only adds the Program Volume summary.
+  - Still open: Harvest All Units' logic, and the MCP's Room→Area outline, setup default levels and crossing-items check. They touch the files of the unmerged branches F1 (`fix/place-on-rac`: Harvest All Units and the catalogue services) and F2 (`feature/mcp-pull-from-catalogue`: the MCP server).
+- [x] **K3.** Project Config bypasses `config_service`, so its saves skip the service's validation. It also repeats `run_model_checks` (`body_1_setup.py:643-766, 1306-1365`).
+  *Done: Save calls `config_service.update_config`, so the window gets the API's checks: UID pattern, extrusion height, level keys and levels, and area scheme mapping parameters. A refused save names the problem and saves nothing. The window's copy of the model checks had no button or bindings in its XAML, so it is removed.*
+- [x] **K4.** There are four point-in-polygon implementations; only `correlation_service` handles holes. The others are `program_service._outline`, `visualization_service.program_by_area` and `area_drafting_service`, plus the MCP's `_inside`.
+  *Done:*
+  - `layout_geometry.point_in_polygon` is the one ray-casting test in lib; `revit_helpers.point_in_polygon` calls it.
+  - New `point_in_area` (outline minus holes) and `outline_and_holes` helpers. `program_service.containing_areas`, its Area placement, `visualization_service.program_by_area`, `move_area` and the MCP's `render_plan` now leave out holes.
+  - `correlation_service` keeps its winding-number test on Revit curves, which handles holes and arcs.
+  - The MCP keeps its own copy, since it can't import lib.
+- [x] **K5. Docs that are stale or contradict each other:**
   - concurrency: `startup.py` and README:142 vs README:242 and AGENTS.md
   - "127.0.0.1 only" isn't enforced: it depends on pyRevit's `routes.Host`
   - `architecture.md:31`: `related_area_elements` is keyed by parameter, not by scheme
@@ -229,29 +246,60 @@ Still open from this review:
   - "16 preflight checks" should be 17
   - the README tree omits the catalogue
   - `pyrevit-mcp.md`'s destructive-calls list predates the catalogue
-- [ ] **K6.** `API_VERSION` wasn't bumped when 6e89d07 added `image` and `catalogue` to the layout replies. `image` is a local path, so remote agents can't use it. *Partly done: the bump to 1.6 (with B1) covers those reply changes. The `image` path is still open.*
-- [ ] **K7.** Duplicate routes: `document/save|close` vs `documents/save|close`, with different shapes. Read-only catalogue routes use POST. Parameter names differ between `handlers.py` and `catalogue_handlers.py`, and their `_flag` helpers are duplicated.
-- [ ] **K8. Transaction names without the "PDSO - " prefix:**
+  *Done: all nine fixed. startup.py and the README no longer say overlapping requests are safe. The `127.0.0.1` claims say it's pyRevit's default. The code comment in `extended_data_silo.py` that repeated the wrong key was fixed too.*
+- [x] **K6.** `API_VERSION` wasn't bumped when 6e89d07 added `image` and `catalogue` to the layout replies. `image` is a local path, so remote agents can't use it. *Done: the bump to 1.6 (with B1) covers those reply changes. `GET catalogue/layouts/<id>` now also returns the image as `image_base64`, and the MCP's `get_layout` returns it as an image. The summary's `image` stays a path on the Revit computer, for local use.*
+- [x] **K7.** Duplicate routes: `document/save|close` vs `documents/save|close`, with different shapes. Read-only catalogue routes use POST. Parameter names differ between `handlers.py` and `catalogue_handlers.py`, and their `_flag` helpers are duplicated.
+  *Done:*
+  - `document/save` and `documents/save` are one handler, as are `document/close` and `documents/close` (which takes `document` or `title`). The `documents/*` names are the main ones, and the MCP uses them.
+  - The document logic moved to `model_service`, and `documents/open` answers dialogs as `document/open` does (part of K2).
+  - `catalogue_handlers` uses `handlers._flag`.
+  - `catalogue/recommend` and `catalogue/similar-rooms` stay POST: a body reaches the handler on every pyRevit, query parameters don't (K12). Their docstrings say why.
+  - The other argument names already agree.
+- [x] **K8. Transaction names without the "PDSO - " prefix:**
   - Quick Setup: "PDSO Quick Setup" and "Create view {}" etc.
   - "Assign Elements to Workset"
   - "Set Data Silo Pin Status"
   - "Set Program Volume Family Pin Status"
-- [ ] **K9. Parameters handled by name instead of GUID or registry:**
+  *Done: Quick Setup's group is "PDSO - Quick Setup" and its step transactions get the prefix; the workset transaction is "PDSO - Assign Elements to Workset". The three `set_element_pin_status` methods had no callers since B5 and are removed. Transactions inside family documents keep their names.*
+- [x] **K9. Parameters handled by name instead of GUID or registry:**
   - The sync reads and writes by name (`data_service.py:145`, `extended_data_silo.py:106`, `extended_program_volume_instance.py:235`).
   - `"PDSO - Program UID"` and `"PDSO - Program Stacking"` are hardcoded about 12 times.
   - `summarize_program_types` hardcodes gsf, nsf and zfa.
-- [ ] **K10. Repeated defaults:**
+  *Done:*
+  - New `data/parameter_access.py` reads and writes PDSO parameters by GUID: from the registry, then the built-in catalog; only a name with no known GUID is looked up by name.
+  - The sync's push and commits use it, and so do the duplicate check and `pdso_kinds`.
+  - `ExtendedDataSilo.uid` and `.stacking` replace the 12 hardcoded reads.
+  - `summarize_program_types` totals the area parameters the model tracks.
+- [x] **K10. Repeated defaults:**
   - The area scheme mappings default is written out three times, and the Data Silo family name and the PV prefix are also copied.
   - There are three `IFamilyLoadOptions` classes.
   - `bootstrap_service` copies `find_family` and `find_area_scheme`.
-- [ ] **K11.** `ruff check .` fails: 478 E501 plus 8 real errors (`family_manager_service` F811 and 3× F841, `hashing_service` F841, E711 in the `0.Config` and `3.RunScripts` scripts, 1 W291). 30 legacy files have no `coding` header.
-- [ ] **K12.** No minimum pyRevit version is stated or checked. On 6.1 the API ignores query parameters (filters, `document`, `_rid`).
-- [ ] **K13.** `remove_previous` and every Pull row reload the whole catalogue folder, and Pull runs full-model collectors for each row.
-- [ ] **K14.** The workset option "Warn (if configured)" does nothing in phases 1–3 (`sync_service.py`); only "Fix" is acted on. Also, `pdso_kinds` (from B2) swallows a config read error and falls back to the default names.
-- [ ] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
-- [ ] **K16.** `move_area` picks the programs to move with a point-in-polygon test on the outer outline only, so it also moves the Data Silo of an island Area inside a hole. This was already on main.
+  *Done:*
+  - New `lib/pdso/code/defaults.py` holds the configuration defaults. Project Config's defaults, Quick Setup, preflight, the catalogue and `setup_status` read it.
+  - One `FamilyLoadOptions` in `setup/revit_utils.py`.
+  - `bootstrap_service` uses the finders of `setup/revit_utils.py`.
+- [x] **K11.** `ruff check .` fails: 478 E501 plus 8 real errors (`family_manager_service` F811 and 3× F841, `hashing_service` F841, E711 in the `0.Config` and `3.RunScripts` scripts, 1 W291). 30 legacy files have no `coding` header.
+  *Done: the 6 errors are fixed (the E711 ones went with U1). E501 is ignored in `pyproject.toml`: the long lines are strings, comments and docstrings, and reformatting 47 files would conflict with the unmerged branches (F1–F3). The 30 files have the header. `ruff check .` passes.*
+- [x] **K12.** No minimum pyRevit version is stated or checked. On 6.1 the API ignores query parameters (filters, `document`, `_rid`).
+  *Done:*
+  - The README states the requirement.
+  - `GET status` reports `pyrevit.version` and `pyrevit.query_parameters`.
+  - The MCP's `get_status` adds `pyrevit_warning` when that is false, or when a reply came back without the request id the server sent as a query parameter.
+  - No exact version number is given: the first pyRevit that passes query parameters isn't known here.
+- [x] **K13.** `remove_previous` and every Pull row reload the whole catalogue folder, and Pull runs full-model collectors for each row.
+  *Done: entry files are read again only when their modified time or size changed (`catalogue_store._read_entry_text`). `preview_layout_in_room` takes a `lookups` dict that Pull shares across its rows, so family types, plan boxes and the Room's current items are collected once.*
+- [x] **K14.** The workset option "Warn (if configured)" does nothing in phases 1–3 (`sync_service.py`); only "Fix" is acted on. Also, `pdso_kinds` (from B2) swallows a config read error and falls back to the default names.
+  *Done:*
+  - "Warn" reports how many Data Silos, Areas and Program Volumes are on another workset than Project Config sets, and moves nothing. Families, whose workset can't change, are left out.
+  - Found while fixing this: the Sync Data window sends "Fix (if configured)" and the sync only acted on "Fix", so workset enforcement never ran from the ribbon (besides S9). Option values are normalized now; the API lists "Fix", "Warn" and "Do Nothing" and still accepts the old labels. API 1.8.
+  - `pdso_kinds` logs a warning when it can't read the configuration.
+- [x] **K15.** `move_area`, `scale_area` and `set_area_outline` keep the lines an Area shares with a neighbour and also draw the moved copy. The copy can split the neighbour, and the moved Area stays bounded by the kept line. Example: Areas A and B share x=10; moving A by +2 draws x=12 inside B, and A becomes 80 SF. This was already on main. **⚠ Revit**
+  *Done, by refusing: `move_area` and `scale_area` refuse an Area that shares a boundary line with another Area (409, naming the neighbour). `set_area_outline` refuses only if a shared line would be left off the new outline; a shared edge that stays in place is fine. Moving both Areas' shared edge is left to Revit.*
+- [x] **K16.** `move_area` picks the programs to move with a point-in-polygon test on the outer outline only, so it also moves the Data Silo of an island Area inside a hole. This was already on main.
+  *Done: it uses `point_in_area` with the Area's holes (K4).*
 
-- [ ] **K17.** Catalogue numbers are per folder, but Pull shows layouts from the sample, local and chosen folders together, so one number can mean two shapes (left over from C4).
+- [x] **K17.** Catalogue numbers are per folder, but Pull shows layouts from the sample, local and chosen folders together, so one number can mean two shapes (left over from C4).
+  *Done: a layout's `catalogue` now says which folder numbered it ("sample", "local" or the folder's name), and Pull shows "catalogue 3, local".*
 
 ## F. Unfinished work
 

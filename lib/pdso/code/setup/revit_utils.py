@@ -1,14 +1,118 @@
 # -*- coding: utf-8 -*-
-"""Revit API helpers shared by the Quick Setup steps."""
+"""Revit API helpers shared by the Quick Setup steps (and the services)."""
 
 # Python standard libraries
 import fnmatch
+import os
+import tempfile
 
 import System
 
 # 3rd Party Modules
 from pyrevit import DB
 from rpw.utils.dotnet import List
+
+
+class FamilyLoadOptions(DB.IFamilyLoadOptions):
+    """Load options that always overwrite the family in the project.
+
+    Parameter values in the project are overwritten too if the family has no
+    instances yet, or if overwrite_parameters is True.
+    """
+
+    def __init__(self, overwrite_parameters=False):
+        self.overwrite_parameters = overwrite_parameters
+
+    def OnFamilyFound(self, family_in_use, overwrite_parameter_values):
+        overwrite_parameter_values.Value = (
+            not family_in_use or self.overwrite_parameters
+        )
+        return True
+
+    def OnSharedFamilyFound(
+        self, shared_family, family_in_use, source, overwrite_parameter_values
+    ):
+        source.Value = DB.FamilySource.Family
+        overwrite_parameter_values.Value = (
+            not family_in_use or self.overwrite_parameters
+        )
+        return True
+
+
+# The placeholder Data Silo family: a square marker, in feet
+MARKER_HALF_SIZE = 1.0
+MARKER_HEIGHT = 1.0
+
+
+def _generic_model_template(app):
+    path = os.path.join(app.FamilyTemplatePath, "English-Imperial", "Generic Model.rft")
+    if os.path.exists(path):
+        return path
+    for root, _, files in os.walk(app.FamilyTemplatePath):
+        if "Generic Model.rft" in files:
+            return os.path.join(root, "Generic Model.rft")
+    raise RuntimeError(
+        "family template 'Generic Model.rft' not found in {}".format(
+            app.FamilyTemplatePath
+        )
+    )
+
+
+def build_marker_family(doc, family_name):
+    """Build and load a Generic Model family with a small square marker.
+
+    Used as the Data Silo family when no family file can be loaded (an older
+    Revit than the shipped family). Must be called with no open transaction
+    in doc. Raises RuntimeError if it can't be built.
+
+    Returns:
+        DB.Family: The loaded family.
+    """
+    app = doc.Application
+    family_doc = app.NewFamilyDocument(_generic_model_template(app))
+    if family_doc is None:
+        raise RuntimeError("Revit could not make a new family document")
+    try:
+        transaction = DB.Transaction(family_doc, "PDSO - Build Data Silo Marker")
+        transaction.Start()
+        try:
+            plane = DB.Plane.CreateByNormalAndOrigin(DB.XYZ.BasisZ, DB.XYZ.Zero)
+            sketch_plane = DB.SketchPlane.Create(family_doc, plane)
+            half = MARKER_HALF_SIZE
+            corners = [
+                DB.XYZ(-half, -half, 0),
+                DB.XYZ(half, -half, 0),
+                DB.XYZ(half, half, 0),
+                DB.XYZ(-half, half, 0),
+            ]
+            loop = DB.CurveArray()
+            for index in range(4):
+                loop.Append(DB.Line.CreateBound(corners[index], corners[(index + 1) % 4]))
+            profile = DB.CurveArrArray()
+            profile.Append(loop)
+            family_doc.FamilyCreate.NewExtrusion(True, profile, sketch_plane, MARKER_HEIGHT)
+            transaction.Commit()
+        except Exception:
+            if transaction.HasStarted() and not transaction.HasEnded():
+                transaction.RollBack()
+            raise
+
+        # The family takes the name of the file it is saved as
+        folder = os.path.join(tempfile.gettempdir(), "pdso_families")
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        path = os.path.join(folder, family_name + ".rfa")
+        options = DB.SaveAsOptions()
+        options.OverwriteExistingFile = True
+        family_doc.SaveAs(path, options)
+        family = family_doc.LoadFamily(doc, FamilyLoadOptions(True))
+    finally:
+        family_doc.Close(False)
+
+    family = family or find_family(doc, family_name)
+    if family is None:
+        raise RuntimeError("Revit did not load the placeholder family")
+    return family
 
 # Filter rule operator (view_templates.json) -> ParameterFilterRuleFactory method.
 # Rules compare text, so the value is always a string.

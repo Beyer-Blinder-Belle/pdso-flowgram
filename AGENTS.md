@@ -101,7 +101,7 @@ families/               Data Silo .rfa (Revit 2026)
 
 ## Known gaps and traps
 
-- **The HTTP API has no authentication.** It listens on `127.0.0.1` only; reach it from another machine with an SSH port forward, never by opening the port. The dev flag file `%APPDATA%\pyRevit\pdso_api_dev.flag` enables `POST /pdso/dev/exec` (arbitrary Python in Revit); keep it off non-dev machines.
+- **The HTTP API has no authentication.** pyRevit Routes listens on `127.0.0.1` by default (PDSO doesn't check its host setting); reach it from another machine with an SSH port forward, never by opening the port. The dev flag file `%APPDATA%\pyRevit\pdso_api_dev.flag` enables `POST /pdso/dev/exec` (arbitrary Python in Revit); keep it off non-dev machines.
 - **One client for each Revit.** pyRevit Routes gave a client the reply of a different request when more than one request ran at the same time (seen in tests, not fixed). The MCP server sends a request id (`_rid`) and the dispatcher returns it (`rid`), so a wrong reply is found: read-only requests are sent again, write requests stop with an error.
 - **Change `API_VERSION` (`api/handlers.py`) and `EXPECTED_API_VERSION` (`mcp/pdso_mcp_server.py`) together** when a route or a reply changes. `get_status` warns when they differ.
 - **`area_scheme_mappings` is `{DSO parameter: Revit area scheme}`.** The code is consistent on that. The Project Config screen shows each row as Area Scheme → Parameter and swaps on load and save; it also reads configs saved the old way (`{scheme: parameter}`) and rewrites them correctly on the next save.
