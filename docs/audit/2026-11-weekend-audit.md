@@ -224,6 +224,10 @@ Still open from this review:
   - The MCP holds the Room→Area outline algorithm, `render_plan`'s point-in-polygon test, the setup default levels and the crossing-items check.
   - The `documents/*` handlers call the Revit API directly; `documents/open` has no dialog suppression.
   - `run_sync` gating is in the handler.
+  *Partly done:*
+  - `documents/*` now go through `model_service`, and `documents/open` answers dialogs (K7).
+  - The sync gate and option checks are in `sync_service.run_with_preflight` and `check_options`; the handler only adds the Program Volume summary.
+  - Still open: Harvest All Units' logic, and the MCP's Room→Area outline, setup default levels and crossing-items check. They touch the files of the unmerged branches F2 (MCP) and F3 (Harvest All Units).
 - [x] **K3.** Project Config bypasses `config_service`, so its saves skip the service's validation. It also repeats `run_model_checks` (`body_1_setup.py:643-766, 1306-1365`).
   *Done: Save calls `config_service.update_config`, so the window gets the API's checks: UID pattern, extrusion height, level keys and levels, and area scheme mapping parameters. A refused save names the problem and saves nothing. The window's copy of the model checks had no button or bindings in its XAML, so it is removed.*
 - [x] **K4.** There are four point-in-polygon implementations; only `correlation_service` handles holes. The others are `program_service._outline`, `visualization_service.program_by_area` and `area_drafting_service`, plus the MCP's `_inside`.

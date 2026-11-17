@@ -145,6 +145,67 @@ class _PhaseSkipped(Exception):
     """A phase that cannot run because an earlier phase did not finish."""
 
 
+def check_options(options):
+    """Normalize sync options and check them against SYNC_OPTIONS.
+
+    Raises PDSOError (400) for an unknown option or value.
+
+    Returns:
+        dict: The options, with values as SYNC_OPTIONS lists them
+    """
+    from .errors import PDSOError
+
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        raise PDSOError("'options' must be an object.")
+    options = dict((name, normalize_option(value)) for name, value in options.items())
+    for name, value in options.items():
+        if name not in SYNC_OPTIONS:
+            raise PDSOError(
+                "Unknown sync option '{}'. Permitted: {}".format(
+                    name, ", ".join(sorted(SYNC_OPTIONS))
+                )
+            )
+        if value not in SYNC_OPTIONS[name][1]:
+            raise PDSOError(
+                "Sync option '{}' must be one of: {}".format(
+                    name, ", ".join(SYNC_OPTIONS[name][1])
+                )
+            )
+    return options
+
+
+def run_with_preflight(doc, options=None, force=False):
+    """Run the preflight checks, then the sync if they pass (or force is set).
+
+    The same gate as the Sync Data window: a failed (✗) check stops the
+    sync unless force is True.
+
+    Returns:
+        dict: {"ran": False, "reason", "preflight"} when stopped. Otherwise
+            the sync summary plus "ran", "preflight" and "log" (the warnings
+            and errors the services logged).
+    """
+    # Imported here: preflight and log capture are only needed for this path
+    from .log_capture import LogCapture
+    from .preflight_service import PDSOPreflightService
+
+    options = check_options(options)
+    checks = PDSOPreflightService(doc)
+    checks.run_preflight_checks()
+    preflight = checks.summary()
+    if not preflight["can_run_sync"] and not force:
+        return {"ran": False, "reason": "Preflight checks failed.", "preflight": preflight}
+
+    with LogCapture() as capture:
+        result = PDSOSyncService(doc, options=options).run()
+    result["ran"] = True
+    result["preflight"] = preflight
+    result["log"] = capture.records
+    return result
+
+
 class PDSOSyncService(object):
     """Runs the data synchronization without a UI.
 

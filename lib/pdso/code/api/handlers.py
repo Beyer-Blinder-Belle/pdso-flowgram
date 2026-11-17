@@ -22,14 +22,10 @@ from pdso.code.business import (
     visualization_service,
 )
 from pdso.code.business.audit_service import RecordingOutput, generate_detailed_report
-from pdso.code.business.log_capture import LogCapture
 from pdso.code.business.preflight_service import PDSOPreflightService
 from pdso.code.business.revit_helpers import all_levels, find_level, level_info
-from pdso.code.business.sync_service import (
-    SYNC_OPTIONS,
-    PDSOSyncService,
-    normalize_option,
-)
+from pdso.code.business import sync_service
+from pdso.code.business.sync_service import SYNC_OPTIONS
 
 ROUTES = []
 
@@ -331,37 +327,11 @@ def get_sync_options(ctx):
 def run_sync(ctx):
     """Run the preflight checks, then the sync. Body: options?, force?"""
     doc = ctx.require_doc()
-    options = ctx.arg("options") or {}
-    if not isinstance(options, dict):
-        raise ApiError("'options' must be an object.")
-    options = dict((name, normalize_option(value)) for name, value in options.items())
-    for name, value in options.items():
-        if name not in SYNC_OPTIONS:
-            raise ApiError(
-                "Unknown sync option '{}'. Permitted: {}".format(
-                    name, ", ".join(sorted(SYNC_OPTIONS))
-                )
-            )
-        if value not in SYNC_OPTIONS[name][1]:
-            raise ApiError(
-                "Sync option '{}' must be one of: {}".format(
-                    name, ", ".join(SYNC_OPTIONS[name][1])
-                )
-            )
-
-    preflight = _run_preflight(doc)
-    if not preflight["can_run_sync"] and not _flag(ctx.arg("force")):
-        return {
-            "ran": False,
-            "reason": "Preflight checks failed.",
-            "preflight": preflight,
-        }
-
-    with LogCapture() as capture:
-        result = PDSOSyncService(doc, options=options).run()
-    result["ran"] = True
-    result["preflight"] = preflight
-    result["log"] = capture.records
+    result = sync_service.run_with_preflight(
+        doc, ctx.arg("options"), force=_flag(ctx.arg("force"))
+    )
+    if not result["ran"]:
+        return result
     try:
         result["program_volumes"] = program_service.program_volume_summary(doc)
     except Exception as error:
