@@ -131,6 +131,7 @@ Then reload pyRevit (a Revit restart isn't needed). The API is at `http://127.0.
 | Parameters | `GET/POST parameters`, `DELETE parameters/<field or name>` |
 | Sync | `GET preflight`, `GET sync/options`, `POST sync`, `GET audit` |
 | Programs (Data Silos) | `GET programs/schema`, `GET programs/summary`, `GET/POST/PUT programs`, `POST programs/batch`, `GET/PUT/DELETE programs/<uid or id>` |
+| Program Volumes | `GET program-volumes/orphans`, `POST program-volumes/purge-orphans` (families that belong to no Data Silo) |
 | Selection | `GET/POST selection` |
 | Areas | `GET area-schemes`, `GET/POST area-plans`, `GET/POST areas`, `POST areas/derive`, `GET/PUT/DELETE areas/<id>` |
 | Visualization | `POST views/export`, `POST views/color-areas`, `POST views/clear-colors`, `POST views/program-volumes` |
@@ -213,12 +214,12 @@ The server writes the images to `%TEMP%\pdso-mcp`. To use a different folder, se
 | Setup | `get_setup_status`, `setup_model`, `get_config`, `update_config`, `check_config` |
 | Parameters | `list_parameters`, `create_parameter`, `delete_parameter` |
 | Sync | `run_preflight`, `run_sync`, `get_audit_report` |
-| Programs (space types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program` |
+| Programs (space types and unit types) | `get_program_fields`, `list_programs`, `describe_program`, `summarize_programs`, `create_program`, `create_programs`, `update_program`, `update_programs`, `delete_program`, `list_orphaned_program_volumes`, `purge_orphaned_program_volumes` |
 | Selection | `select_elements`, `select_programs`, `get_selection` |
 | Area outlines | `list_area_schemes`, `list_areas`, `draft_area`, `derive_areas`, `adjust_area`, `delete_area` |
 | Visualization | `render_plan`, `color_areas`, `clear_area_colors`, `export_view_image`, `show_program_volumes`, `list_views`, `show_view` |
 | Open documents | `list_open_documents`, `open_document_in_background`, `set_target_document`, `save_document`, `close_background_document` |
-| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `harvest_units`, `recommend_layouts`, `find_similar_units`, `preview_similar_units`, `place_layout`, `list_unit_items`, `describe_item`, `clear_unit_items`, `delete_layout` |
+| Unit Layout Catalogue | `list_layouts`, `get_layout`, `harvest_layout`, `harvest_units`, `preview_pull_from_catalogue`, `pull_from_catalogue`, `recommend_layouts`, `find_similar_units`, `preview_similar_units`, `place_layout`, `list_unit_items`, `describe_item`, `clear_unit_items`, `delete_layout` |
 
 `render_plan` draws a plan diagram from the model data and can show draft outlines before you create them. `export_view_image` gives the view as Revit draws it.
 

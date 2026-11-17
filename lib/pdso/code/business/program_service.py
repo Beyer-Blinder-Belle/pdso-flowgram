@@ -394,6 +394,103 @@ def program_volume_summary(doc):
     }
 
 
+def _parent_data_silo_id(instance):
+    """The Data Silo id a Program Volume instance records, or None."""
+    from ..data.extensible_storage_schemas import PdsoProgramVolumeInstanceSchema
+
+    try:
+        entity = instance.GetEntity(PdsoProgramVolumeInstanceSchema.schema)
+        if not entity.IsValid():
+            return None
+        silo_id = entity.Get[DB.ElementId]("parent_data_silo_id")
+    except Exception:
+        return None
+    if silo_id is None or silo_id == DB.ElementId.InvalidElementId:
+        return None
+    return id_value(silo_id)
+
+
+def orphaned_program_volumes(doc):
+    """The Program Volume families that belong to no Data Silo.
+
+    A family named "<prefix><UID>" belongs to the Data Silo with that UID. A
+    family whose instances record (parent_data_silo_id) a Data Silo that is
+    still in the model belongs to it too: the next sync renames it after a
+    UID or prefix change. Any other family with the prefix is orphaned: its
+    Data Silo was deleted, or it was orphaned before parent_data_silo_id was
+    written. Read-only.
+
+    Returns:
+        list[dict]: {"id", "name", "instances": [ids]}, sorted by name
+    """
+    config = _require_config(doc)
+    prefix = config["program_volume_family_name_prefix"]
+    if not prefix:
+        return []
+    silos = _silo_instances(doc, config["data_silo_family_name"])
+    silo_ids = set(id_value(silo.Id) for silo in silos)
+    owned_names = set()
+    for silo in silos:
+        uid = _read_parameter(silo, "PDSO - Program UID")
+        if uid:
+            owned_names.add(prefix + uid)
+
+    instances_by_family = {}
+    for instance in DB.FilteredElementCollector(doc).OfClass(DB.FamilyInstance):
+        symbol = instance.Symbol
+        if symbol is not None and symbol.Family.Name.startswith(prefix):
+            instances_by_family.setdefault(id_value(symbol.Family.Id), []).append(instance)
+
+    orphans = []
+    for family in DB.FilteredElementCollector(doc).OfClass(DB.Family):
+        if not family.Name.startswith(prefix) or family.Name in owned_names:
+            continue
+        instances = instances_by_family.get(id_value(family.Id), [])
+        if any(_parent_data_silo_id(instance) in silo_ids for instance in instances):
+            continue
+        orphans.append(
+            {
+                "id": id_value(family.Id),
+                "name": family.Name,
+                "instances": [id_value(instance.Id) for instance in instances],
+            }
+        )
+    return sorted(orphans, key=lambda orphan: orphan["name"])
+
+
+def purge_orphaned_program_volumes(doc, family_ids=None):
+    """Delete orphaned Program Volume families, with their instances.
+
+    Args:
+        family_ids (list): Only these families; each must be orphaned (see
+            orphaned_program_volumes). Default: every orphaned family.
+
+    Returns:
+        dict: {"deleted": [{"id", "name", "instances"}]}
+    """
+    orphans = orphaned_program_volumes(doc)
+    by_id = dict((orphan["id"], orphan) for orphan in orphans)
+    if family_ids is None:
+        chosen = orphans
+    else:
+        if not isinstance(family_ids, list):
+            family_ids = [family_ids]
+        wanted = [int(to_number(family_id, "family id")) for family_id in family_ids]
+        not_orphaned = [family_id for family_id in wanted if family_id not in by_id]
+        if not_orphaned:
+            raise PDSOError(
+                "These are not orphaned Program Volume families: {}. Nothing was "
+                "deleted.".format(", ".join(str(i) for i in not_orphaned)),
+                409,
+            )
+        chosen = [by_id[family_id] for family_id in wanted]
+    if chosen:
+        # Deleting a family deletes its instances
+        with Transaction(doc, "PDSO - Purge Orphaned Program Volumes"):
+            doc.Delete(id_list([orphan["id"] for orphan in chosen]))
+    return {"deleted": chosen}
+
+
 # =============================================================================
 # Write
 # =============================================================================

@@ -63,7 +63,7 @@ A **PDSO** tab appears in the Revit ribbon with a **Program Data Silo Tools** pa
 | **Parameter Manager** | Chooses which parameters this project tracks, creates them as shared parameters on Generic Models and the Data Silo family, and saves or applies presets. Must be run once before syncing. |
 | **Quick Setup** | Creates everything else in the model: the area schemes from Project Config, the Data Silo family, view templates, working views and schedules. Shift+Click for standards-folder options. |
 | **Sync Data** | Runs preflight checks, then harvests Area SF into Data Silos and builds or updates Program Volumes. |
-| **Audit Report** | Prints a detailed report of configuration, correlation, level mapping and Area boundary problems, with clickable element IDs. |
+| **Audit Report** | Prints a detailed report of configuration, correlation, level mapping and Area boundary problems, with clickable element IDs. Shift-click to delete orphaned Program Volume families (ones whose Data Silo is gone), after you choose them and confirm. |
 
 The **Unit Layout Catalogue** panel next to it is a separate tool for reusing furniture layouts in units (Areas with a Data Silo). See the [catalogue README](../catalogue/README.md).
 

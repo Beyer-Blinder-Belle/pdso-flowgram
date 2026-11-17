@@ -2,7 +2,7 @@
 title: "Audit\nReport"
 
 # bundle tooltip
-tooltip: Runs an audit report on Program Data Silo Objects (PDSO) to check for data consistency and synchronization issues. Active doc must be Project type to activate.
+tooltip: Runs an audit report on Program Data Silo Objects (PDSO) to check for data consistency and synchronization issues. Shift-click to delete orphaned Program Volume families (ones that belong to no Data Silo). Active doc must be Project type to activate.
 
 # bundle help url
 help_url: ""

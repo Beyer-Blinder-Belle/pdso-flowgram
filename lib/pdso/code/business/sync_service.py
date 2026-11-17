@@ -15,6 +15,7 @@ Example Usage:
 
 # Python standard libraries
 import traceback
+from datetime import datetime
 
 # 3rd Party Modules
 from pyrevit import script, DB
@@ -301,6 +302,30 @@ class PDSOSyncService(object):
         else:
             self.logger.info("All {} are on workset '{}'".format(label, name))
 
+    def _record_last_run(self, storage_service, config):
+        """Write "<ISO time> <user>" to last_run_timestamp for each phase that completed.
+
+        Keys: AreaHarvest (phase 1), VolumeGeometry (phase 2), VolumeData
+        (phase 3), as Project Config's defaults name them. A failure is a
+        warning: the sync itself is done.
+        """
+        keys = ("AreaHarvest", "VolumeGeometry", "VolumeData")
+        try:
+            stamp = "{} {}".format(
+                datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                self.doc.Application.Username,
+            )
+            history = _as_dict(config.last_run_timestamp)
+            changed = False
+            for key, state in zip(keys, self.phases):
+                if state == "complete":
+                    history[key] = stamp
+                    changed = True
+            if changed:
+                storage_service.update_document_config(last_run_timestamp=history)
+        except Exception as error:
+            self.logger.warning("Couldn't record the sync time: {}".format(error))
+
     def _notify(self):
         """Tell the listener that the progress attributes changed."""
         if self.on_progress:
@@ -526,6 +551,8 @@ class PDSOSyncService(object):
                 self.errors.append("Phase 3: {}".format(str(e)))
                 self.phases[2] = "error"
                 self.logger.error(traceback.format_exc())
+
+            self._record_last_run(storage_service, config)
 
             # Mark complete
             self.completed = True

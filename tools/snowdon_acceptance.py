@@ -8,7 +8,7 @@ a step fails.
 Usage:
     tools/snowdon_acceptance.py --model empty --steps R0 --save-baseline
     tools/snowdon_acceptance.py --model empty --steps R0,G1,P1,P2,P3,P4,P5,S1,S2,S3
-    tools/snowdon_acceptance.py --model empty2 --steps B1,B2,V1
+    tools/snowdon_acceptance.py --model empty2 --steps B1,B2,V1,X1,V2,O1,C1,D1
     tools/snowdon_acceptance.py --model snowdon --steps A1-A10
     tools/snowdon_acceptance.py --model sample --steps A1-A6
 
@@ -27,6 +27,9 @@ Environment:
     PDSO_OUTPUT_DIR Folder for images. Default: <temp dir>/pdso-acceptance
 
 The steps of one model depend on the steps before them. Run them in order.
+D1 also opens acc_empty.rvt in the background: run R0 (model empty) once first.
+C1 needs a furniture, casework or specialty equipment family in the project
+template.
 """
 
 from __future__ import annotations
@@ -948,6 +951,180 @@ def a10() -> str:
     check(value in ("", None), f"{uid}: value after purge is {value!r}, expected empty")
     api("DELETE", "parameters/tenant_type", purge="true")
     return f"delete kept 'Office' on {uid}; create again ok; purge deleted the values"
+
+
+# =============================================================================
+# empty2, after V1: Areas from Areas, views and selection, orphans, the
+# Unit Layout Catalogue and open documents
+# =============================================================================
+
+
+def area_size(area_id: int) -> float:
+    return api("GET", f"areas/{area_id}")["area"]
+
+
+@step("X1")
+def x1() -> str:
+    gross = MAPPINGS_OWN_SCHEMES["PDSO - GSF"]
+    rentable = MAPPINGS_OWN_SCHEMES["PDSO - NSF"]
+    source = STATE["unit_area_ids"]["AA-01-AA"]
+    inset = api(
+        "POST", "areas/derive", {"scheme": gross, "areas": [source], "offset": 0.5}
+    )
+    check(not inset["errors"], f"derive with offset: {inset['errors']}")
+    made = inset["created"][0]
+    expected = (20 - 1.0) * (30 - 1.0)
+    check(abs(made["area"] - expected) < 0.5, f"inset Area is {made['area']} SF, expected {expected}")
+    api("DELETE", f"areas/{made['id']}")
+    copies = api(
+        "POST",
+        "areas/derive",
+        {"scheme": gross, "from_scheme": rentable, "level": "L1", "offset": 0},
+    )
+    check(not copies["errors"], f"derive all: {copies['errors']}")
+    check(len(copies["created"]) == 3, f"{len(copies['created'])} Areas derived, expected 3")
+    for area in copies["created"]:
+        check(
+            abs(area["area"] - area_size(area["source_id"])) < 0.01,
+            f"Area {area['id']} differs from its source {area['source_id']}",
+        )
+    STATE["unit_gross_ids"] = dict(
+        (uid, next(a["id"] for a in copies["created"] if a["source_id"] == source_id))
+        for uid, source_id in STATE["unit_area_ids"].items()
+    )
+    again = api(
+        "POST", "areas/derive", {"scheme": gross, "areas": [source], "offset": 0}
+    )
+    check(again["errors"], "deriving onto an existing Area did not fail")
+    return (
+        f"0.5 ft inset {made['area']:.1f} SF (expected {expected}); 3 copies in "
+        f"{gross} match their sources; a second copy is refused"
+    )
+
+
+@step("V2")
+def v2() -> str:
+    gross = MAPPINGS_OWN_SCHEMES["PDSO - GSF"]
+    view = api("POST", "area-plans", {"scheme": gross, "level": "L1"})
+    api("POST", "views/activate", {"view": str(view["id"])})
+    ids = sorted(STATE["unit_gross_ids"].values())
+    api("POST", "selection", {"ids": ids, "zoom": False})
+    selected = sorted(item["id"] for item in api("GET", "selection"))
+    check(selected == ids, f"selection {selected}, expected {ids}")
+    api("POST", "selection", {"ids": [], "zoom": False})
+    return f"activated {view['name']}; selected and read back {ids}"
+
+
+@step("O1")
+def o1() -> str:
+    run_sync()
+    orphans = api("GET", "program-volumes/orphans")
+    check(orphans == [], f"orphans right after a sync: {orphans}")
+    purged = api("POST", "program-volumes/purge-orphans", {})
+    check(purged["deleted"] == [], f"purge deleted {purged['deleted']}")
+    wrong = status_of("POST", "program-volumes/purge-orphans", {"families": [1]})
+    check(wrong == 409, f"purging a non-orphan gave {wrong}, expected 409")
+    return "no orphans after a sync; purge of a non-orphan refused (409)"
+
+
+@step("C1")
+def c1() -> str:
+    source, target = "AA-01-AA", "AA-01-AB"
+    placed = revit_exec(
+        "from pyrevit import DB\n"
+        "categories = [DB.BuiltInCategory.OST_Furniture, DB.BuiltInCategory.OST_Casework,"
+        " DB.BuiltInCategory.OST_SpecialityEquipment]\n"
+        "symbol = None\n"
+        "for category in categories:\n"
+        "    for candidate in DB.FilteredElementCollector(doc).OfClass(DB.FamilySymbol)"
+        ".OfCategory(category):\n"
+        "        placement = candidate.Family.FamilyPlacementType\n"
+        "        if placement == DB.FamilyPlacementType.OneLevelBased:\n"
+        "            symbol = candidate\n"
+        "            break\n"
+        "    if symbol is not None:\n"
+        "        break\n"
+        "level = [l for l in DB.FilteredElementCollector(doc).OfClass(DB.Level) if l.Name == 'L1'][0]\n"
+        "result = None\n"
+        "if symbol is not None:\n"
+        "    t = DB.Transaction(doc, 'acceptance: furnish a unit')\n"
+        "    t.Start()\n"
+        "    if not symbol.IsActive:\n"
+        "        symbol.Activate()\n"
+        "    for x, y in ((5.0, 8.0), (12.0, 20.0)):\n"
+        "        doc.Create.NewFamilyInstance(DB.XYZ(x, y, 0), symbol, level,"
+        " DB.Structure.StructuralType.NonStructural)\n"
+        "    t.Commit()\n"
+        "    result = symbol.Family.Name\n"
+    )
+    check(placed, "the template has no furniture, casework or equipment family to place")
+
+    items = api("GET", "catalogue/unit-items", unit=source)["items"]
+    check(len(items) == 2, f"{len(items)} items in {source}, expected 2")
+    harvest = api("POST", "catalogue/harvest", {"unit": source, "project_type": "Other"})
+    layout_id = harvest["layout"]["id"]
+    try:
+        layout = api("GET", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+        check(len(layout["entry"]["items"]) == 2, "the harvested layout does not have 2 items")
+        check(harvest["catalogue_number"] >= 1, "no catalogue number")
+
+        similar = api("POST", "catalogue/similar-units", {"layout_id": layout_id})
+        check(similar["units_checked"] >= 3, f"{similar['units_checked']} units checked")
+        old = api("POST", "catalogue/similar-rooms", {"layout_id": layout_id})
+        check(old["rooms_checked"] == similar["units_checked"], "the older route differs")
+
+        recommended = api("POST", "catalogue/recommend", {"unit": target})
+        check(
+            any(item["layout_id"] == layout_id for item in recommended["recommendations"]),
+            f"{layout_id} is not recommended for {target}",
+        )
+        preview = api("GET", "catalogue/preview", unit=target, layout_id=layout_id)
+        check(preview["unit"]["id"] == preview["room"]["id"], "preview keys differ")
+
+        result = api(
+            "POST",
+            "catalogue/place",
+            {"unit": target, "layout_id": layout_id, "clear_first": True},
+        )
+        check(len(result["placed"]) == 2, f"{len(result['placed'])} items placed, expected 2")
+        after = api("GET", "catalogue/room-items", room=target)["items"]
+        check(len(after) == 2, f"{len(after)} items in {target} after the pull")
+        cleared = api("DELETE", "catalogue/unit-items", unit=target)
+        check(cleared["deleted"] == 2, f"cleared {cleared['deleted']}, expected 2")
+
+        room = status_of("POST", "catalogue/recommend", {"unit": "304"})
+        check(room == 404, f"a Room number gave {room}, expected 404")
+    finally:
+        api("DELETE", f"catalogue/layouts/{urllib.parse.quote(layout_id, safe='')}")
+    return (
+        f"furnished {source} with 2 {placed}; harvested {layout_id}; similar, "
+        f"recommend, preview, place with clear_first, list and clear in {target}; "
+        "older names answer; Room number refused"
+    )
+
+
+@step("D1")
+def d1() -> str:
+    active = api("GET", "status")["document"]["title"]
+    background = api("POST", "documents/open", {"path": model_path("empty")})
+    title = background["title"]
+    try:
+        documents = {item["title"]: item for item in api("GET", "documents")}
+        check(documents[active]["is_active"], f"{active} is not the active document")
+        check(not documents[title]["is_active"], f"{title} is active")
+        levels = api("GET", "levels", document=title)
+        check(levels, f"no levels read from {title}")
+        wrong = status_of("POST", "selection", {"ids": [], "document": title})
+        check(wrong == 409, f"selecting in a background document gave {wrong}")
+        closing_active = status_of("POST", "documents/close", {"document": active})
+        check(closing_active == 409, f"closing the active document gave {closing_active}")
+    finally:
+        closed = api("POST", "documents/close", {"document": title, "save": False})
+    check(closed["closed"] == title, f"closed {closed}")
+    return (
+        f"opened {title} in the background, read its levels, selection there "
+        "refused (409), active document not closable, closed it"
+    )
 
 
 # =============================================================================

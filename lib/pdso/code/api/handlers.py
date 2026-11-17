@@ -611,6 +611,20 @@ def clear_colors(ctx):
     return visualization_service.clear_area_colors(doc, view)
 
 
+@route("GET", "program-volumes/orphans")
+def list_orphaned_program_volumes(ctx):
+    """List the Program Volume families that belong to no Data Silo (read-only)."""
+    return program_service.orphaned_program_volumes(ctx.require_doc())
+
+
+@route("POST", "program-volumes/purge-orphans")
+def purge_orphaned_program_volumes(ctx):
+    """Delete orphaned Program Volume families and their instances. Body: families? (ids; default all)"""
+    return program_service.purge_orphaned_program_volumes(
+        ctx.require_doc(), ctx.arg("families")
+    )
+
+
 @route("POST", "views/program-volumes")
 def program_volume_view(ctx):
     """Get a shaded 3D view of the Program Volumes, colored by a field.

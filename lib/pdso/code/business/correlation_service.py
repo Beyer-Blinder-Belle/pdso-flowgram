@@ -501,27 +501,34 @@ class PDSOCorrelationService(object):
                         )
                     )
 
-                # There are too many matching instances on this level - keep the best, delete others
+                # More than one instance on this level: keep one, delete the others
                 elif len(matching_instances_on_level) > 1:
-                    # To do - figure out deletion (audit F4). Until then every
-                    # duplicate is kept and treated like a single instance, so
-                    # it still moves with its Data Silo and gets its data.
+                    # The oldest instance (lowest element id) stays: tags and
+                    # views most likely point to it (audit F4)
+                    kept = min(matching_instances_on_level, key=lambda i: i.Id.Value)
+                    extra = [i for i in matching_instances_on_level if i is not kept]
+                    for duplicate in extra:
+                        duplicate.should_be_deleted = True
+                        ext_program_volume_instance_collection.instances_to_delete.append(
+                            duplicate
+                        )
+                        if duplicate in ext_data_silo.related_program_volume_instances:
+                            ext_data_silo.related_program_volume_instances.remove(duplicate)
                     self.logger.warning(
-                        "Data Silo '{}' has {} Program Volume instances on level "
-                        "'{}'. All are kept; delete the extra ones.".format(
+                        "Data Silo '{}' had {} Program Volume instances on level "
+                        "'{}'. Instance {} is kept; the other {} are deleted.".format(
                             data_silo_uid,
                             len(matching_instances_on_level),
                             expected_level.rpw_level.Name,
+                            kept.Id.Value,
+                            len(extra),
                         )
                     )
-                    for duplicate in matching_instances_on_level:
-                        duplicate.desired_instance_location = (
-                            duplicate.rpw_element.Location.Point
-                        )
-                        duplicate.target_level = expected_level
-                        duplicate.is_primary_instance = (
-                            expected_level.rpw_level.Id.Value == canonical_level_id
-                        )
+                    kept.desired_instance_location = kept.rpw_element.Location.Point
+                    kept.target_level = expected_level
+                    kept.is_primary_instance = (
+                        expected_level.rpw_level.Id.Value == canonical_level_id
+                    )
 
                 # Exactly one matching instance on this level - set its desired location
                 else:

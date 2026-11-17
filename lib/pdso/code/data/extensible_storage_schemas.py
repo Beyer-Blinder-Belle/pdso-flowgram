@@ -47,8 +47,9 @@ class PdsoConfigDocumentSchema(BaseSchema):
     def last_run_timestamp():
         """
         Dictionary logging last run timestamps per functional domain.
-        Key: Name of Functional Domain
-        Value: ISO timestamps of last run + username
+        Key: AreaHarvest, VolumeGeometry or VolumeData (the sync's phases)
+        Value: "<ISO time> <Revit user name>" of the last run that completed
+        the phase (sync_service._record_last_run), or "Never"
         """
 
     # UID pattern requirements
@@ -140,9 +141,9 @@ class PdsoProgramVolumeInstanceSchema(BaseSchema):
     @map_field(key_type=str, value_type=str)
     def hashed_parameters():
         """
-        Single Key-Value pair representing:
-        Key: Hash representing parameter names
-        Value: Hash represeting parameter values
+        Not used. Meant for a hash of parameter names -> a hash of their values,
+        to skip unchanged instances. The field stays because the schema (its
+        GUID) can't change in models that already store it.
         """
 
 
