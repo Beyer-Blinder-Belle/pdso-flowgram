@@ -5,14 +5,24 @@
 # 3rd Party Modules
 from Autodesk.Revit.DB import (
     BuiltInParameter,
+    CheckoutStatus,
     FilteredWorksetCollector,
     WorksetKind,
     WorksetId,
+    WorksharingUtils,
 )
 from pyrevit import script
 from rpw import db
 
 # Custom Modules
+
+
+def _element_id_text(element):
+    """An element's id as text, or "?" for one that can't be read (deleted)."""
+    try:
+        return str(element.Id)
+    except Exception:
+        return "?"
 
 
 class WorksetCoordinationService(object):
@@ -129,14 +139,28 @@ class WorksetCoordinationService(object):
         if element is None:
             return False, "Element is None"
 
-        # Check if element has workset parameter
-        workset_param = element.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
+        # Check if element has workset parameter. A deleted element raises.
+        try:
+            if not element.IsValidObject:
+                return False, "Element was deleted"
+            workset_param = element.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
+        except Exception as error:
+            return False, "Element can't be read: {}".format(error)
         if workset_param is None:
             return False, "Element does not have a workset parameter"
 
         # Check if parameter is read-only
         if workset_param.IsReadOnly:
             return False, "Element workset parameter is read-only"
+
+        # An element another user owns can't change, and would fail the
+        # whole transaction
+        try:
+            status = WorksharingUtils.GetCheckoutStatus(self.document, element.Id)
+            if status == CheckoutStatus.OwnedByOtherUser:
+                return False, "Another user owns the element"
+        except Exception:
+            pass
 
         return True, ""
 
@@ -188,6 +212,7 @@ class WorksetCoordinationService(object):
         results = {
             "success": False,
             "assigned_count": 0,
+            "unchanged_count": 0,
             "failed_count": 0,
             "errors": [],
         }
@@ -215,14 +240,10 @@ class WorksetCoordinationService(object):
                     )
             else:
                 results["failed_count"] += 1
-                error = "Element {}: {}".format(element.Id, error_msg)
+                error = "Element {}: {}".format(_element_id_text(element), error_msg)
                 results["errors"].append(error)
                 # Debug: Log validation failure
-                self.logger.debug(
-                    "[DEBUG] Element {} validation FAILED: {}".format(
-                        element.Id, error_msg
-                    )
-                )
+                self.logger.debug("[DEBUG] {} validation FAILED".format(error))
 
         if not valid_elements:
             results["success"] = False
@@ -236,6 +257,11 @@ class WorksetCoordinationService(object):
                         workset_param = element.get_Parameter(
                             BuiltInParameter.ELEM_PARTITION_PARAM
                         )
+                        # Already there: setting it again would still edit
+                        # (borrow) the element
+                        if workset_param.AsInteger() == workset.Id.IntegerValue:
+                            results["unchanged_count"] += 1
+                            continue
                         workset_param.Set(workset.Id.IntegerValue)
                         results["assigned_count"] += 1
                     except Exception as e:
@@ -243,7 +269,9 @@ class WorksetCoordinationService(object):
                         error = "Element {}: {}".format(element.Id, str(e))
                         results["errors"].append(error)
 
-                results["success"] = results["assigned_count"] > 0
+                results["success"] = (
+                    results["assigned_count"] + results["unchanged_count"] > 0
+                )
 
             except Exception as e:
                 results["success"] = False

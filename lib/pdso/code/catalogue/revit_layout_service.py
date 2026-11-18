@@ -610,7 +610,11 @@ def load_missing_families(doc, entry, folders):
                 transaction = DB.Transaction(doc, "PDSO - Load Layout Family")
                 transaction.Start()
                 try:
+                    # IronPython returns (loaded, family) for the out
+                    # parameter; a tuple is always true, so take the bool
                     done = doc.LoadFamily(path, options)
+                    if isinstance(done, tuple):
+                        done = done[0]
                     transaction.Commit()
                 except Exception:
                     transaction.RollBack()

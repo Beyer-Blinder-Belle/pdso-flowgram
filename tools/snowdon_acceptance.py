@@ -1018,7 +1018,7 @@ def v2() -> str:
 @step("O1")
 def o1() -> str:
     run_sync()
-    again = run_sync()["program_volumes"]
+    again = run_sync()["program_volume_changes"]
     check(
         again["created"] == 0 and again["updated"] == 0 and again["unchanged"] > 0,
         f"a second sync with nothing to change gave {again}",

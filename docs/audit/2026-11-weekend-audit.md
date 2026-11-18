@@ -128,6 +128,32 @@ Still open from this review:
 - The workset transaction name inside `WorksetCoordinationService` (K8).
 - `assign_elements_to_workset` for Program Volume families (S9 ⚠ Revit).
 
+### Review of the week's work (2026-11-18)
+
+A reviewer with no context from the fixing reviewed everything from `6e89d07` to `e262aef` (PRs #22–#26) and found 13 issues. W1–W6 and part of W8 are fixed on `fix/review-findings`.
+
+- [x] **W1.** `POST sync` replaced the sync's own created/updated/unchanged counts with the model totals (both used the key `program_volumes`), so acceptance step O1 failed.
+  *Fixed:* the counts are `program_volume_changes`.
+- [x] **W2.** Workset "Fix" for Program Volumes included the instances the commit had just deleted. Reading one raised, so no instance got its workset, and the sync still reported success.
+  *Fixed:* deleted instances are skipped, and `validate_element_for_workset_change` reports a deleted element instead of raising. **⚠ Revit** (T-S22)
+- [x] **W3.** Harvest All Units crashed when a unit failed: the failure ids are ints, and pyRevit's `linkify` takes only ElementIds.
+  *Fixed:* `to_element_id`. (T-C21)
+- [x] **W4.** `load_missing_families` reported a failed load as loaded: IronPython returns `(bool, Family)` for `LoadFamily(path, options)`, and a tuple is always true.
+  *Fixed:* the bool is taken from the tuple.
+- [x] **W5.** A failed phase-3 update left the instances it had unpinned unpinned (the unpin is its own transaction).
+  *Fixed:* they are pinned again before the error goes on.
+- [x] **W6.** R1 ("geometry not rebuilt, so don't move the instances") covered only the geometry option "No". With "Yes - Use Geometry Cache", a skipped family (no Area holds the Data Silo, a failed rebuild or load) still had its instances moved to the Data Silo's new point.
+  *Fixed:* phase 2 marks each family not rebuilt (`mark_geometry_not_rebuilt`) until it is rebuilt or found up to date. **⚠ Revit** (T-S23)
+- [ ] **W7.** Mirrored catalogue placements may turn every item 180°: the mirror across the long axis with rotation −r is a *facing* flip, but `place_layout` (and the preview) flips the *hand*. Pre-existing code, ported unchanged in F1.
+  *Open: confirm in Revit (T-C20) before changing it; `LocationPoint.Rotation` of a flipped family decides which flip is right.*
+- [ ] **W8.** Workset "Fix" set the workset on every element, also those already on it, so each sync borrowed them. Phases 2 and 3 didn't skip elements another user owns. The Program Volume family entity and the config (`last_run_timestamp`) are saved on every sync.
+  *Partly fixed:* phase 1 and `assign_elements_to_workset` skip elements already on the workset, and `assign_elements_to_workset` skips (and reports) elements another user owns. Open: the family entity and config saves. **⚠ Revit**
+- [ ] **W9.** Two definitions of a Data Silo in the catalogue: `units()` / `UnitIndex` accept any "PDSO - Program Data Silo Object…" family or a Generic Model with a UID; `get_unit` by UID accepts only the configured family. A unit can show as harvestable, then give 404.
+- [ ] **W10.** Unit lookup (`units()`, `_unit_instances`) tests only the outer outline, so an island Area in a hole gives the outer Area the island's Data Silo.
+- [ ] **W11.** `harvest-units` with the same unit twice in `areas` (Area id and UID) harvests it twice; the second replaces the first entry's file, but the reply still lists it.
+- [ ] **W12.** `catalogue/harvest-units` asks for a view even when `areas` are given, so it fails on a background document.
+- [ ] **W13.** `GET catalogue/preview`, `GET catalogue/item` and `GET`/`DELETE catalogue/unit-items` read query parameters, which pyRevit 6.1 drops. They fail safely ("Give the unit"), and `get_status` already warns.
+
 ## S. Sync, preflight and audit bugs
 
 - [x] **S1.** Family documents are never closed after a successful `LoadFamily` (`family_manager_service.py:230-247`; `Close` is only called at 357 and 427). Each rebuilt Program Volume leaks an open family document.
