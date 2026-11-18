@@ -1018,13 +1018,21 @@ def v2() -> str:
 @step("O1")
 def o1() -> str:
     run_sync()
+    again = run_sync()["program_volumes"]
+    check(
+        again["created"] == 0 and again["updated"] == 0 and again["unchanged"] > 0,
+        f"a second sync with nothing to change gave {again}",
+    )
     orphans = api("GET", "program-volumes/orphans")
     check(orphans == [], f"orphans right after a sync: {orphans}")
     purged = api("POST", "program-volumes/purge-orphans", {})
     check(purged["deleted"] == [], f"purge deleted {purged['deleted']}")
     wrong = status_of("POST", "program-volumes/purge-orphans", {"families": [1]})
     check(wrong == 409, f"purging a non-orphan gave {wrong}, expected 409")
-    return "no orphans after a sync; purge of a non-orphan refused (409)"
+    return (
+        f"a second sync left {again['unchanged']} Program Volumes unchanged; no "
+        "orphans after a sync; purge of a non-orphan refused (409)"
+    )
 
 
 @step("C1")

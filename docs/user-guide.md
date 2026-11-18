@@ -40,7 +40,7 @@ Why use it:
 | Change square footage by editing **Area boundaries**. | Type into `PDSO - GSF`, `NSF` or `ZFA` on a Data Silo. The next sync overwrites it. |
 | Re-run **Sync Data** after any change. | Move, copy or delete Program Volumes by hand. |
 
-Check `PDSO - Last Synced` on a Data Silo or Program Volume to see when it was last updated.
+Check `PDSO - Last Synced` on a Data Silo to see when a sync last ran over it. On a Program Volume it shows when a sync last changed it: a sync that has nothing to change on a Program Volume leaves it alone, so in a workshared model it isn't borrowed.
 
 ## Installing
 

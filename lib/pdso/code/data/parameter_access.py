@@ -9,7 +9,7 @@ name.
 """
 
 # 3rd Party Modules
-from rpw import db
+from rpw import DB, db
 
 # Custom Modules
 from pdso.code.data.shared_parameter_constants import (
@@ -18,7 +18,15 @@ from pdso.code.data.shared_parameter_constants import (
     standard_pdso_parameters,
 )
 
-__all__ = ["PROGRAM_UID", "PROGRAM_STACKING", "get_parameter", "get_value", "set_value"]
+__all__ = [
+    "PROGRAM_UID",
+    "PROGRAM_STACKING",
+    "get_parameter",
+    "get_value",
+    "has_value",
+    "set_if_changed",
+    "set_value",
+]
 
 
 def _unwrap(element):
@@ -62,3 +70,52 @@ def set_value(element, name, value):
     if parameter is None:
         raise KeyError("The element has no parameter '{}'".format(name))
     db.Parameter(parameter).value = value
+
+
+# Two lengths or areas closer than this are the same value (decimal feet / SF)
+DOUBLE_TOLERANCE = 1e-9
+
+
+def has_value(parameter, value):
+    """True if a Revit Parameter already holds value, so writing it changes nothing.
+
+    A text parameter with no value equals "" or None. A number parameter that
+    was never set does not equal any number (writing 0 makes it show 0 instead
+    of blank). Anything that can't be compared counts as different.
+    """
+    try:
+        storage = parameter.StorageType
+        if storage == DB.StorageType.String:
+            return (parameter.AsString() or "") == (value or "")
+        if value is None or not parameter.HasValue:
+            return False
+        if storage == DB.StorageType.Double:
+            return abs(parameter.AsDouble() - float(value)) < DOUBLE_TOLERANCE
+        if storage == DB.StorageType.Integer:
+            return parameter.AsInteger() == int(value)
+        if storage == DB.StorageType.ElementId:
+            return parameter.AsElementId() == value
+    except Exception:
+        pass
+    return False
+
+
+def set_if_changed(element, name, value):
+    """Set a PDSO parameter only if it holds a different value.
+
+    An element that isn't written isn't edited: in a workshared model it isn't
+    borrowed and isn't sent at Sync with Central.
+
+    Returns:
+        bool: True if the value was written.
+
+    Raises:
+        KeyError: The element doesn't have the parameter.
+    """
+    parameter = get_parameter(element, name)
+    if parameter is None:
+        raise KeyError("The element has no parameter '{}'".format(name))
+    if has_value(parameter, value):
+        return False
+    db.Parameter(parameter).value = value
+    return True

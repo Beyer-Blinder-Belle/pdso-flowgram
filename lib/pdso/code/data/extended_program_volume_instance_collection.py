@@ -65,6 +65,11 @@ class ExtendedProgramVolumeInstanceCollection(object):
         self.validation_result = None  # ValidationResult object with error details
         self.instances_to_delete = []  # List[ExtendedProgramVolumeInstance] - orphaned instances
 
+        # Set by commit_pending_changes
+        self.created_count = 0
+        self.updated_count = 0
+        self.unchanged_count = 0
+
         # Init Logic
         self.logger.debug(
             "Initializing ExtendedProgramVolumeInstanceCollection for volumes with family name prefix '{}'".format(
@@ -265,6 +270,7 @@ class ExtendedProgramVolumeInstanceCollection(object):
         failed_count = 0
         newly_created_count = 0
         existing_updated_count = 0
+        unchanged_count = 0
 
         for ext_program_volume_instance in self.extended_program_volume_instances:
             # Skip instances that should be deleted (they'll be handled later)
@@ -292,8 +298,10 @@ class ExtendedProgramVolumeInstanceCollection(object):
                 # Count newly created vs updated
                 if was_new:
                     newly_created_count += 1
-                else:
+                elif ext_program_volume_instance.changed:
                     existing_updated_count += 1
+                else:
+                    unchanged_count += 1
 
             except Exception as e:
                 # One instance that fails must not roll back the whole
@@ -309,11 +317,14 @@ class ExtendedProgramVolumeInstanceCollection(object):
                 failed_count += 1
 
         # Log summary of commit operation
-        self.logger.debug(
-            "[DEBUG] Commit summary: {} newly created, {} existing updated, {} skipped".format(
-                newly_created_count, existing_updated_count, skipped_count
+        self.logger.info(
+            "Program Volume instances: {} created, {} updated, {} already up to date".format(
+                newly_created_count, existing_updated_count, unchanged_count
             )
         )
+        self.created_count = newly_created_count
+        self.updated_count = existing_updated_count
+        self.unchanged_count = unchanged_count
 
         if skipped_count > 0:
             self.logger.warning(

@@ -116,11 +116,20 @@ def _owned_by_other_user(doc, element):
         return False
 
 
+def _pinned(element):
+    """Whether an element is pinned (None if it can't be read)."""
+    try:
+        return bool(element.Pinned)
+    except Exception:
+        return None
+
+
 def _set_pinned(elements, pinned):
     """Pin or unpin elements one by one.
 
     An element that cannot be changed (unplaced, redundant, in a group) is
-    skipped, so it does not stop the others.
+    skipped, so it does not stop the others. An element already pinned (or
+    unpinned) as asked is left alone and not counted: setting it edits it.
 
     Returns:
         tuple: (number changed, number skipped)
@@ -128,7 +137,7 @@ def _set_pinned(elements, pinned):
     changed = 0
     skipped = 0
     for element in elements:
-        if element is None:
+        if element is None or _pinned(element) == pinned:
             continue
         try:
             element.Pinned = pinned
@@ -264,6 +273,8 @@ class PDSOSyncService(object):
         self.completed = False
         self.errors = []
         self.phases = ["pending", "pending", "pending"]
+        # Phase 3: Program Volume instances created, changed, left as they were
+        self.program_volume_counts = None
 
     def _warn_off_workset(
         self, workset_coordinator, config, key, legacy_key, label, elements
@@ -341,8 +352,9 @@ class PDSOSyncService(object):
         """Get the result of the run.
 
         Returns:
-            dict: "completed", "phases", "errors", "options", "message" and
-                "validation_warning"
+            dict: "completed", "phases", "errors", "options", "message",
+                "validation_warning" and "program_volumes" (instances created,
+                updated and unchanged by phase 3, or None if it didn't run)
         """
         names = ["area_harvest", "family_geometry", "instance_updates"]
         return {
@@ -353,6 +365,7 @@ class PDSOSyncService(object):
             "options": self.options(),
             "message": self.completion_message or self.current_step,
             "validation_warning": self.validation_warning_message,
+            "program_volumes": self.program_volume_counts,
         }
 
     def run(self):
@@ -1315,21 +1328,34 @@ class PDSOSyncService(object):
         self.progress_value = 50
         self._notify()
 
-        # Remember which instances were pinned, for the "Maintain" option
-        self.logger.info("Unpinning Program Volume instances for updates")
+        # Unpin only the instances that move or are deleted: unpinning edits
+        # an instance, and one that stays put doesn't need it. Remember which
+        # were pinned, for the "Maintain" option.
+        to_unpin = [
+            ext_instance
+            for ext_instance in ext_program_volume_instance_collection.extended_program_volume_instances
+            if ext_instance.should_be_deleted or ext_instance.needs_move()
+        ]
+        to_unpin.extend(
+            ext_instance
+            for ext_instance in ext_program_volume_instance_collection.instances_to_delete
+            if ext_instance not in to_unpin
+        )
         pinned_before = []
-        with db.Transaction("PDSO - Unpin Instances", doc=self.doc):
-            for ext_instance in (
-                ext_program_volume_instance_collection.extended_program_volume_instances
-            ):
-                if ext_instance.rpw_element is None:
-                    continue  # Skip instances that don't exist yet
-                try:
-                    if ext_instance.rpw_element.Pinned:
-                        pinned_before.append(ext_instance)
-                    ext_instance.rpw_element.Pinned = False
-                except Exception:
-                    pass  # An instance that cannot be unpinned is left as it is
+        for ext_instance in to_unpin:
+            try:
+                if ext_instance.rpw_element is not None and ext_instance.rpw_element.Pinned:
+                    pinned_before.append(ext_instance)
+            except Exception:
+                pass
+        if pinned_before:
+            self.logger.info(
+                "Unpinning {} Program Volume instances to move or delete".format(
+                    len(pinned_before)
+                )
+            )
+            with db.Transaction("PDSO - Unpin Instances", doc=self.doc):
+                _set_pinned([pvi.rpw_element for pvi in pinned_before], False)
 
         # Commit changes (creates new instances, updates locations, and deletes orphans)
         self.current_step = "Committing Program Volume instance updates"
@@ -1342,6 +1368,11 @@ class PDSOSyncService(object):
             ext_program_volume_instance_collection.commit_pending_changes()
 
             self.logger.info("Committed instance updates")
+        self.program_volume_counts = {
+            "created": ext_program_volume_instance_collection.created_count,
+            "updated": ext_program_volume_instance_collection.updated_count,
+            "unchanged": ext_program_volume_instance_collection.unchanged_count,
+        }
 
         # Apply workset enforcement if configured
         if self._program_volume_geometry_workset_option == "Fix":
@@ -1446,35 +1477,45 @@ class PDSOSyncService(object):
                 ],
             )
 
-        # Apply pinning. The instances were unpinned for the update above.
+        # Apply pinning. Only the instances that moved were unpinned above.
         # "Pin" pins every instance, "Maintain" pins again the instances that
-        # were pinned before, "Unpin" leaves them unpinned.
+        # were unpinned to move, "Unpin" unpins every instance. Instances
+        # already pinned (or unpinned) as asked are left alone.
         pinning = self._program_volume_geometry_pinning_option
+        kept = [
+            pvi
+            for pvi in ext_program_volume_instance_collection.extended_program_volume_instances
+            if not pvi.should_be_deleted
+        ]
         if pinning == "Pin":
-            to_pin = [
-                pvi
-                for pvi in ext_program_volume_instance_collection.extended_program_volume_instances
-                if not pvi.should_be_deleted
-            ]
+            to_change, pinned = kept, True
         elif pinning == "Maintain":
-            to_pin = [pvi for pvi in pinned_before if not pvi.should_be_deleted]
+            to_change, pinned = [pvi for pvi in pinned_before if not pvi.should_be_deleted], True
         else:
-            to_pin = []
-        if to_pin:
-            self.current_step = "Pinning Program Volume instances"
-            self.progress_status = "Pinning {} instances".format(len(to_pin))
+            to_change, pinned = kept, False
+        to_change = [
+            pvi
+            for pvi in to_change
+            if pvi.rpw_element is not None and _pinned(pvi.rpw_element) != pinned
+        ]
+        if to_change:
+            word = "Pinning" if pinned else "Unpinning"
+            self.current_step = "{} Program Volume instances".format(word)
+            self.progress_status = "{} {} instances".format(word, len(to_change))
             self.progress_value = 100
             self._notify()
 
-            self.logger.info("Pinning Program Volume instances")
-
             try:
-                with db.Transaction("PDSO - Pin Instances", doc=self.doc):
+                with db.Transaction(
+                    "PDSO - {} Instances".format("Pin" if pinned else "Unpin"), doc=self.doc
+                ):
                     count, skipped = _set_pinned(
-                        [pvi.rpw_element for pvi in to_pin], True
+                        [pvi.rpw_element for pvi in to_change], pinned
                     )
                     self.logger.info(
-                        "Pinned {} instances ({} skipped)".format(count, skipped)
+                        "{} {} instances ({} skipped)".format(
+                            "Pinned" if pinned else "Unpinned", count, skipped
+                        )
                     )
             except Exception as e:
                 self.logger.error("Pinning failed: {}".format(str(e)))

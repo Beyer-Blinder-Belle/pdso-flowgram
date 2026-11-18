@@ -125,6 +125,9 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
 - [ ] **T-S19. Orphaned Program Volumes** [F5]
   Steps: delete a Data Silo, then Shift-click Audit Report. Choose its family and confirm. Also try `list_orphaned_program_volumes` before and after a UID change and sync.
   Expected: the deleted Data Silo's family is listed and is deleted with its instances (one undo). A family whose Data Silo only changed UID is not listed.
+- [ ] **T-S21. A sync with nothing to change edits nothing** [F6]
+  Steps: sync twice in a row. Then change one tracked value on one Data Silo, and sync again. In a workshared model, check Worksharing Display (Owners) or Sync with Central after each sync.
+  Expected: the second sync reports every Program Volume as already up to date (`program_volumes.unchanged`), doesn't borrow them, and their `PDSO - Last Synced` keeps the first sync's time. The third updates only that Data Silo's Program Volumes and stamps them. Pinned Program Volumes stay pinned; one whose Data Silo moved is moved and pinned again.
 - [ ] **T-S20. Last run time** [F6]
   Steps: sync, then `get_config`.
   Expected: `last_run_timestamp` has today's time and your Revit user name for each phase that ran.

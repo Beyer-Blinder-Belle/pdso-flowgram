@@ -59,7 +59,7 @@ You can't type these. They're harvested from the Area that contains the Data Sil
 
 | Parameter | Type | Who writes it | Purpose | Example |
 | --- | --- | --- | --- | --- |
-| `PDSO - Last Synced` (locked) | Text | Sync (system) | When Sync Data last updated this element. If it's older than your last edit, sync again. | `2026-11-14 09:32:05` |
+| `PDSO - Last Synced` (locked) | Text | Sync (system) | On a Data Silo: when Sync Data last ran over it. If it's older than your last edit, sync again. On a Program Volume: when Sync Data last changed it (a sync with nothing to change leaves it alone). | `2026-11-14 09:32:05` |
 
 ## Not implemented yet
 
