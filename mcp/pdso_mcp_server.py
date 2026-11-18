@@ -66,7 +66,7 @@ TUNNEL_WAIT = 15  # seconds to wait for the SSH port forward
 RELOAD_WAIT = 60  # seconds to wait for the routes during a pyRevit reload
 # Version of the HTTP API (API_VERSION in lib/pdso/code/api/handlers.py)
 # that this server was written for.
-EXPECTED_API_VERSION = "1.9"
+EXPECTED_API_VERSION = "1.10"
 
 # An empty ProxyHandler turns off all proxies. Without it, urllib reads
 # HTTP_PROXY and, on Windows, the system proxy in the registry, and can send the
@@ -123,7 +123,16 @@ mcp = MCPServer(
         "create_parameter, then set the new field with update_program or "
         "update_programs. In a model that has its own Areas and area schemes, "
         "give the scheme names to setup_model (area_scheme_mappings) and place "
-        "the programs with create_programs."
+        "the programs with create_programs.\n"
+        "Unit Layout Catalogue (reusable furniture layouts): a unit is an Area "
+        "with a Data Silo inside, named by its Program UID. harvest_layout "
+        "saves the furniture of one unit as a layout. pull_from_catalogue puts "
+        "a layout into one target unit; it always needs the unit, and the unit "
+        "does not have to be harvested. Before a pull, call "
+        "preview_pull_from_catalogue for the unit and show the ranked layouts "
+        "to the user. Ask before you delete the furniture that is in the unit "
+        "(delete_existing). After a pull, describe_item gives the position of "
+        "each placed element."
     ),
 )
 
@@ -764,6 +773,22 @@ def update_programs(filters: dict[str, Any], fields: dict[str, Any]) -> dict:
 
 
 @mcp.tool()
+def list_orphaned_program_volumes() -> list:
+    """List the Program Volume families that belong to no program (read-only): their Data Silo was deleted, or they were left behind by an old UID or prefix change. Each has id, name and the ids of its instances. A family whose instances still point to an existing Data Silo is not listed: the next run_sync renames it."""
+    return api("GET", "program-volumes/orphans")
+
+
+@mcp.tool()
+def purge_orphaned_program_volumes(family_ids: list[int] | None = None) -> dict:
+    """Delete orphaned Program Volume families and all their instances. This deletes elements from the model, including any tags on those instances: show list_orphaned_program_volumes to the user and ask first.
+
+    Args:
+        family_ids: Ids of the families to delete; each must be orphaned. Default: every orphaned family.
+    """
+    return api("POST", "program-volumes/purge-orphans", _clean({"families": family_ids}))
+
+
+@mcp.tool()
 def delete_program(program: str) -> dict:
     """Delete one program (its Data Silo). Its Program Volumes stay until the next sync.
 
@@ -1297,7 +1322,7 @@ def harvest_units(
 
 @mcp.tool()
 def recommend_layouts(unit: str, program: str | None = None, limit: int = 10) -> dict:
-    """Rank the catalogue layouts for one target unit. A layout is in the list only if all its items are inside the target in one of 8 orientations. score is 60% area match and 40% size fit. shape_match (0 to 1) is how well the two outlines cover each other. Layouts for the same program come first.
+    """Rank the catalogue layouts for one target unit (data only; preview_pull_from_catalogue gives the same ranking as pictures, and pull_from_catalogue places a layout). A layout is in the list only if all its items are inside the target in one of 8 orientations. score is 60% area match and 40% size fit. shape_match (0 to 1) is how well the two outlines cover each other. Layouts for the same program come first.
 
     Args:
         unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
@@ -1315,7 +1340,7 @@ def find_similar_units(
     level: str | None = None,
     limit: int = 20,
 ) -> dict:
-    """Find the units (Areas with a PDSO data silo inside) of the model that are similar to a catalogue layout, ranked. Use it to find all units that can get the same layout. similarity is the average of area_match (the areas agree) and shape_match (the outlines cover each other); 1.0 is the same shape and size. fits says if all items of the layout land in the unit, and score is the recommender's score for that.
+    """Find the units (Areas with a PDSO data silo inside) of the model that are similar to a catalogue layout, ranked. Use it to find all units that can get the same layout; then call pull_from_catalogue for each unit. similarity is the average of area_match (the areas agree) and shape_match (the outlines cover each other); 1.0 is the same shape and size. fits says if all items of the layout land in the unit, and score is the recommender's score for that.
 
     Args:
         layout_id: Id of the layout (see list_layouts).
@@ -1331,7 +1356,7 @@ def find_similar_units(
 
 @mcp.tool()
 def place_layout(unit: str, layout_id: str, clear_first: bool = False) -> dict:
-    """Place a catalogue layout into a target unit. The recommender selects the orientation, then moves the layout to where its outline agrees best with the target, so furniture stays against its walls. A family the model doesn't have is loaded first (its own undo step), from the family files harvest saved or from another open model (see loaded_families). Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the unit that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
+    """Low-level placement of one layout; prefer pull_from_catalogue, which ranks the layouts for the unit first. Place a catalogue layout into a target unit. The recommender selects the orientation, then moves the layout to where its outline agrees best with the target, so furniture stays against its walls. A family the model doesn't have is loaded first (its own undo step), from the family files harvest saved or from another open model (see loaded_families). Returns the ids of the placed elements, the families that are not loaded in the model (these items are not placed), and the programs in the unit that got the layout id in their unit_layout_type field (a unit_layout_type that a user typed is kept; see warnings). If the layout does not fit, nothing is placed. Program objects and Program Volumes are never deleted or changed.
 
     Args:
         unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo.
@@ -2140,6 +2165,130 @@ def _draw_unit_list(layout: dict, previews: list[dict], units_checked: int, widt
     return image
 
 
+def _draw_layout_list(target: dict, previews: list[dict], scores: list[float], rejected: int, width: int):
+    """The list window for one unit: the unit as it is now, then one row for each layout that fits, ranked."""
+    extents = [_plan_extent(p, False) for p in previews]
+    span_x = max(e[2] - e[0] for e in extents)
+    span_y = max(e[3] - e[1] for e in extents)
+    turn = span_y > span_x  # show the long side of the unit horizontal
+    if turn:
+        span_x, span_y = span_y, span_x
+    pad = 12
+    scale = min((width * 0.25 - 2 * pad) / span_x, 205.0 / span_y)
+    thumb_width = int(span_x * scale + 2 * pad + 36)
+    row_height = int(max(span_y * scale + 2 * pad, 150))
+    gap = 4
+    header = 150 + row_height + 62
+    footer = 58
+    height = header + len(previews) * (row_height + gap) + footer
+    image, draw = _window(width, height, "PDSO Unit Layout Catalogue  -  Pull from Catalogue")
+    title_font = _font(27)
+    text_font = _font(22)
+    match_font = _font(27)
+    current = len(previews[0]["current_items"])
+
+    # The original: the unit as it is now, at the scale of the rows
+    top = 70
+    draw.rectangle((30, top, width - 30, top + row_height), fill="white", outline=(120, 120, 120), width=2)
+    now = dict(previews[0], items=[], layout_outline=previews[0]["unit"]["outline"])
+    _draw_plan(draw, now, (32, top + 2, 30 + thumb_width, top + row_height - 2), scale, turn)
+    x = 30 + thumb_width + 26
+    y = top + max(14, (row_height - 150) // 2)
+    tag = "UNIT NOW"
+    tag_width = draw.textlength(tag, font=_font(19, bold=True)) + 20
+    draw.rectangle((x, y + 2, x + tag_width, y + 32), fill=(70, 70, 70))
+    draw.text((x + 10, y + 6), tag, fill="white", font=_font(19, bold=True))
+    draw.text(
+        (x + tag_width + 14, y),
+        f"Area {target['number']}: {target['name']}",
+        fill=UI_TEXT,
+        font=title_font,
+    )
+    draw.text((x, y + 44), f"Level {target['level']}", fill=UI_MUTED, font=text_font)
+    draw.text(
+        (x, y + 74),
+        f"Area: {target['area']:,.0f} SF   ({target['width']:.1f} x {target['depth']:.1f} ft)",
+        fill=UI_TEXT,
+        font=text_font,
+    )
+    draw.text(
+        (x, y + 104),
+        f"{current} items in the unit now (grey)",
+        fill=UI_MUTED,
+        font=text_font,
+    )
+    draw.text(
+        (30, header - 46),
+        f"Suggested Layouts  (the best {len(previews)} that fit; {rejected} layouts of the catalogue do not fit;"
+        f" no change to the model. All plans: same scale{', turned 90 deg clockwise' if turn else ''})",
+        fill=UI_TEXT,
+        font=_font(23),
+    )
+
+    for index, preview in enumerate(previews):
+        top = header + index * (row_height + gap)
+        selected = index == 0
+        layout = preview["layout"]
+        match = preview["match"]
+        source = layout.get("source") or {}
+        draw.rectangle(
+            (30, top, width - 30, top + row_height),
+            fill=UI_ROW_SELECTED if selected else UI_ROW,
+        )
+        thumb = (32, top + 2, 30 + thumb_width, top + row_height - 2)
+        draw.rectangle(thumb, fill="white")
+        _draw_plan(draw, preview, thumb, scale, turn)
+        ink = (255, 255, 255) if selected else UI_TEXT
+        soft = (255, 255, 255) if selected else UI_MUTED
+        x = 30 + thumb_width + 26
+        y = top + max(14, (row_height - 150) // 2)
+        right = width - 30 - 26
+        draw.text(
+            (x, y),
+            _fit_text(draw, f"{index + 1}.  {layout['name']}", title_font, right - x - 330),
+            fill=ink,
+            font=title_font,
+        )
+        draw.text(
+            (x, y + 38),
+            f"{layout['program']}   |   {layout['project_type']}   |   from {source.get('project', '?')}, {source.get('level', '?')}",
+            fill=soft,
+            font=text_font,
+        )
+        fit, state = _fit_text_line(preview)
+        draw.text(
+            (x, y + 68),
+            _fit_text(draw, fit, text_font, right - x - 330),
+            fill=ink if selected else UI_STATE[state],
+            font=text_font,
+        )
+        draw.text(
+            (x, y + 106),
+            f"Layout: {layout['area']:,.0f} SF   ({layout['width']:.1f} x {layout['depth']:.1f} ft)   {layout['item_count']} items",
+            fill=ink,
+            font=text_font,
+        )
+        lines = [
+            (f"Area match: {_percent(match['area_match'])}", text_font, soft),
+            (f"Shape match: {_percent(match['shape_match'])}", text_font, soft),
+            (f"fit score {scores[index]:.3f}", text_font, soft),
+            (f"Match: {_percent(match['similarity'])}", match_font, ink),
+        ]
+        line_y = y
+        for text, font, color in lines:
+            if font is match_font:
+                line_y += 8
+            draw.text(
+                (right - draw.textlength(text, font=font), line_y),
+                text,
+                fill=color,
+                font=font,
+            )
+            line_y += font.size + 8
+    _legend(draw, 30, height - footer + 16, _font(19))
+    return image
+
+
 def _draw_unit_panel(layout: dict, preview: dict, rank: int, count: int, width: int):
     """The large picture of one suggested unit, north up, with the item list."""
     height = int(width * 0.62)
@@ -2324,6 +2473,128 @@ def preview_similar_units(
             }
         )
     return [json.dumps(summary), *images]
+
+
+@mcp.tool()
+def preview_pull_from_catalogue(unit: str, limit: int = 5, pixel_width: int = 1920) -> list:
+    """Show pictures of the catalogue layouts that fit one unit, before anything is placed. Call it before pull_from_catalogue, so that the user can choose. This tool does not change the model. The unit does not have to be harvested. The first image is a ranked list: the unit as it is now as the first row, then one row for each layout that fits, with a plan of the layout in the unit, the layout name, program and source, the area match, the shape match, the match in percent, and if an item goes across a wall. Then there is one large image for each layout (north up) with the item numbers and the family names. Each plan shows the unit outline, the items of the layout where pull_from_catalogue would put them (blue, with a direction tick), the furniture that is in the unit now (grey), and the outline of the source unit (dashed). All thumbnails have the same scale. This is the picture that the ribbon button Pull from Catalogue shows.
+
+    Args:
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo. The target: the tool needs it to compare the layouts with.
+        limit: Number of layouts (1 to 12). Default: the best 5.
+        pixel_width: Width of each image in pixels (1200 to 4000).
+    """
+    limit = max(1, min(int(limit), 12))
+    pixel_width = max(1200, min(int(pixel_width), 4000))
+    recommended = api(
+        "POST", "catalogue/recommend", {"unit": unit, "limit": limit}, timeout=LONG_TIMEOUT
+    )
+    target = recommended["target"]
+    picks = recommended["recommendations"][:limit]
+    if not picks:
+        raise ToolError(
+            f"No layout of the catalogue fits Area {target['number']} "
+            f"({target['width']:.1f} x {target['depth']:.1f} ft). "
+            f"{len(recommended['rejected'])} layouts were checked."
+        )
+    previews = [
+        api("GET", "catalogue/preview", unit=target["id"], layout_id=pick["layout_id"], timeout=LONG_TIMEOUT)
+        for pick in picks
+    ]
+    stem = f"pull_area_{target['number'] or target['id']}"
+    sheet = _draw_layout_list(
+        target, previews, [pick["score"] for pick in picks], len(recommended["rejected"]), pixel_width
+    )
+    sheet_path = _image_path(f"{stem}_list")
+    sheet.save(sheet_path)
+    images = [Image(data=sheet_path.read_bytes(), format="png")]
+    summary = {
+        "unit": {key: target.get(key) for key in ("id", "number", "name", "level", "area", "width", "depth")},
+        "current_items": len(previews[0]["current_items"]),
+        "layouts_that_do_not_fit": len(recommended["rejected"]),
+        "list_image": str(sheet_path),
+        "layouts": [],
+    }
+    for rank, (pick, preview) in enumerate(zip(picks, previews), start=1):
+        panel = _draw_unit_panel(preview["layout"], preview, rank, len(previews), pixel_width)
+        path = _image_path(f"{stem}_{rank}_{pick['layout_id'][:40]}")
+        panel.save(path)
+        images.append(Image(data=path.read_bytes(), format="png"))
+        match = preview["match"]
+        summary["layouts"].append(
+            {
+                "rank": rank,
+                "layout_id": pick["layout_id"],
+                "name": pick["name"],
+                "program": pick["program"],
+                "score": pick["score"],
+                "similarity": match["similarity"],
+                "area_match": match["area_match"],
+                "shape_match": match["shape_match"],
+                "fit_text": _fit_text_line(preview)[0],
+                "items": len(preview["items"]),
+                "items_across_outline": len(_crossing_items(preview)),
+                "items_not_loaded": match["items_not_loaded"],
+                "placement": match["placement"]["description"],
+                "image": str(path),
+            }
+        )
+    return [json.dumps(summary), *images]
+
+
+# Enough to rank every layout of a catalogue for one unit
+_ALL_LAYOUTS = 100000
+
+
+@mcp.tool()
+def pull_from_catalogue(
+    unit: str, layout_id: str | None = None, delete_existing: bool = False
+) -> dict:
+    """Put a catalogue layout into one target unit (an Area with a PDSO data silo inside). This is the one operation of the ribbon button Pull from Catalogue; it changes the model. It always needs the target unit: the layouts are compared with it. The unit does not have to be harvested. Without layout_id, the best layout that fits the unit is used. Show preview_pull_from_catalogue to the user first, and ask before delete_existing. Returns the layout that was used and its rank for the unit, the ids of the placed elements, the families that could not be loaded (these items are not placed), and the number of deleted elements.
+
+    Args:
+        unit: Program UID of the unit (for example "CL-02-18"), or the element id of its Area or data silo. The target.
+        layout_id: Id of the layout (see preview_pull_from_catalogue or recommend_layouts). Default: the best layout that fits.
+        delete_existing: Delete the free-standing furniture that is in the unit now. The delete and the placement are one undo step: if the placement fails, nothing is deleted.
+    """
+    recommended = api(
+        "POST", "catalogue/recommend", {"unit": unit, "limit": _ALL_LAYOUTS}, timeout=LONG_TIMEOUT
+    )
+    target = recommended["target"]
+    picks = recommended["recommendations"]
+    if not picks:
+        raise ToolError(
+            f"No layout of the catalogue fits Area {target['number']}. Nothing was changed."
+        )
+    if layout_id is None:
+        pick, rank = picks[0], 1
+    else:
+        found = [(index, item) for index, item in enumerate(picks, start=1) if item["layout_id"] == layout_id]
+        if not found:
+            reason = next(
+                (item["reason"] for item in recommended["rejected"] if item["layout_id"] == layout_id),
+                "it is not in the catalogue",
+            )
+            raise ToolError(
+                f"Layout '{layout_id}' does not fit Area {target['number']}: {reason}. Nothing was changed."
+            )
+        rank, pick = found[0]
+    result = api(
+        "POST",
+        "catalogue/place",
+        {"unit": target["id"], "layout_id": pick["layout_id"], "clear_first": delete_existing},
+        timeout=LONG_TIMEOUT,
+    )
+    result["layout"] = {
+        "layout_id": pick["layout_id"],
+        "name": pick["name"],
+        "program": pick["program"],
+        "rank_for_this_unit": rank,
+        "score": pick["score"],
+        "shape_match": pick["shape_match"],
+    }
+    result["deleted_existing"] = result.get("deleted", 0)
+    return result
 
 
 if __name__ == "__main__":

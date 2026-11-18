@@ -13,7 +13,12 @@ Shift+Click to choose or export a standards folder.
 from pyrevit import forms, revit, script
 
 # Custom Modules
-from pdso.code.setup.runner import SetupStep, print_report, run_setup
+from pdso.code.setup.runner import (
+    SetupStep,
+    missing_prerequisites,
+    print_report,
+    run_setup,
+)
 from pdso.code.setup.standards import Standards, StandardsError
 
 
@@ -28,6 +33,17 @@ class _StepOption(forms.TemplateListItem):
 if __name__ == "__main__":
     doc = revit.doc
     output = script.get_output()
+
+    # Setup order: Project Config, then Parameter Manager, then Quick Setup
+    missing = missing_prerequisites(doc)
+    if missing and not forms.alert(
+        "Run Project Config and the Parameter Manager before Quick Setup.",
+        sub_msg=" ".join(missing) + " Run Quick Setup anyway?",
+        title="PDSO Quick Setup",
+        yes=True,
+        no=True,
+    ):
+        script.exit()
 
     standards = Standards(doc)
     try:

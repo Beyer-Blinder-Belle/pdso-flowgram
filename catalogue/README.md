@@ -27,10 +27,12 @@ The same four steps are in the HTTP API (`/pdso/catalogue/...`) and in the MCP s
 | `harvest_layout` | Saves the layout of one unit. Gives the JSON entry and its file path |
 | `harvest_units` | Harvests every unit of an area plan (or the given Areas), as the Harvest All Units button does |
 | `list_layouts`, `get_layout` | Lists the catalogue. Gives one entry with its JSON and its SVG sketch |
-| `recommend_layouts` | Ranks the layouts for one target unit |
+| `preview_pull_from_catalogue` | Shows images of the layouts that fit one unit, before anything is placed: the unit as it is now, then the best 5 layouts, ranked, with a plan of each layout in the unit. The same picture as the **Pull from Catalogue** button. The unit does not have to be harvested |
+| `pull_from_catalogue` | Puts a layout into one target unit: the one operation of the **Pull from Catalogue** button. Without a layout id it uses the best layout that fits. With `delete_existing` it deletes the furniture in the unit first, in the same undo step |
+| `recommend_layouts` | Ranks the layouts for one target unit (data only) |
 | `find_similar_units` | Ranks the units of a model for one layout (`scheme` and `level` narrow the search). `similarity` is the average of the area match and the outline match (1.0 is the same shape and size) |
 | `preview_similar_units` | Shows images of the best 5 units that `find_similar_units` suggests, before anything is placed: a ranked list (thumbnail, Area number and name, level, area, area match, shape match, match in percent, fits or not) and one large plan for each unit. Each plan shows the unit outline, the items of the layout where `place_layout` would put them, the furniture that is in the unit now, and the outline of the source unit. An item that goes across a wall is amber. `include_source_unit` keeps the unit the layout came from in the list. The model does not change (route `GET catalogue/preview`) |
-| `place_layout` | Places a layout into a target unit |
+| `place_layout` | Low-level placement of one layout into a target unit; prefer `pull_from_catalogue` |
 | `list_unit_items`, `clear_unit_items` | Lists (with the height above the level) or deletes the free-standing families in a unit |
 | `describe_item` | Describes one family instance: position, flips, plan box, level and instance parameters. Use it to compare a placed item with the original item (route `GET catalogue/item`) |
 | `delete_layout` | Deletes a layout file (not a sample) |

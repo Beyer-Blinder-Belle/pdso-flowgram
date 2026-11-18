@@ -310,16 +310,26 @@ Still open from this review:
 
 - [x] **F1.** `fix/place-on-rac` is unmerged and conflicts with main in `1.HarvestUnits.pushbutton/script.py`. It overlaps with B1 and B2.
   *Done: ported onto main by hand on `fix/catalogue-harvest-place`. The parts B1/B2 had already done differently (`pdso_kinds`, PDSO objects not furniture, tagging only when placed) were left out. Kept: family files saved at harvest and loaded at place (`save_family_files`, `load_missing_families`, `loadable_families`, with `FamilyLoadOptions(keep_existing=True)`), `refine_placement`, and the mirror fix. The branch can be deleted.*
-- [ ] **F2.** `feature/mcp-pull-from-catalogue` is finished but unmerged, and conflicts with F1 in the `place_layout` docstring. Its delete and place aren't atomic, and `limit: 200` hides layouts ranked lower.
-- [ ] **F3.** `feature/lodging-unit-harvest` is a prototype that has never been run in Revit. It repeats the catalogue's heuristics, reports m², and calls `os.startfile`.
-- [ ] **F4.** Duplicate Program Volume instances on one level are skipped (`correlation_service.py:492`, "To do - figure out deletion").
-- [ ] **F5.** Orphaned Program Volume families and instances are never cleaned up (architecture known gap 3).
-- [ ] **F6.** Unused schema fields: `config.last_run_timestamp` is never written after "Never"; `hashed_parameters`, `parameter_names_hash` and `parameter_values_hash` are never used.
-- [ ] **F7.** `extended_data_silo.py:126` TODO: the multi-area fallback.
-- [ ] **F8.** Quick Setup doesn't check that Project Config and Parameter Manager ran first.
+- [x] **F2.** `feature/mcp-pull-from-catalogue` is finished but unmerged, and conflicts with F1 in the `place_layout` docstring. Its delete and place aren't atomic, and `limit: 200` hides layouts ranked lower.
+  *Done: ported onto main for units (`unit` argument, Program UID). `pull_from_catalogue` uses `place_layout(clear_first)`, so the delete and the place are one undo step, and ranks every layout. The branch can be deleted.*
+- [x] **F3.** `feature/lodging-unit-harvest` is a prototype that has never been run in Revit. It repeats the catalogue's heuristics, reports m², and calls `os.startfile`.
+  *Dropped 2026-11-17: it turns Revit Rooms into unit types, and PDSO uses Areas only. The catalogue's harvest and similar-units search cover grouping alike units. The branch is deleted (last commit f901dc8).*
+- [x] **F4.** Duplicate Program Volume instances on one level are skipped (`correlation_service.py:492`, "To do - figure out deletion").
+  *Done: the sync keeps the oldest instance on the level (lowest element id; tags most likely point to it) and deletes the others, with a warning.*
+- [x] **F5.** Orphaned Program Volume families and instances are never cleaned up (architecture known gap 3).
+  *Done: `program_service.orphaned_program_volumes` lists families that belong to no Data Silo (not named for a current UID, and no instance pointing to an existing Data Silo); `purge_orphaned_program_volumes` deletes chosen or all of them. API `GET program-volumes/orphans`, `POST program-volumes/purge-orphans`; MCP tools of the same names; ribbon: Shift-click Audit Report (choose, confirm). The sync still never deletes them on its own.*
+- [x] **F6.** Unused schema fields: `config.last_run_timestamp` is never written after "Never"; `hashed_parameters`, `parameter_names_hash` and `parameter_values_hash` are never used.
+  *Done: the sync writes "<time> <user>" to `last_run_timestamp` for each phase that completed. The two unused hash methods (and their signatures) are removed. `hashed_parameters` stays in the schema, marked unused: a schema can't change in models that store it.*
+  *Follow-up (2026-11-18): instead of a stored parameter hash, phase 3 now compares each value with the Program Volume and writes only differences (parameters, schema fields, location, pinning). Last Synced on a Program Volume is written only when something else changed. An unchanged Program Volume isn't edited, so a workshared model doesn't borrow it.*
+- [x] **F7.** `extended_data_silo.py:126` TODO: the multi-area fallback.
+  *Decided 2026-11-17: keep it for now. With no Area mapped to PDSO - GSF, the smallest Area that holds the Data Silo shapes the Program Volume.*
+- [x] **F8.** Quick Setup doesn't check that Project Config and Parameter Manager ran first.
+  *Done: the button says what's missing (`runner.missing_prerequisites`) and asks before it runs. The API's bootstrap runs both first, so it needs no check.*
 - [x] **F9.** `parameters.json` keeps keys (`categories`, `binding`, `group`, `required`) that nothing reads.
-- [ ] **F10.** The acceptance runner doesn't cover `catalogue/*`, `documents/*`, `selection`, `views/activate` or `color-areas`.
+- [x] **F10.** The acceptance runner doesn't cover `catalogue/*`, `documents/*`, `selection`, `views/activate` or `color-areas`.
+  *Done: new steps for empty2 after V1: X1 (`areas/derive`), V2 (`views/activate`, `selection`), O1 (a second sync changes nothing; orphans and purge), C1 (catalogue: unit items, harvest, similar units, recommend, preview, place with clear_first, older names, Room number refused), D1 (`documents/*`, background document, 409s). `color-areas` was already covered by A8. Not run yet.*
 - [ ] **F11.** The Exterior Space and Exterior Space Type parameters aren't built (`docs/parameter-reference.md`).
+  *Deferred 2026-11-17: future work (exterior spaces such as balconies). Leave the reference and the code as they are.*
 
 ## D. Dead code
 

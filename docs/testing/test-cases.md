@@ -119,6 +119,18 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Model: add a project parameter (not shared) with the name of a tracked parameter, for example "DU Bedroom Count", bound to Generic Models (if Revit allows it).
   Steps: sync.
   Expected: the sync reads and writes the shared parameter only. Results match a model without the project parameter.
+- [ ] **T-S18. Duplicate Program Volumes on a level** [F4]
+  Steps: copy a Program Volume instance in place (two on one level), then sync.
+  Expected: one is deleted with a warning; the older one (and its tag) stays.
+- [ ] **T-S19. Orphaned Program Volumes** [F5]
+  Steps: delete a Data Silo, then Shift-click Audit Report. Choose its family and confirm. Also try `list_orphaned_program_volumes` before and after a UID change and sync.
+  Expected: the deleted Data Silo's family is listed and is deleted with its instances (one undo). A family whose Data Silo only changed UID is not listed.
+- [ ] **T-S21. A sync with nothing to change edits nothing** [F6]
+  Steps: sync twice in a row. Then change one tracked value on one Data Silo, and sync again. In a workshared model, check Worksharing Display (Owners) or Sync with Central after each sync.
+  Expected: the second sync reports every Program Volume as already up to date (`program_volumes.unchanged`), doesn't borrow them, and their `PDSO - Last Synced` keeps the first sync's time. The third updates only that Data Silo's Program Volumes and stamps them. Pinned Program Volumes stay pinned; one whose Data Silo moved is moved and pinned again.
+- [ ] **T-S20. Last run time** [F6]
+  Steps: sync, then `get_config`.
+  Expected: `last_run_timestamp` has today's time and your Revit user name for each phase that ran.
 - [ ] **T-S14. The sync log comes back over the API** [A6]
   Steps: `run_sync` on a model with one warning (for example M-D5).
   Expected: the reply's `log` lists the warning.
@@ -249,6 +261,10 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Steps: Harvest Layout on that unit with no program given. Open its JSON.
   Expected: `features.edges` has `corridor` towards the corridor Area, `party` towards the other unit, `exterior` at the Exterior wall and `no_area` at the shaft. `features.unit` has the Data Silo's bedroom, bathroom and kitchen counts, and no `room_count`. There is no `features.rooms`. `source` has `area_name` and `area_number`. The program is the Data Silo's Unit Layout Type, Program Display Name or Program Type, else "<n> Bedroom" from its bedroom count.
 
+- [ ] **T-C19. Pull from an agent** [F2]
+  Steps: `preview_pull_from_catalogue` for a furnished unit, then `pull_from_catalogue` with `delete_existing` and a layout ranked below the first.
+  Expected: the pictures match the Pull button's. The old furniture is gone and the layout is placed, as one undo step. A layout that doesn't fit gives an error and nothing changes.
+
 ### Setup and ribbon
 
 - [ ] **T-U1. Two windows** [U1]
@@ -281,6 +297,9 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
 - [ ] **T-U9. Project Config refuses bad values** [K3]
   Steps: in Project Config, set the UID pattern to `(`, then save. Then fix it, set the extrusion height to 0, and save.
   Expected: each save says "Configuration not saved" with the reason, and nothing changes in the model. A good save still works and clears the unsaved mark.
+- [ ] **T-U10. Quick Setup before Project Config** [F8]
+  Steps: in a new model, click Quick Setup first.
+  Expected: it says Project Config hasn't been saved and asks before it runs. After Project Config but before the Parameter Manager, it names the Parameter Manager.
 - [ ] **T-U6. Quick Setup keeps template changes** [U6]
   Steps: show a hidden category in "PDSO - 3D - Program Volumes", then run Quick Setup again.
   Expected: the template keeps the change, and the report says Skipped.
@@ -316,7 +335,7 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.9 with no version warning.
+  Expected: API 1.10 with no version warning.
 - [ ] **T-P13. Older catalogue names still work**
   Steps: `POST catalogue/similar-rooms` with `layout_id`, and `GET catalogue/room-items` with `room=<Program UID>`.
   Expected: both answer as `catalogue/similar-units` and `catalogue/unit-items` do. The replies carry the new keys (`unit`, `units`, `units_checked`) and the old ones (`room`, `rooms`, `rooms_checked`).

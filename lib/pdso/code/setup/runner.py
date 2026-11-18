@@ -22,6 +22,37 @@ from pdso.code.setup.standards import StandardsError, base_tokens, expand_tokens
 from pdso.code.setup.steps import STEP_RUNNERS
 
 
+def missing_prerequisites(doc):
+    """What should run before Quick Setup and hasn't, as short sentences.
+
+    Quick Setup reads the area scheme mappings and the Data Silo family from
+    Project Config, and the schedules need the tracked parameters of the
+    Parameter Manager. Without them it uses the defaults. The API's bootstrap
+    runs both first, so this is for the ribbon.
+
+    Returns:
+        list[str]: [] when both ran
+    """
+    missing = []
+    try:
+        from pdso.code.business.config_service import config_exists
+        from pdso.code.business.parameter_registry_service import get_registry
+
+        if not config_exists(doc):
+            missing.append(
+                "Project Config hasn't been saved: the default area schemes and "
+                "Data Silo family will be used."
+            )
+        elif not get_registry(doc, refresh=True).is_configured:
+            missing.append(
+                "The Parameter Manager hasn't run: no parameters are tracked, so "
+                "the schedules leave out their columns."
+            )
+    except Exception as error:
+        missing.append("Couldn't check Project Config: {}".format(error))
+    return missing
+
+
 class SetupStep(object):
     """A step listed in setup.json."""
 

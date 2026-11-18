@@ -31,7 +31,7 @@ ROUTES = []
 
 # Version of the HTTP API. Increase it when a route or a reply changes. The
 # MCP server compares it with the version that it was written for.
-API_VERSION = "1.9"
+API_VERSION = "1.10"
 
 
 def route(method, pattern):
@@ -609,6 +609,20 @@ def clear_colors(ctx):
     doc = ctx.require_doc()
     view = model_service.find_view(doc, ctx.arg("view", required=True))
     return visualization_service.clear_area_colors(doc, view)
+
+
+@route("GET", "program-volumes/orphans")
+def list_orphaned_program_volumes(ctx):
+    """List the Program Volume families that belong to no Data Silo (read-only)."""
+    return program_service.orphaned_program_volumes(ctx.require_doc())
+
+
+@route("POST", "program-volumes/purge-orphans")
+def purge_orphaned_program_volumes(ctx):
+    """Delete orphaned Program Volume families and their instances. Body: families? (ids; default all)"""
+    return program_service.purge_orphaned_program_volumes(
+        ctx.require_doc(), ctx.arg("families")
+    )
 
 
 @route("POST", "views/program-volumes")

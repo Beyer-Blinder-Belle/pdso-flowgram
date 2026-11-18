@@ -15,6 +15,18 @@ from pdso.code.business.parameter_registry_service import get_registry
 from pdso.code.data.extensible_storage_schemas import PdsoProgramVolumeInstanceSchema
 
 
+# An instance closer than this to its target point is not moved (decimal feet)
+LOCATION_TOLERANCE = 1e-6
+
+
+def _same_field(current, value):
+    """True if an extensible storage field already holds value."""
+    try:
+        return current is not None and current == value
+    except Exception:
+        return False
+
+
 class ExtendedProgramVolumeInstance(object):
     """Wrapper for rpw.Element (Program Volume Instance) with PDSO-specific properties.
 
@@ -68,7 +80,7 @@ class ExtendedProgramVolumeInstance(object):
         # PDSO-specific properties and correlations
         self.params_to_update = {}  # Dict[str (Parameter Name), Any (New Value)]
         self.entity_fields_to_update = {}  # Dict[str (Field Name), Any (New Value)]
-        self.params_to_update = {}  # Dict[str (Parameter Name), Any (New Value)]
+        self.changed = False  # Set by commit_pending_changes: anything written
         self.parent_data_silo = None
         self.desired_instance_location = None
 
@@ -112,10 +124,19 @@ class ExtendedProgramVolumeInstance(object):
 
         Clears all queues after applying changes.
 
+        Only values that differ are written: a parameter that already holds its
+        value, a schema field that is already right and an instance already at
+        its location are left alone. An instance with nothing to change is not
+        edited at all (in a workshared model it isn't borrowed). Last Synced is
+        written only when something else on the instance changed, so it says
+        when the sync last changed this instance. Sets self.changed.
+
         Notes:
             Continues on error for individual parameter updates.
             Location updates are skipped if desired_instance_location is None.
         """
+        self.changed = False
+
         # Handle new instance creation
         if self.rpw_element is None:
             if self.desired_instance_location is None:
@@ -204,6 +225,7 @@ class ExtendedProgramVolumeInstance(object):
                 )
 
                 self.rpw_element = db.Element(instance)
+                self.changed = True
                 self.logger.info(
                     ".  Successfully created Program Volume instance (ID: {}) on level {} (primary: {})".format(
                         instance.Id, target_level.Name, self.is_primary_instance
@@ -231,18 +253,11 @@ class ExtendedProgramVolumeInstance(object):
                 )
                 raise
 
-        # Update parameters on existing or newly created instance
+        # Update parameters on existing or newly created instance. Last Synced
+        # waits until we know whether anything else changed.
+        last_synced = self.params_to_update.pop(LAST_SYNCED, None)
         for param_name, new_value in self.params_to_update.items():
-            try:
-                parameter_access.set_value(self.rpw_element, param_name, new_value)
-            except Exception as e:
-                self.logger.error(
-                    "Failed to update parameter '{}' on program volume instance {}: {}".format(
-                        param_name, self.Id, str(e)
-                    )
-                )
-
-        self.params_to_update.clear()
+            self._set_parameter(param_name, new_value)
 
         # Record which Data Silo this instance belongs to. The sync uses it to
         # find a Data Silo's family again after its UID or the prefix changes.
@@ -253,10 +268,77 @@ class ExtendedProgramVolumeInstance(object):
             self.entity_fields_to_update.setdefault(
                 "is_primary_instance", bool(self.is_primary_instance)
             )
+        self._commit_entity_fields()
 
-        # Update the attached extensible storage schema entity
-        with PdsoProgramVolumeInstanceSchema(self.rpw_element.unwrap()) as entity:
-            for field_name, new_value in self.entity_fields_to_update.items():
+        # Update instance location if desired_location is set
+        if self.desired_instance_location is not None:
+            try:
+                if self.rpw_element is None:
+                    self.logger.debug(
+                        "Program Volume Instance does not exist in the model, cannot update location."
+                    )
+                else:
+                    target_location = self._target_location()
+                    if not self._is_at(target_location):
+                        self.rpw_element.Location.Point = target_location
+                        self.changed = True
+                        self.logger.debug(
+                            "Updated location of Program Volume Instance {}".format(self.Id)
+                        )
+            except Exception as e:
+                self.logger.error(
+                    "Failed to update location of Program Volume Instance {}: {}".format(
+                        self.Id, str(e)
+                    )
+                )
+            finally:
+                self.desired_instance_location = None
+
+        if self.changed and last_synced is not None:
+            self._set_parameter(LAST_SYNCED, last_synced)
+        self.params_to_update.clear()
+
+        self.logger.debug(
+            "{} Program Volume Instance {}".format(
+                "Committed changes on" if self.changed else "No changes on",
+                self.Id if self.rpw_element else "NEW",
+            )
+        )
+
+    def _set_parameter(self, param_name, new_value):
+        """Write one parameter if its value differs; log a failure."""
+        try:
+            if parameter_access.set_if_changed(self.rpw_element, param_name, new_value):
+                self.changed = True
+        except Exception as e:
+            self.logger.error(
+                "Failed to update parameter '{}' on program volume instance {}: {}".format(
+                    param_name, self.Id, str(e)
+                )
+            )
+
+    def _commit_entity_fields(self):
+        """Write the queued extensible storage fields, only if one differs.
+
+        Saving the entity edits the element, so it is skipped when every field
+        already holds its value.
+        """
+        fields = self.entity_fields_to_update
+        self.entity_fields_to_update = {}
+        if not fields:
+            return
+        element = self.rpw_element.unwrap()
+        try:
+            current = PdsoProgramVolumeInstanceSchema(element)
+            if all(
+                _same_field(getattr(current, name, None), value)
+                for name, value in fields.items()
+            ):
+                return
+        except Exception:
+            pass  # Can't read it: write it
+        with PdsoProgramVolumeInstanceSchema(element) as entity:
+            for field_name, new_value in fields.items():
                 try:
                     setattr(entity, field_name, new_value)
                 except Exception as e:
@@ -265,57 +347,47 @@ class ExtendedProgramVolumeInstance(object):
                             field_name, self.Id, str(e)
                         )
                     )
+        self.changed = True
 
-        # Clear the pending updates after committing
-        self.entity_fields_to_update.clear()
-
-        # Update instance location if desired_location is set
-        if self.desired_instance_location is not None:
-            if self.rpw_element is None:
-                self.logger.debug(
-                    "Program Volume Instance does not exist in the model, cannot update location."
-                )
-            else:
-                try:
-                    # Get the target level for this instance
-                    target_level_wrapped = (
-                        self.target_level.rpw_level
-                        if self.target_level
-                        else self.parent_data_silo.rpw_element.Level
-                    )
-
-                    # Unwrap to get the actual Revit API Level object
-                    if hasattr(target_level_wrapped, "unwrap"):
-                        instance_level = target_level_wrapped.unwrap()
-                    else:
-                        instance_level = target_level_wrapped
-
-                    # Create target point with level's ProjectElevation for Z to ensure 0' 0" Elevation from Level
-                    # ProjectElevation is what Revit uses to calculate the "Elevation from Level" parameter
-                    target_location = DB.XYZ(
-                        self.desired_instance_location.X,
-                        self.desired_instance_location.Y,
-                        instance_level.ProjectElevation,
-                    )
-
-                    self.rpw_element.Location.Point = target_location
-                    self.logger.debug(
-                        "Updated location of Program Volume Instance {}".format(self.Id)
-                    )
-                except Exception as e:
-                    self.logger.error(
-                        "Failed to update location of Program Volume Instance {}: {}".format(
-                            self.Id, str(e)
-                        )
-                    )
-                finally:
-                    self.desired_instance_location = None
-
-        self.logger.debug(
-            "Committed all changes on Program Volume Instance {}".format(
-                self.Id if self.rpw_element else "NEW"
-            )
+    def _target_location(self):
+        """The point this instance moves to: the queued XY at its level's elevation."""
+        target_level_wrapped = (
+            self.target_level.rpw_level
+            if self.target_level
+            else self.parent_data_silo.rpw_element.Level
         )
+        # Unwrap to get the actual Revit API Level object
+        if hasattr(target_level_wrapped, "unwrap"):
+            instance_level = target_level_wrapped.unwrap()
+        else:
+            instance_level = target_level_wrapped
+        # ProjectElevation is what Revit uses to calculate the "Elevation from
+        # Level" parameter, so this keeps it at 0' 0"
+        return DB.XYZ(
+            self.desired_instance_location.X,
+            self.desired_instance_location.Y,
+            instance_level.ProjectElevation,
+        )
+
+    def _is_at(self, point):
+        """True if the instance is already at point (within LOCATION_TOLERANCE)."""
+        try:
+            return self.rpw_element.Location.Point.DistanceTo(point) < LOCATION_TOLERANCE
+        except Exception:
+            return False
+
+    def needs_move(self):
+        """True if commit_pending_changes will move this existing instance.
+
+        The sync unpins only the instances it moves: a pinned instance can't be
+        moved, and unpinning one edits it.
+        """
+        if self.rpw_element is None or self.desired_instance_location is None:
+            return False
+        try:
+            return not self._is_at(self._target_location())
+        except Exception:
+            return True
 
     @property
     def Id(self):

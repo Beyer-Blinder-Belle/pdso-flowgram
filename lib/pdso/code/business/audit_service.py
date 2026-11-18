@@ -1291,6 +1291,10 @@ def generate_detailed_report(output, logger, doc):
             output.print_md(
                 "⚠️ {} families without parent data silo".format(len(orphaned_families))
             )
+            output.print_md(
+                "_Shift-click Audit Report to delete orphaned Program Volume "
+                "families after checking them._"
+            )
 
             # Count instances for each orphaned family
             for fam_info in orphaned_families:
