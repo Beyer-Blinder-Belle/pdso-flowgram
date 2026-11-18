@@ -20,6 +20,7 @@ for _name in [name for name in sys.modules if name.startswith("pdso.code.catalog
     del sys.modules[_name]
 
 from pdso.code.business.errors import PDSOError  # noqa: E402
+from pdso.code.business.revit_helpers import to_element_id  # noqa: E402
 from pdso.code.catalogue import catalogue_api_service as catalogue  # noqa: E402
 from pdso.code.catalogue.catalogue_windows import PROJECT_TYPES  # noqa: E402
 from pdso.code.catalogue.harvest_image import thumbnail_data_uri  # noqa: E402
@@ -242,7 +243,7 @@ if __name__ == "__main__":
 
     if failures:
         output.print_table(
-            [[output.linkify(eid), reason] for eid, reason in failures],
+            [[output.linkify(to_element_id(eid)), reason] for eid, reason in failures],
             columns=["Element", "Why it was not harvested"],
             title="Not harvested",
         )

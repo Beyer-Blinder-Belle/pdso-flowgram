@@ -33,7 +33,11 @@ from ..data.extended_program_volume_family_collection import (
 )
 from .correlation_service import PDSOCorrelationService
 from .data_service import PDSODataService
-from .family_manager_service import GEOMETRY_KEY, PDSOFamilyManagerService, _as_dict
+from .family_manager_service import (
+    PDSOFamilyManagerService,
+    _as_dict,
+    mark_geometry_not_rebuilt,
+)
 from .workset_coordination_service import WorksetCoordinationService
 from .extensible_storage_service import PDSOExtensibleStorageService
 from .level_mapping_service import PDSOLevelMappingService
@@ -274,7 +278,7 @@ class PDSOSyncService(object):
         self.errors = []
         self.phases = ["pending", "pending", "pending"]
         # Phase 3: Program Volume instances created, changed, left as they were
-        self.program_volume_counts = None
+        self.program_volume_changes = None
 
     def _warn_off_workset(
         self, workset_coordinator, config, key, legacy_key, label, elements
@@ -353,8 +357,9 @@ class PDSOSyncService(object):
 
         Returns:
             dict: "completed", "phases", "errors", "options", "message",
-                "validation_warning" and "program_volumes" (instances created,
-                updated and unchanged by phase 3, or None if it didn't run)
+                "validation_warning" and "program_volume_changes" (instances
+                created, updated and unchanged by phase 3, or None if it
+                didn't run)
         """
         names = ["area_harvest", "family_geometry", "instance_updates"]
         return {
@@ -365,7 +370,7 @@ class PDSOSyncService(object):
             "options": self.options(),
             "message": self.completion_message or self.current_step,
             "validation_warning": self.validation_warning_message,
-            "program_volumes": self.program_volume_counts,
+            "program_volume_changes": self.program_volume_changes,
         }
 
     def run(self):
@@ -831,7 +836,13 @@ class PDSOSyncService(object):
                                         param = element.get_Parameter(
                                             DB.BuiltInParameter.ELEM_PARTITION_PARAM
                                         )
-                                        if param and not param.IsReadOnly:
+                                        # Already there: setting it again
+                                        # would still edit (borrow) it
+                                        if (
+                                            param
+                                            and not param.IsReadOnly
+                                            and param.AsInteger() != workset.Id.IntegerValue
+                                        ):
                                             param.Set(workset.Id.IntegerValue)
                                     except Exception:
                                         pass
@@ -862,7 +873,11 @@ class PDSOSyncService(object):
                                             param = area.rpw_element.unwrap().get_Parameter(
                                                 DB.BuiltInParameter.ELEM_PARTITION_PARAM
                                             )
-                                            if param and not param.IsReadOnly:
+                                            if (
+                                                param
+                                                and not param.IsReadOnly
+                                                and param.AsInteger() != workset.Id.IntegerValue
+                                            ):
                                                 param.Set(workset.Id.IntegerValue)
                                                 area_count += 1
                                         except:
@@ -983,11 +998,7 @@ class PDSOSyncService(object):
                 continue
             # The geometry is not rebuilt, so its instances must stay where
             # the geometry was built: at the Data Silo point of the last build.
-            # (.entity is read without a transaction.)
-            family.geometry_not_rebuilt = True
-            entity = family.entity
-            basepoints = _as_dict(getattr(entity, "area_basepoint", None))
-            family.built_basepoint = basepoints.get(GEOMETRY_KEY)
+            mark_geometry_not_rebuilt(family)
             ext_data_silo.related_program_volume_family = family
             family.parent_data_silo = ext_data_silo
             linked += 1
@@ -1363,12 +1374,27 @@ class PDSOSyncService(object):
         self.progress_value = 75
         self._notify()
 
-        with db.Transaction("PDSO - Update Program Volume Instances", doc=self.doc):
-            # Commit all pending changes (location updates, instance creation, parameter updates)
-            ext_program_volume_instance_collection.commit_pending_changes()
+        try:
+            with db.Transaction("PDSO - Update Program Volume Instances", doc=self.doc):
+                # Commit all pending changes (location updates, instance creation, parameter updates)
+                ext_program_volume_instance_collection.commit_pending_changes()
 
-            self.logger.info("Committed instance updates")
-        self.program_volume_counts = {
+                self.logger.info("Committed instance updates")
+        except Exception:
+            # The update was rolled back, but the unpin was committed: pin
+            # those instances again before the phase stops
+            if pinned_before:
+                try:
+                    with db.Transaction("PDSO - Pin Instances", doc=self.doc):
+                        _set_pinned([pvi.rpw_element for pvi in pinned_before], True)
+                except Exception as error:
+                    self.logger.error(
+                        "Couldn't pin {} Program Volume instances again: {}".format(
+                            len(pinned_before), error
+                        )
+                    )
+            raise
+        self.program_volume_changes = {
             "created": ext_program_volume_instance_collection.created_count,
             "updated": ext_program_volume_instance_collection.updated_count,
             "unchanged": ext_program_volume_instance_collection.unchanged_count,
@@ -1416,6 +1442,8 @@ class PDSOSyncService(object):
                     skipped_unwrap_count = 0
 
                     for inst in ext_program_volume_instance_collection.extended_program_volume_instances:
+                        if inst.should_be_deleted:
+                            continue  # Deleted by the commit above
                         if inst.rpw_element is None:
                             skipped_none_count += 1
                             self.logger.debug(

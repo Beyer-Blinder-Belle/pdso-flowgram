@@ -127,7 +127,13 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Expected: the deleted Data Silo's family is listed and is deleted with its instances (one undo). A family whose Data Silo only changed UID is not listed.
 - [ ] **T-S21. A sync with nothing to change edits nothing** [F6]
   Steps: sync twice in a row. Then change one tracked value on one Data Silo, and sync again. In a workshared model, check Worksharing Display (Owners) or Sync with Central after each sync.
-  Expected: the second sync reports every Program Volume as already up to date (`program_volumes.unchanged`), doesn't borrow them, and their `PDSO - Last Synced` keeps the first sync's time. The third updates only that Data Silo's Program Volumes and stamps them. Pinned Program Volumes stay pinned; one whose Data Silo moved is moved and pinned again.
+  Expected: the second sync reports every Program Volume as already up to date (`program_volume_changes.unchanged`), doesn't borrow them, and their `PDSO - Last Synced` keeps the first sync's time. The third updates only that Data Silo's Program Volumes and stamps them. Pinned Program Volumes stay pinned; one whose Data Silo moved is moved and pinned again.
+- [ ] **T-S22. Workset Fix after a deletion** [W2]
+  Steps: in a workshared model with the Program Volume workset set and the option "Fix", change a Data Silo's stacking so one level drops out, then sync. Put one Program Volume on another workset first. Have a colleague borrow another one.
+  Expected: no "Workset enforcement failed" in the log. The moved Program Volume is back on its workset; the borrowed one is skipped; the others aren't borrowed.
+- [ ] **T-S23. A Data Silo moved out of its Area** [W6]
+  Steps: with the default geometry option ("Yes - Use Geometry Cache"), drag a Data Silo outside every Area, then sync.
+  Expected: a warning that no Area contains it. Its Program Volumes stay where they were (still matching their old Area); they don't shift by the drag distance.
 - [ ] **T-S20. Last run time** [F6]
   Steps: sync, then `get_config`.
   Expected: `last_run_timestamp` has today's time and your Revit user name for each phase that ran.
@@ -249,6 +255,12 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
 - [ ] **T-C15. Mirrored placement of a family with no flip control** [F1]
   Steps: Pull a layout whose best placement is mirrored, with a family that has no flip controls.
   Expected: that item is mirrored like the others.
+- [ ] **T-C20. Mirrored items face the right way** [W7]
+  Steps: harvest a unit with a bed against one wall and a WC, then Pull from Catalogue into the mirror-image unit (the best placement is mirrored).
+  Expected: the bed's headboard is against the wall and the WC faces into the room, mirrored like the plan. If every item is turned 180°, W7 is real: report it.
+- [ ] **T-C21. Harvest All Units with a failure** [W3]
+  Steps: select one enclosed unit and one Area that isn't enclosed, then Harvest All Units.
+  Expected: the report shows the harvested unit and a "Not harvested" table with a clickable link to the bad Area, not a traceback.
 - [ ] **T-C16. One harvest pipeline** [K2]
   Steps: harvest the same unit with Harvest Layout, then with Harvest All Units, then with the MCP's `harvest_units`.
   Expected: the same name style, catalogue number and family files each time. Harvest Layout adds a new entry; the other two replace the earlier entry of that unit.
@@ -335,7 +347,7 @@ A unit is an Area of the scheme that feeds `PDSO - GSF`, with a Data Silo inside
   Expected: the reply has `pyrevit.version` and `query_parameters: true`. On a pyRevit that drops query parameters, `pyrevit_warning` is there.
 - [ ] **T-P2. API version**
   Steps: `get_status`.
-  Expected: API 1.10 with no version warning.
+  Expected: API 1.11 with no version warning.
 - [ ] **T-P13. Older catalogue names still work**
   Steps: `POST catalogue/similar-rooms` with `layout_id`, and `GET catalogue/room-items` with `room=<Program UID>`.
   Expected: both answer as `catalogue/similar-units` and `catalogue/unit-items` do. The replies carry the new keys (`unit`, `units`, `units_checked`) and the old ones (`room`, `rooms`, `rooms_checked`).

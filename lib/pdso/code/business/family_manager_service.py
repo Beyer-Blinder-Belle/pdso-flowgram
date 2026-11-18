@@ -114,6 +114,10 @@ class PDSOFamilyManagerService(object):
                     )
                 )
             else:
+                # Until the geometry is rebuilt (or found up to date), its
+                # instances stay where it was last built: a skip, a failed
+                # rebuild or a failed load must not move them to the Data Silo
+                mark_geometry_not_rebuilt(ext_program_volume_family)
                 # One bad Area boundary must not abort the remaining Data Silos
                 try:
                     self._create_or_update_family_for_data_silo(
@@ -230,13 +234,15 @@ class PDSOFamilyManagerService(object):
                     )
                 )
 
-        # Nothing changed - no update needed
+        # Nothing changed - no update needed. The geometry was built around
+        # the Data Silo's current point, so its instances may go there.
         else:
             self.logger.debug(
                 ".  Geometry unchanged, skipping Family updates for existing Program Volume family for Data Silo '{}'".format(
                     ext_data_silo.Id
                 )
             )
+            ext_program_volume_family.geometry_not_rebuilt = False
             fdoc = None
 
         # If new or changed, load/ reload into project
@@ -264,6 +270,7 @@ class PDSOFamilyManagerService(object):
 
                 # Save the updated wrapped rpw.family to the ext_program_volume_family
                 ext_program_volume_family.rpw_element = wrapped_family
+                ext_program_volume_family.geometry_not_rebuilt = False
 
                 # Set desired family name for renaming later
                 ext_program_volume_family.desired_family_name = desired_family_name
@@ -760,6 +767,26 @@ class PDSOFamilyManagerService(object):
                 )
 
         return curve_loop
+
+
+def mark_geometry_not_rebuilt(family):
+    """Mark a Program Volume family as not rebuilt this sync.
+
+    Phase 3 then keeps its instances at the point the geometry was built
+    around (the Data Silo point stored at the last build), not at the Data
+    Silo's current point. A family with no stored point (or none in the model)
+    gets built_basepoint None, and phase 3 doesn't move its existing instances.
+    The entity is read without a transaction.
+    """
+    family.geometry_not_rebuilt = True
+    family.built_basepoint = None
+    if family.rpw_element is None:
+        return
+    try:
+        basepoints = _as_dict(getattr(family.entity, "area_basepoint", None))
+        family.built_basepoint = basepoints.get(GEOMETRY_KEY)
+    except Exception:
+        pass
 
 
 def _as_dict(field_value):
